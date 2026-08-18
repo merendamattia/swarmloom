@@ -1,3 +1,10 @@
+## [1.1.1](https://github.com/merendamattia/swarmloom/compare/v1.1.0...v1.1.1) (2026-08-18)
+
+
+### Bug Fixes
+
+* **deploy:** keep agent runtime in image ([5b911fd](https://github.com/merendamattia/swarmloom/commit/5b911fd4d6149d98b757be235fdacc9dc04864bc))
+
 # [1.1.0](https://github.com/merendamattia/swarmloom/compare/v1.0.0...v1.1.0) (2026-08-18)
 
 
