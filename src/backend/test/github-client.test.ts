@@ -73,9 +73,13 @@ describe("GitHub client", () => {
         if (request.url.endsWith("/pulls/9")) return Response.json({
           number: 9,
           html_url: "https://github.com/acme/app/pull/9",
+          title: "Fix queue",
           base: { ref: "develop" },
           head: { ref: "agent/issue-7" },
           body: "Closes #7",
+          additions: 12,
+          deletions: 3,
+          changed_files: 2,
         });
         return Response.json(issue(7));
       },
@@ -84,10 +88,14 @@ describe("GitHub client", () => {
     expect((await client.getIssue("acme/app", 7)).labels).toEqual(["bug", "agent:ready"]);
     expect(await client.getPullRequest("acme/app", 9)).toEqual({
       number: 9,
+      title: "Fix queue",
       url: "https://github.com/acme/app/pull/9",
       base: "develop",
       head: "agent/issue-7",
       body: "Closes #7",
+      additions: 12,
+      deletions: 3,
+      changedFiles: 2,
     });
     expect(await client.getPullRequestDiff("acme/app", 9)).toStartWith("diff --git");
   });

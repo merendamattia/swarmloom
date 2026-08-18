@@ -73,11 +73,38 @@ export function formatTelegramEvent(event: TelegramEvent, dashboardUrl?: string)
     dashboardLink(dashboardUrl, event.jobId),
   ].filter(Boolean);
   const message = escapeHtmlWithLimit(event.message, 3_200);
+  const pullRequest = pullRequestDetails(metadata);
   return [
     `${emoji} <b>${escapeHtml(title)}</b>`,
     message,
+    pullRequest ? `\n${pullRequest}` : "",
     links.length ? `\n🔗 ${links.join(" · ")}` : "",
   ].filter(Boolean).join("\n");
+}
+
+function pullRequestDetails(metadata: Record<string, unknown>) {
+  const title = metadata.pullRequestTitle;
+  if (typeof title !== "string" || !title.trim()) return null;
+  const number = metadata.pullRequestNumber;
+  const lines = [
+    `<b>PR${typeof number === "number" ? ` #${number}` : ""}:</b> ${escapeHtmlWithLimit(title, 200)}`,
+  ];
+  const stats = pullRequestStats(metadata);
+  if (stats) lines.push(stats);
+  if (typeof metadata.pullRequestBody === "string" && metadata.pullRequestBody.trim()) {
+    lines.push(escapeHtmlWithLimit(metadata.pullRequestBody.replace(/\s+/g, " ").trim(), 300));
+  }
+  return lines.join("\n");
+}
+
+function pullRequestStats(metadata: Record<string, unknown>) {
+  const parts: string[] = [];
+  if (typeof metadata.additions === "number") parts.push(`+${metadata.additions}`);
+  if (typeof metadata.deletions === "number") parts.push(`-${metadata.deletions}`);
+  if (typeof metadata.filesChanged === "number") {
+    parts.push(`${metadata.filesChanged} file${metadata.filesChanged === 1 ? "" : "s"}`);
+  }
+  return parts.length ? parts.join(" · ") : null;
 }
 
 function dashboardLink(baseUrl: string | undefined, jobId: string | null | undefined) {

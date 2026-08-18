@@ -83,7 +83,16 @@ integration("job runner", () => {
       expect(github.comments.some((comment) => comment.issue === job.issueNumber && comment.body.includes("Automated review")))
         .toBe(true);
       expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "PR_OPENED" } }))
-        .toMatchObject({ metadata: { pullRequestUrl: `https://github.com/acme/runner/pull/${job.issueNumber}` } });
+        .toMatchObject({
+          metadata: {
+            pullRequestUrl: `https://github.com/acme/runner/pull/${job.issueNumber}`,
+            pullRequestTitle: `Pull request ${job.issueNumber}`,
+            pullRequestBody: `Closes #${job.issueNumber}`,
+            additions: 12,
+            deletions: 3,
+            filesChanged: 2,
+          },
+        });
     }
   });
 
@@ -209,10 +218,14 @@ function fakeGitHub(issueNumber: number, branchName: string) {
     async getPullRequest(_fullName: string, number: number) {
       return {
         number,
+        title: `Pull request ${number}`,
         url: `https://github.com/acme/runner/pull/${number}`,
         base: "develop",
         head: branchName,
         body: `Closes #${issueNumber}`,
+        additions: 12,
+        deletions: 3,
+        changedFiles: 2,
       };
     },
     async getPullRequestDiff() { return "diff --git a/src/app.ts b/src/app.ts"; },
