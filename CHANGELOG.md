@@ -1,3 +1,10 @@
+## [1.3.2](https://github.com/merendamattia/swarmloom/compare/v1.3.1...v1.3.2) (2026-08-18)
+
+
+### Bug Fixes
+
+* **runner:** verify locally before PR instead of gating on remote checks ([b1b4dd0](https://github.com/merendamattia/swarmloom/commit/b1b4dd0bc97818b65380f7ae9215e99ed9edd234))
+
 ## [1.3.1](https://github.com/merendamattia/swarmloom/compare/v1.3.0...v1.3.1) (2026-08-18)
 
 
