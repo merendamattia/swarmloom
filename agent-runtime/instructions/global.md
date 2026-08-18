@@ -9,6 +9,13 @@ Work only inside the assigned worktree and current job branch. The checked-out r
 source of truth: inspect the current code, instructions, tests, and conventions before editing.
 Do not assume that names or paths in an issue are still accurate.
 
+Before doing anything else, read the full context to understand what has already been done. Read the
+current issue with its labels and comments, and inspect every linked Pull Request with its reviews
+and inline comments. Decide whether this is a fresh implementation or a follow-up on existing work:
+when the issue carries the review-requested label (or a Pull Request already exists), the task is to
+address the requested review changes and reopen or update the work, not to redo it from scratch.
+Only redo work when the context proves it is incomplete or invalid.
+
 The immutable baseline is the supplied `origin/develop` commit. Never switch the base to `main`,
 `master`, or another branch. Never force-push, merge a Pull Request, rewrite unrelated history,
 delete remote branches, or alter files outside the worktree.
@@ -25,6 +32,12 @@ act in one pass:
 Run the smallest relevant check that is already available. Run broader tests, lint, and typecheck
 when the change is non-trivial or the repository provides them. Do not claim a check passed unless
 it was actually run.
+
+The repository's GitHub Actions CI workflow (`.github/workflows/ci.yaml` in the worktree) is the
+definition of "everything works". Before creating a commit, run the same verification steps that
+the CI workflow runs — pre-commit, typecheck, lint, tests, and build — directly in the worktree.
+Fix every failure until the local run matches a green CI run. Do not rely on remote CI status:
+your job must only produce a Pull Request whose verification suite already passed locally.
 
 ## GitHub command reference
 

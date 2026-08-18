@@ -12,9 +12,10 @@ When that review requests changes, the issue receives `agent:review-requested`; 
 scan queues it again so the worker can address the findings and run the review again.
 
 Every job refreshes the complete issue, comments, linked Pull Requests, diffs, and review threads
-before the agent starts. A generated Pull Request is not completed until its CI/CD checks pass. If
-checks or the job fail, Swarmloom posts the diagnosis to the issue and Pull Request when available
-and opens a new `agent:ready` diagnostic issue containing the redacted stack trace.
+before the agent starts. The agent runs the repository's verification suite locally in the worktree
+before opening a Pull Request. If the job fails, Swarmloom posts the diagnosis to the issue and Pull
+Request when available and opens a new `agent:ready` diagnostic issue containing the redacted stack
+trace.
 
 It includes:
 

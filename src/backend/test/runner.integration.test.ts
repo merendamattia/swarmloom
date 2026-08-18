@@ -193,47 +193,6 @@ integration("job runner", () => {
     expect(stored.errorMessage).toContain("without writing the structured outcome");
   });
 
-  test("diagnoses failed Pull Request checks and opens a ready diagnostic issue", async () => {
-    const job = await claimed(issueBase + 7);
-    const provider = new FakeProvider([
-      success(JSON.stringify({
-        outcome: "implemented",
-        summary: "Implemented",
-        tests: ["bun test"],
-        commit: "abcdef1",
-        pr: { number: job.issueNumber + 1, url: `https://github.com/acme/runner/pull/${job.issueNumber + 1}`, base: "develop", head: job.branchName },
-      }), "implementation-ci-failure"),
-      success(JSON.stringify({
-        verdict: "changes_requested",
-        summary: "The failing check points to a missing guard.",
-        findings: [{ file: "src/app.ts", line: 12, severity: "high", problem: "Missing guard", correction: "Add the guard." }],
-      }), "pull-request-diagnosis"),
-    ]);
-    const github = fakeGitHub(job.issueNumber, job.branchName, [{
-      name: "CI",
-      status: "completed",
-      conclusion: "failure",
-      url: "https://github.com/acme/runner/actions/runs/1",
-    }]);
-    const runner = createJobRunner({
-      config,
-      provider,
-      github,
-      createWorktree: async (input) => input.worktreePath,
-    });
-
-    expect(await runner.run(job.id, "runner-worker")).toBe(true);
-    expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("FAILED");
-    expect(provider.calls.map((call) => call.role)).toEqual(["issue-worker", "pull-request"]);
-    expect(github.labels).toContain(config.ISSUE_REVIEW_REQUESTED_LABEL);
-    expect(github.comments.filter((comment) => comment.issue === job.issueNumber)).toHaveLength(1);
-    expect(github.comments.filter((comment) => comment.issue === job.issueNumber + 1)).toHaveLength(1);
-    expect(github.createdIssues).toHaveLength(1);
-    expect(github.createdIssues[0]?.labels).toEqual([config.ISSUE_READY_LABEL]);
-    expect(github.createdIssues[0]?.body).toContain("Stack trace:");
-    expect(github.createdIssues[0]?.body).toContain("Missing guard");
-  });
-
   async function claimed(issueNumber: number) {
     const queued = await jobs.tryCreateQueued({
       repositoryId,
@@ -275,12 +234,7 @@ function success(finalOutput: string, sessionId: string): AgentResult {
   return { provider: "codex", sessionId, exitCode: 0, finalOutput, stderr: "" };
 }
 
-function fakeGitHub(issueNumber: number, branchName: string, checks: Array<{
-  name: string;
-  status: string;
-  conclusion: string | null;
-  url: string | null;
-}> = []) {
+function fakeGitHub(issueNumber: number, branchName: string) {
   const state = {
     labels: ["bug", "agent:working"],
     comments: [] as Array<{ issue: number; body: string }>,
@@ -309,7 +263,6 @@ function fakeGitHub(issueNumber: number, branchName: string, checks: Array<{
         pullRequests: [],
       };
     },
-    async getPullRequestChecks() { return checks; },
     async createIssue(_fullName: string, title: string, body: string, labels: string[]) {
       state.createdIssues.push({ title, body, labels });
       return { number: issueNumber + 1000, url: `https://github.com/acme/runner/issues/${issueNumber + 1000}` };

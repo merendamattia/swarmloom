@@ -62,7 +62,6 @@ integration("repository scan", () => {
       issueComments: [],
       pullRequests: [],
     }),
-    getPullRequestChecks: async () => [],
     createIssue: async () => ({ number: issueNumber + 1000, url: `https://github.com/acme/app/issues/${issueNumber + 1000}` }),
     addIssueComment: async () => {},
   };

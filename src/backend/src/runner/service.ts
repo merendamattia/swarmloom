@@ -15,10 +15,9 @@ import { reviewRepository } from "../repositories/reviews.ts";
 import { loadAgentInstructions, resultSchemaPath } from "../runtime/instructions.ts";
 import { finishScanIfComplete } from "../scans/finalize.ts";
 import { parseJobOutcome, parseReviewOutcome, type JobOutcome, type ReviewOutcome } from "./outcomes.ts";
-import { PullRequestChecksError, pullRequestCheckState } from "./pull-request.ts";
 
 type RunnerGitHub = Pick<GitHubClient,
-  "getIssue" | "getIssueContext" | "getPullRequest" | "getPullRequestDiff" | "getPullRequestChecks" |
+  "getIssue" | "getIssueContext" | "getPullRequest" | "getPullRequestDiff" |
   "createIssue" | "setIssueLabels" | "addIssueComment">;
 
 type CreateWorktree = typeof createTargetWorktree;
@@ -266,43 +265,6 @@ export function createJobRunner({
           deletions: pullRequest.deletions,
         },
       });
-      const checks = await waitForPullRequestChecks(
-        currentJob.repository.fullName,
-        pullRequest.head,
-        abortSignal,
-      );
-      const checkState = pullRequestCheckState(checks);
-      await events.record({
-        type: checkState === "failed" ? "PR_CHECKS_FAILED" : "PR_CHECKS_PASSED",
-        message: `Pull Request #${pullRequest.number} checks ${checkState}`,
-        jobId: currentJob.id,
-        repositoryId: currentJob.repositoryId,
-        scanRunId: currentJob.scanRunId ?? undefined,
-        metadata: {
-          issueUrl: currentJob.issueUrl,
-          pullRequestUrl: pullRequest.url,
-          checks: jsonValue(checks),
-        },
-      });
-      if (checkState === "failed") {
-        let diagnosis = "The pull-request agent did not return a diagnosis.";
-        try {
-          const result = await executeRole(
-            "pull-request",
-            `Diagnose the failed CI/CD checks for ${pullRequest.url}`,
-            `${issueContext(currentJob, config.ISSUE_REVIEW_REQUESTED_LABEL, liveContext)}\n\nPull Request: ${JSON.stringify(pullRequest)}\n\nChecks:\n${JSON.stringify(checks, null, 2)}\n\nInspect the failed checks and return actionable findings with file and line locations when available.`,
-            workingDirectory,
-            abortSignal,
-            currentJob,
-          );
-          if (result.exitCode !== 0) throw new Error(result.stderr || "Pull-request agent failed");
-          const outcome = parseReviewOutcome(await readOutcomeFile(result.resultFilePath));
-          diagnosis = formatReviewDiagnosis(outcome);
-        } catch (error) {
-          diagnosis = `Pull-request agent failed to diagnose the checks: ${failureDetails(error, config.GITHUB_TOKEN)}`;
-        }
-        throw new PullRequestChecksError(pullRequest.number, pullRequest.url, checks, diagnosis);
-      }
       const diff = await github.getPullRequestDiff(currentJob.repository.fullName, outcome.pr.number);
       const reviewRow = await reviewRepository.start(
         currentJob.id,
@@ -351,21 +313,11 @@ export function createJobRunner({
       }
     }
 
-    async function waitForPullRequestChecks(fullName: string, ref: string, abortSignal: AbortSignal) {
-      let checks = await github.getPullRequestChecks(fullName, ref);
-      while (pullRequestCheckState(checks) === "pending") {
-        await abortableDelay(heartbeatIntervalMs ?? config.HEARTBEAT_INTERVAL_MS, abortSignal);
-        checks = await github.getPullRequestChecks(fullName, ref);
-      }
-      return checks;
-    }
-
     async function reportFailure(
       currentJob: RunningJob,
       error: unknown,
       pullRequest: { number: number; url: string } | undefined,
     ) {
-      const checksError = error instanceof PullRequestChecksError ? error : undefined;
       const details = failureDetails(error, config.GITHUB_TOKEN);
       const diagnosticBody = [
         "## Swarmloom job failure",
@@ -377,8 +329,6 @@ export function createJobRunner({
         "```text",
         details,
         "```",
-        checksError ? `\n### Failed CI/CD checks\n${formatChecks(checksError.checks)}` : undefined,
-        checksError ? `\n### Pull-request agent diagnosis\n${checksError.diagnosis}` : undefined,
         "",
         "Fix the root cause, add or update regression coverage, and leave the issue ready for another worker pass.",
       ].filter((line): line is string => line !== undefined).join("\n");
@@ -396,14 +346,11 @@ export function createJobRunner({
 
       const comment = [
         `Worker failed: ${safeError(error)}`,
-        checksError ? `\nCI/CD checks failed for ${pullRequest?.url ?? "the generated Pull Request"}.` : undefined,
-        checksError ? `\nFailed checks:\n${formatChecks(checksError.checks)}` : undefined,
-        checksError ? `\nPull-request agent diagnosis:\n${checksError.diagnosis}` : undefined,
         diagnosticIssue ? `\nDiagnostic issue: ${diagnosticIssue.url}` : "\nThe diagnostic issue could not be created automatically.",
       ].filter((line): line is string => line !== undefined).join("\n");
       await finalizeIssue(
         currentJob,
-        checksError ? [config.ISSUE_REVIEW_REQUESTED_LABEL] : [],
+        [],
         comment,
       );
       if (pullRequest) {
@@ -543,33 +490,6 @@ function failureDetails(error: unknown, githubToken: string) {
     ...globalThis.process.env,
     GITHUB_TOKEN: githubToken,
   }).slice(0, 12_000);
-}
-
-function formatChecks(checks: Array<{ name: string; status: string; conclusion: string | null; url: string | null }>) {
-  return checks.map((check) => `- **${check.name}** — ${check.status}/${check.conclusion ?? "pending"}${check.url ? ` ([details](${check.url}))` : ""}`).join("\n");
-}
-
-function formatReviewDiagnosis(review: ReviewOutcome) {
-  const findings = review.findings.map((finding) =>
-    `- **${finding.severity}** ${finding.file}${finding.line ? `:${finding.line}` : ""}: ${finding.problem} Correction: ${finding.correction}`
-  ).join("\n");
-  return `${review.summary}${findings ? `\n\n${findings}` : ""}`;
-}
-
-async function abortableDelay(milliseconds: number, signal: AbortSignal) {
-  if (signal.aborted) throw signal.reason ?? new Error("Job aborted");
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, milliseconds);
-    const onAbort = () => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      reject(signal.reason ?? new Error("Job aborted"));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 function jsonValue(value: unknown) {

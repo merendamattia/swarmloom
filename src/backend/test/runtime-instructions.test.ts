@@ -45,13 +45,12 @@ describe("canonical agent runtime", () => {
 
   test("selects the correct machine-readable result schema", () => {
     expect(resultSchemaPath(runtime, "reviewer")).toEndWith("review-result.schema.json");
-    expect(resultSchemaPath(runtime, "pull-request")).toEndWith("review-result.schema.json");
     expect(resultSchemaPath(runtime, "decomposer")).toEndWith("decomposition-result.schema.json");
     expect(resultSchemaPath(runtime, "issue-worker")).toEndWith("job-result.schema.json");
   });
 
   test("keeps Codex schemas flat and fully required", async () => {
-    for (const role of ["issue-worker", "decomposer", "reviewer", "pull-request"] as const) {
+    for (const role of ["issue-worker", "decomposer", "reviewer"] as const) {
       const schema = await Bun.file(resultSchemaPath(runtime, role)).text();
       expect(schema).not.toContain('"oneOf"');
       const parsed = JSON.parse(schema) as { properties: Record<string, unknown>; required: string[] };

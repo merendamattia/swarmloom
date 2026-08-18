@@ -100,7 +100,7 @@ describe("GitHub client", () => {
     expect(await client.getPullRequestDiff("acme/app", 9)).toStartWith("diff --git");
   });
 
-  test("loads the full issue and linked pull request context, checks, and diagnostic issue", async () => {
+  test("loads the full issue and linked pull request context and diagnostic issue", async () => {
     const requests: Request[] = [];
     const client = createGitHubClient({
       token: "secret-token",
@@ -136,13 +136,6 @@ describe("GitHub client", () => {
           user: { login: "reviewer" },
           created_at: "2026-08-18T10:02:00Z",
         }]);
-        if (request.url.includes("/check-runs")) return Response.json({ check_runs: [{
-          name: "CI",
-          status: "completed",
-          conclusion: "success",
-          html_url: "https://github.com/acme/app/actions/runs/1",
-        }] });
-        if (request.url.includes("/commits/agent%2Fissue-7/status")) return Response.json({ state: "success", statuses: [] });
         if (request.headers.get("accept") === "application/vnd.github.v3.diff") return new Response("diff --git a/src/app.ts b/src/app.ts");
         if (request.url.endsWith("/pulls/9")) return Response.json({
           number: 9,
@@ -173,10 +166,6 @@ describe("GitHub client", () => {
       reviews: [{ state: "CHANGES_REQUESTED" }],
       comments: [{ path: "src/app.ts", line: 12 }],
     });
-    expect(await client.getPullRequestChecks("acme/app", "agent/issue-7")).toEqual([
-      { name: "CI", status: "completed", conclusion: "success", url: "https://github.com/acme/app/actions/runs/1" },
-      { name: "commit-status", status: "completed", conclusion: "success", url: null },
-    ]);
     expect(await client.createIssue("acme/app", "[Swarmloom] CI failure", "Details", ["agent:ready"])).toEqual({
       number: 13,
       url: "https://github.com/acme/app/issues/13",

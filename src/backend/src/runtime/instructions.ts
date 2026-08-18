@@ -16,7 +16,7 @@ export async function loadAgentInstructions(runtimeDirectory: string) {
 }
 
 export function resultSchemaPath(runtimeDirectory: string, role: AgentRole) {
-  const schema = role === "reviewer" || role === "pull-request"
+  const schema = role === "reviewer"
     ? "review-result.schema.json"
     : role === "decomposer" ? "decomposition-result.schema.json" : "job-result.schema.json";
   return resolve(runtimeDirectory, "schemas", schema);
