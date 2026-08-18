@@ -103,7 +103,7 @@ export function useRepositories() {
   return useQuery({ queryKey: ["repositories"], queryFn: async () => json<Repositories>(await api.repositories.$get()) });
 }
 
-function useAction(action: () => Promise<unknown>) {
+function useAction<TArgs = void>(action: (args: TArgs) => Promise<unknown>) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: action,
@@ -118,6 +118,10 @@ function useAction(action: () => Promise<unknown>) {
 
 export function useRunScan() {
   return useAction(async () => json(await api.scans.run.$post()));
+}
+
+export function useRemoveRepository() {
+  return useAction(async (id: string) => json(await api.repositories[":id"].$delete({ param: { id } })));
 }
 
 export function useCancelJob(id: string) {

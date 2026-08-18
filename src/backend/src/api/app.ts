@@ -15,6 +15,7 @@ import type { EventService } from "../events/service.ts";
 import type { GitHubClient } from "../github/client.ts";
 import { replaceWorkerLabels } from "../github/labels.ts";
 import { jobRepository } from "../repositories/jobs.ts";
+import { repositoryRepository } from "../repositories/repositories.ts";
 import { finishScanIfComplete } from "../scans/finalize.ts";
 import type { JobQueue } from "../queue/service.ts";
 
@@ -47,7 +48,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
   app.use("*", requestId(), secureHeaders(), cors({
     origin: config.FRONTEND_URL,
     allowHeaders: ["Content-Type"],
-    allowMethods: ["GET", "POST", "PATCH", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
   }));
   app.onError((error, context) => {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
@@ -211,6 +212,21 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         },
       },
     })))
+    .delete("/repositories/:id", async (context) => {
+      const result = await repositoryRepository.remove(context.req.param("id"));
+      if (!result) return context.json({ error: "Not found" }, 404);
+      if (result.blocked) {
+        return context.json({
+          error: `Cannot remove the repository while ${result.activeJobs} active job${result.activeJobs === 1 ? "" : "s"} ${result.activeJobs === 1 ? "is" : "are"} queued or running. Cancel or finish them first.`,
+        }, 409);
+      }
+      await events.record({
+        type: "REPOSITORY_REMOVED",
+        message: `Removed ${result.fullName} from configured repositories`,
+        metadata: { repositoryId: context.req.param("id") },
+      });
+      return context.json({ status: "removed" });
+    })
     .post("/jobs/:id/cancel", async (context) => {
       const job = await prisma.job.findFirst({
         where: { id: context.req.param("id"), environment: config.APP_ENV }, include: { repository: true },

@@ -83,10 +83,11 @@ integration("operations API", () => {
   });
 
   afterAll(async () => {
-    await prisma.jobEvent.deleteMany({ where: { repositoryId } });
-    await prisma.job.deleteMany({ where: { repositoryId } });
+    await prisma.review.deleteMany({ where: { job: { repository: { fullName: { contains: unique } } } } });
+    await prisma.jobEvent.deleteMany({ where: { repository: { fullName: { contains: unique } } } });
+    await prisma.job.deleteMany({ where: { repository: { fullName: { contains: unique } } } });
+    await prisma.repository.deleteMany({ where: { fullName: { contains: unique } } });
     await prisma.runtimeSetting.deleteMany({ where: { environment: "test" } });
-    await prisma.repository.delete({ where: { id: repositoryId } });
     await prisma.$disconnect();
   });
 
@@ -157,5 +158,76 @@ integration("operations API", () => {
     expect((await app.request("/api/scans/run", { method: "POST" })).status).toBe(202);
     expect(scanCalls).toBe(2);
     expect((await app.request("/api/notifications/test", { method: "POST" })).status).toBe(409);
+  });
+
+  test("removes an obsolete repository together with its events and job history", async () => {
+    const obsolete = await prisma.repository.create({
+      data: { fullName: `acme/obsolete-${unique}`, cloneUrl: `https://github.com/acme/obsolete-${unique}.git` },
+    });
+    await prisma.jobEvent.create({
+      data: { type: "SCAN_STARTED", message: "Obsolete scan", repositoryId: obsolete.id },
+    });
+    const obsoleteJob = await prisma.job.create({
+      data: {
+        repositoryId: obsolete.id,
+        environment: "test",
+        issueNumber: 55,
+        issueTitle: "Obsolete",
+        issueUrl: `https://github.com/acme/obsolete-${unique}/issues/55`,
+        issueBody: "Body",
+        status: "COMPLETED",
+        queueJobId: crypto.randomUUID(),
+        branchName: "agent/issue-55",
+        baselineCommit: "c".repeat(40),
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+      },
+    });
+    await prisma.jobEvent.create({
+      data: { type: "JOB_COMPLETED", message: "Obsolete job", jobId: obsoleteJob.id, repositoryId: obsolete.id },
+    });
+    const listBefore = (await (await app.request("/api/repositories")).json()) as Array<{ id: string }>;
+    expect(listBefore.some((repository) => repository.id === obsolete.id)).toBe(true);
+
+    const removed = await app.request(`/api/repositories/${obsolete.id}`, { method: "DELETE" });
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toEqual({ status: "removed" });
+
+    const repositories = (await (await app.request("/api/repositories")).json()) as Array<{ id: string }>;
+    expect(repositories.some((repository) => repository.id === obsolete.id)).toBe(false);
+    expect(await prisma.repository.findUnique({ where: { id: obsolete.id } })).toBeNull();
+    expect(await prisma.job.count({ where: { repositoryId: obsolete.id } })).toBe(0);
+    expect(await prisma.jobEvent.count({ where: { repositoryId: obsolete.id } })).toBe(0);
+    expect(await prisma.review.count({ where: { job: { repositoryId: obsolete.id } } })).toBe(0);
+  });
+
+  test("blocks removal while jobs are active and reports unknown repositories", async () => {
+    const active = await prisma.repository.create({
+      data: { fullName: `acme/active-${unique}`, cloneUrl: `https://github.com/acme/active-${unique}.git` },
+    });
+    await prisma.job.create({
+      data: {
+        repositoryId: active.id,
+        environment: "test",
+        issueNumber: 77,
+        issueTitle: "Active",
+        issueUrl: `https://github.com/acme/active-${unique}/issues/77`,
+        issueBody: "Body",
+        status: "QUEUED",
+        queueJobId: crypto.randomUUID(),
+        branchName: "agent/issue-77",
+        baselineCommit: "d".repeat(40),
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+      },
+    });
+
+    const blocked = await app.request(`/api/repositories/${active.id}`, { method: "DELETE" });
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toMatchObject({ error: expect.stringContaining("active job") });
+    expect(await prisma.repository.findUnique({ where: { id: active.id } })).not.toBeNull();
+
+    const missing = await app.request(`/api/repositories/${crypto.randomUUID()}`, { method: "DELETE" });
+    expect(missing.status).toBe(404);
   });
 });
