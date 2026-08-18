@@ -130,10 +130,11 @@ export function createJobRunner({
         metadata: { issueUrl: job.issueUrl, provider: provider.name, model: job.model },
       });
 
-      const implementation = await executeRole(
+      const implementation = await executeRoleWithRetry(
         "issue-worker",
         `Process ${job.repository.fullName}#${job.issueNumber}: ${job.issueTitle}`,
         issueContext(job, config.ISSUE_REVIEW_REQUESTED_LABEL, liveContext, followUp),
+        (response) => { parseJobOutcome(response); },
         worktreePath,
         signal,
         job,
@@ -144,10 +145,16 @@ export function createJobRunner({
       }
       let outcome = parseJobOutcome(implementation.response);
       if (outcome === "requires_decomposition") {
-        const decomposition = await executeRole(
+        const decomposition = await executeRoleWithRetry(
           "decomposer",
           `Decompose ${job.repository.fullName}#${job.issueNumber} into coherent native sub-issues`,
           `${issueContext(job, config.ISSUE_REVIEW_REQUESTED_LABEL, liveContext, followUp)}\nQueue-ready label for actionable children: ${config.ISSUE_READY_LABEL}`,
+          (response) => {
+            const parsed = parseJobOutcome(response);
+            if (parsed !== "decomposed" && parsed !== "blocked") {
+              throw new Error("Decomposer returned an unsupported outcome");
+            }
+          },
           worktreePath,
           signal,
           job,
@@ -156,9 +163,6 @@ export function createJobRunner({
           throw new Error(decomposition.stderr || `${provider.name} decomposer exited unsuccessfully`);
         }
         outcome = parseJobOutcome(decomposition.response);
-        if (outcome !== "decomposed" && outcome !== "blocked") {
-          throw new Error("Decomposer returned an unsupported outcome");
-        }
       }
 
       if (outcome === "implemented") {
@@ -253,6 +257,29 @@ export function createJobRunner({
     }
     return reachedTerminalState;
 
+    async function executeRoleWithRetry(
+      role: AgentRole,
+      task: string,
+      context: string,
+      parse: (response: string) => void,
+      workingDirectory: string,
+      abortSignal: AbortSignal,
+      currentJob: RunningJob,
+    ): Promise<Awaited<ReturnType<typeof executeRole>>> {
+      let guidance: string | undefined;
+      for (let attempt = 0; ; attempt++) {
+        const result = await executeRole(role, task, attempt === 0 ? context : `${context}${guidance}`, workingDirectory, abortSignal, currentJob);
+        if (result.exitCode !== 0) return result;
+        try {
+          parse(result.response);
+          return result;
+        } catch (error) {
+          if (attempt >= 1) throw error;
+          guidance = `\n\nYour previous response was not accepted: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      }
+    }
+
     async function executeRole(
       role: AgentRole,
       task: string,
@@ -342,10 +369,11 @@ export function createJobRunner({
         currentJob.reasoningEffort,
       );
       try {
-        const result = await executeRole(
+        const result = await executeRoleWithRetry(
           "reviewer",
           `Independently review ${pullRequest.url}`,
           `${issueContext(currentJob, config.ISSUE_REVIEW_REQUESTED_LABEL, liveContext, followUp)}\n\nPull Request: ${JSON.stringify(pullRequest)}\n\nDiff from develop:\n${diff}`,
+          (response) => { parseReviewOutcome(response); },
           workingDirectory,
           abortSignal,
           currentJob,

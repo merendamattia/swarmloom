@@ -192,6 +192,62 @@ integration("job runner", () => {
     expect(stored.errorMessage).toContain("without writing the response");
   });
 
+  test("retries the role when the first response file lacks a recognized outcome marker", async () => {
+    const job = await claimed(issueBase + 9);
+    const github = fakeGitHub(job.issueNumber, job.branchName);
+    const implementationResponse = [
+      "Outcome: implemented",
+      `PR: https://github.com/acme/runner/pull/${job.issueNumber}`,
+      "Fixed on the second attempt.",
+    ].join("\n");
+    const provider = new FakeProvider([
+      success("Implemented the requested change and ran the checks.", "implementation-malformed"),
+      success(implementationResponse, "implementation-retry"),
+      success("Review: pass\nLooks good.", "review-retry"),
+    ]);
+    const runner = createJobRunner({
+      config,
+      provider,
+      github,
+      createWorktree: async (input) => input.worktreePath,
+    });
+
+    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(stored.status).toBe("COMPLETED");
+    expect(provider.calls.map((call) => call.role)).toEqual(["issue-worker", "issue-worker", "reviewer"]);
+    expect(provider.calls[1]?.context).toContain("Agent response must start with");
+  });
+
+  test("retries the reviewer with review guidance when its first response lacks a Review marker", async () => {
+    const job = await claimed(issueBase + 10);
+    const github = fakeGitHub(job.issueNumber, job.branchName);
+    const implementationResponse = [
+      "Outcome: implemented",
+      `PR: https://github.com/acme/runner/pull/${job.issueNumber}`,
+      "Implemented the requested change and ran the checks.",
+    ].join("\n");
+    const provider = new FakeProvider([
+      success(implementationResponse, "implementation-reviewer-retry"),
+      success("Outcome: implemented\nThe change is ready.", "review-malformed"),
+      success("Review: pass\nLooks good.", "review-retry-2"),
+    ]);
+    const runner = createJobRunner({
+      config,
+      provider,
+      github,
+      createWorktree: async (input) => input.worktreePath,
+    });
+
+    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id }, include: { review: true } });
+    expect(stored.status).toBe("COMPLETED");
+    expect(stored.review?.status).toBe("PASSED");
+    expect(provider.calls.map((call) => call.role)).toEqual(["issue-worker", "reviewer", "reviewer"]);
+    expect(provider.calls[2]?.context).toContain("Agent review must start with");
+    expect(provider.calls[2]?.context).toContain("Review: pass");
+  });
+
   test("continues the existing pull request branch and keeps the review label until resolved", async () => {
     const issueNumber = issueBase + 7;
     const prHead = `agent/issue-${issueNumber}-existing`;
