@@ -403,7 +403,7 @@ export function createJobRunner({
       ].filter((line): line is string => line !== undefined).join("\n");
       await finalizeIssue(
         currentJob,
-        checksError ? [config.ISSUE_REVIEW_REQUESTED_LABEL] : [],
+        checksError ? [config.ISSUE_REVIEW_REQUESTED_LABEL] : [config.ISSUE_BLOCKED_LABEL],
         comment,
       );
       if (pullRequest) {

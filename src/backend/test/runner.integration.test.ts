@@ -144,6 +144,8 @@ integration("job runner", () => {
     expect(failedStored.status).toBe("FAILED");
     expect(failedStored.activeIssueKey).toBeNull();
     expect(failedStored.errorMessage).toContain("provider failed");
+    expect(failedGitHub.labels).toContain(config.ISSUE_BLOCKED_LABEL);
+    expect(failedGitHub.labels).not.toContain(config.ISSUE_WORKING_LABEL);
     expect(failedGitHub.createdIssues[0]?.labels).toEqual([config.ISSUE_READY_LABEL]);
     expect(failedGitHub.createdIssues[0]?.body).toContain("Stack trace:");
   });
