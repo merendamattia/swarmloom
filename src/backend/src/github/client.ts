@@ -148,6 +148,15 @@ export function createGitHubClient(options: GitHubClientOptions) {
     return text ? response.text() : response.json();
   }
 
+  async function requestWhenAccessible(path: string) {
+    try {
+      return await request(path);
+    } catch (error) {
+      if (isForbidden(error)) return null;
+      throw error;
+    }
+  }
+
   async function getRepository(fullName: string) {
     const repository = repositorySchema.parse(await request(`/repos/${fullName}`));
     return { cloneUrl: repository.clone_url };
@@ -342,21 +351,26 @@ export function createGitHubClient(options: GitHubClientOptions) {
   async function getPullRequestChecks(fullName: string, ref: string): Promise<PullRequestCheck[]> {
     const encodedRef = encodeURIComponent(ref);
     const [checkRuns, commitStatus] = await Promise.all([
-      request(`/repos/${fullName}/commits/${encodedRef}/check-runs`),
-      request(`/repos/${fullName}/commits/${encodedRef}/status`),
+      requestWhenAccessible(`/repos/${fullName}/commits/${encodedRef}/check-runs`),
+      requestWhenAccessible(`/repos/${fullName}/commits/${encodedRef}/status`),
     ]);
-    const runs = checkRunsResponseSchema.parse(checkRuns).check_runs.map((check) => ({
-      name: check.name,
-      status: check.status,
-      conclusion: check.conclusion,
-      url: check.html_url ?? check.details_url ?? null,
-    }));
-    const status = commitStatusResponseSchema.parse(commitStatus);
-    const statuses = status.statuses.length > 0 ? status.statuses : [{
-      context: "commit-status",
-      state: status.state,
-      target_url: null,
-    }];
+    const runs = checkRuns
+      ? checkRunsResponseSchema.parse(checkRuns).check_runs.map((check) => ({
+        name: check.name,
+        status: check.status,
+        conclusion: check.conclusion,
+        url: check.html_url ?? check.details_url ?? null,
+      }))
+      : [];
+    const status = commitStatus ? commitStatusResponseSchema.parse(commitStatus) : null;
+    const statuses = status && status.statuses.length > 0
+      ? status.statuses
+      : status ? [{
+          context: "commit-status",
+          state: status.state,
+          target_url: null,
+        }]
+        : [];
     return [...runs, ...statuses.map((item) => ({
       name: item.context,
       status: item.state === "pending" ? "in_progress" : "completed",
@@ -404,6 +418,10 @@ export function createGitHubClient(options: GitHubClientOptions) {
 
 function isUnprocessableEntity(error: unknown) {
   return error instanceof Error && error.message.includes("GitHub API request failed (422)");
+}
+
+function isForbidden(error: unknown) {
+  return error instanceof Error && error.message.includes("GitHub API request failed (403)");
 }
 
 export type GitHubClient = ReturnType<typeof createGitHubClient>;

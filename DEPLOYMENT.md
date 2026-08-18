@@ -100,6 +100,7 @@ general workflow needs repository permissions:
 - **Contents: read and write** — clone/fetch and push the assigned branch;
 - **Issues: read and write** — discovery, labels, comments, issue creation, and native sub-issues;
 - **Pull requests: read and write** — create/read PRs and post review-related content;
+- **Checks: read** — gate the review on CI/CD checks; without it the worker skips waiting for checks;
 - **Metadata: read** — automatically included by GitHub;
 - **Workflows: write** only if queued work is allowed to modify files in `.github/workflows`.
 

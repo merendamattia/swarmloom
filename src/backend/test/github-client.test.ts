@@ -185,6 +185,42 @@ describe("GitHub client", () => {
     expect(requests.some((request) => request.url.includes("/pulls/9/comments"))).toBe(true);
   });
 
+  test("treats pull request checks as absent when the token cannot read them", async () => {
+    const client = createGitHubClient({
+      token: "secret-token",
+      fetch: async (input) => {
+        const request = new Request(input);
+        return Response.json({
+          message: "Resource not accessible by personal access token",
+          documentation_url: "https://docs.github.com/rest/checks/runs#list-check-runs-for-a-git-reference",
+          status: 403,
+        }, { status: 403 });
+      },
+    });
+
+    expect(await client.getPullRequestChecks("acme/app", "agent/issue-7")).toEqual([]);
+  });
+
+  test("falls back to commit status when check runs are not accessible", async () => {
+    const client = createGitHubClient({
+      token: "secret-token",
+      fetch: async (input) => {
+        const request = new Request(input);
+        if (request.url.includes("/check-runs")) {
+          return Response.json({
+            message: "Resource not accessible by personal access token",
+            status: 403,
+          }, { status: 403 });
+        }
+        return Response.json({ state: "success", statuses: [] });
+      },
+    });
+
+    expect(await client.getPullRequestChecks("acme/app", "agent/issue-7")).toEqual([
+      { name: "commit-status", status: "completed", conclusion: "success", url: null },
+    ]);
+  });
+
   test("creates missing agent labels and repairs existing descriptions", async () => {
     const requests: Request[] = [];
     const config = parseConfig({
