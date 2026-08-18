@@ -9,5 +9,6 @@ dist/
 coverage/
 *.tsbuildinfo
 /data/
+src/backend/data/
 *.log
 .DS_Store
