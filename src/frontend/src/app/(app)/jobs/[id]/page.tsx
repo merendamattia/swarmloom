@@ -2,9 +2,11 @@
 
 import {
   Ban,
+  ChevronDown,
   ChevronRight,
   CircleAlert,
   CircleCheck,
+  Copy,
   ExternalLink,
   GitBranch,
   GitPullRequest,
@@ -15,7 +17,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   ActionMessage,
   EmptyState,
@@ -29,9 +31,11 @@ import {
   agentOutputEvents,
   agentOutputMessage,
   dateTime,
+  diagnosticsBundle,
   duration,
   inlineMarkdown,
   normalizeAgentOutput,
+  normalizeDiagnostics,
   normalizeJobResult,
   normalizeReview,
   shortCommit,
@@ -78,6 +82,7 @@ export default function JobPage() {
 
       <div className="detail-grid">
         <div className="detail-main">
+          {data.status === "FAILED" ? <section className="panel"><FailureDiagnostics diagnostics={data.diagnostics} /></section> : null}
           <section className="panel">
             <SectionHeading title="Timeline" description={data.status === "RUNNING" ? "Polling every two seconds while this job remains active." : "Only non-empty agent output, in chronological order."} />
             {events.length ? <ol className="timeline">{events.map((event) => <li className="timeline-item" data-level={event.level} key={event.id}><span className="timeline-dot" aria-hidden="true" /><div className="timeline-copy"><div className="timeline-head"><strong>Agent output</strong><time dateTime={event.createdAt}>{dateTime(event.createdAt)}</time></div><AgentTimelineOutput message={event.message} pullRequestUrl={data.pullRequestUrl} /></div></li>)}</ol> : <EmptyState title="No agent output recorded" description="Agent messages will appear here as the worker progresses." />}
@@ -136,6 +141,68 @@ function AgentTimelineOutput({ message, pullRequestUrl }: { message: string; pul
   const output = normalizeAgentOutput(message);
   if (!output) return <MarkdownText value={agentOutputMessage(message, pullRequestUrl)} />;
   return <div className="timeline-output">{output.outcome ? <StatusPill status={output.outcome.toUpperCase()} /> : null}<MarkdownText value={agentOutputMessage(output.summary, pullRequestUrl)} /></div>;
+}
+
+function FailureDiagnostics({ diagnostics }: { diagnostics: unknown }) {
+  const [copied, setCopied] = useState(false);
+  const view = normalizeDiagnostics(diagnostics);
+
+  if (!view) {
+    return (
+      <>
+        <SectionHeading title="Technical details" description="No structured execution diagnostics were captured for this failed attempt." />
+        <div className="outcome-message" data-tone="danger"><CircleAlert size={19} aria-hidden="true" /><div><h3>Diagnostics unavailable</h3><MarkdownText value="This failed job predates structured diagnostics or the worker could not record evidence. The timeline and error evidence above are the only records; nothing is fabricated." /></div></div>
+      </>
+    );
+  }
+
+  const copyDiagnostics = async () => {
+    try {
+      await navigator.clipboard.writeText(diagnosticsBundle(view));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2_000);
+    } catch {
+      // clipboard access can be blocked; leave the action silent
+    }
+  };
+
+  return (
+    <>
+      <SectionHeading
+        title="Technical details"
+        description="Sanitized execution evidence for this failed attempt."
+        action={<button className="button secondary" type="button" onClick={() => void copyDiagnostics()}><Copy size={16} aria-hidden="true" />{copied ? "Copied" : "Copy diagnostics"}</button>}
+      />
+      <dl className="facts">
+        <div className="fact"><dt>Failed stage</dt><dd>{statusLabel(view.stage)}</dd></div>
+        <div className="fact"><dt>Role</dt><dd>{view.role ? statusLabel(view.role) : "Not recorded"}</dd></div>
+        <div className="fact"><dt>Provider</dt><dd>{statusLabel(view.provider)}</dd></div>
+        <div className="fact"><dt>Model</dt><dd>{view.model}</dd></div>
+        <div className="fact"><dt>Session</dt><dd className="mono">{view.sessionId ?? "Not recorded"}</dd></div>
+        <div className="fact"><dt>Exit code</dt><dd>{view.exitCode ?? "Not recorded"}</dd></div>
+      </dl>
+      <details className="diagnostics-details">
+        <summary><ChevronDown size={16} aria-hidden="true" />Show technical details</summary>
+        <DiagnosticBlock title="Error" text={view.error} />
+        {view.causeChain.length ? <DiagnosticBlock title="Cause chain" lines={view.causeChain} /> : null}
+        <DiagnosticBlock title="Stderr" text={view.stderr} />
+        <DiagnosticBlock title="Final provider output" text={view.finalOutput} />
+        <div className="diagnostics-block">
+          <h3>Agent/tool timeline</h3>
+          {view.events.length
+            ? <ol className="diagnostics-timeline">{view.events.map((event) => <li key={`${event.timestamp}:${event.type}`}><span className="diagnostics-event-time mono">{event.timestamp || "No timestamp"}</span><span><strong>{statusLabel(event.type)}</strong>{event.tool ? <span className="list-meta"> · {event.tool}</span> : null}</span>{event.message ? <MarkdownText value={event.message} /> : null}</li>)}</ol>
+            : <p className="muted">No agent or tool events were recorded for this attempt.</p>}
+        </div>
+      </details>
+    </>
+  );
+}
+
+function DiagnosticBlock({ title, text, lines }: { title: string; text?: string | null; lines?: string[] }) {
+  if (lines) {
+    return <div className="diagnostics-block"><h3>{title}</h3><pre className="diagnostics-pre">{lines.join("\n")}</pre></div>;
+  }
+  return <div className="diagnostics-block"><h3>{title}</h3>{text ? <pre className="diagnostics-pre">{text}</pre> : <p className="muted">Not recorded</p>}</div>;
 }
 
 function ResultEvidence({ result, pullRequestUrl }: { result: JobResultView; pullRequestUrl: string | null }) {

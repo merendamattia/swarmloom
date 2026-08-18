@@ -7,19 +7,29 @@ import { createJobWorktree as createTargetWorktree } from "../git/repositories.t
 import type { GitHubClient } from "../github/client.ts";
 import { githubGitEnvironment } from "../github/git-auth.ts";
 import { replaceWorkerLabels } from "../github/labels.ts";
-import type { AgentProvider, AgentRole } from "../providers/index.ts";
+import type { AgentProvider, AgentResult, AgentRole } from "../providers/index.ts";
+import { ProviderProcessError } from "../providers/process.ts";
 import { eventRepository } from "../repositories/events.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import { reviewRepository } from "../repositories/reviews.ts";
 import { loadAgentInstructions, resultSchemaPath } from "../runtime/instructions.ts";
 import { finishScanIfComplete } from "../scans/finalize.ts";
 import { parseJobOutcome, parseReviewOutcome, type JobOutcome, type ReviewOutcome } from "./outcomes.ts";
+import {
+  AgentExecutionError,
+  causeChain,
+  minimalDiagnostics,
+  tail,
+  type DiagnosticEvent,
+  type JobDiagnostics,
+} from "./diagnostics.ts";
 
 type RunnerGitHub = Pick<GitHubClient,
   "getIssue" | "getPullRequest" | "getPullRequestDiff" | "setIssueLabels" | "addIssueComment">;
 
 type CreateWorktree = typeof createTargetWorktree;
 type RunningJob = NonNullable<Awaited<ReturnType<typeof jobRepository.findRunning>>>;
+type RoleExecution = AgentResult & { events: DiagnosticEvent[] };
 
 type RunnerDependencies = {
   config: Config;
@@ -95,9 +105,16 @@ export function createJobRunner({
       );
       await jobRepository.setImplementationResult(job.id, implementation.sessionId, implementation.exitCode);
       if (implementation.exitCode !== 0) {
-        throw new Error(implementation.stderr || `${provider.name} exited with ${implementation.exitCode}`);
+        throw failure("implementation", "issue-worker", job, provider, implementation,
+          implementation.stderr || `${provider.name} exited with ${implementation.exitCode}`);
       }
-      let outcome = parseJobOutcome(implementation.finalOutput);
+      let outcome: JobOutcome;
+      try {
+        outcome = parseJobOutcome(implementation.finalOutput);
+      } catch (error) {
+        throw failure("parser", "issue-worker", job, provider, implementation, error,
+          { finalOutput: implementation.finalOutput });
+      }
       if (outcome.outcome === "requires_decomposition") {
         const decomposition = await executeRole(
           "decomposer",
@@ -108,11 +125,18 @@ export function createJobRunner({
           job,
         );
         if (decomposition.exitCode !== 0) {
-          throw new Error(decomposition.stderr || `${provider.name} decomposer exited unsuccessfully`);
+          throw failure("decomposition", "decomposer", job, provider, decomposition,
+            decomposition.stderr || `${provider.name} decomposer exited unsuccessfully`);
         }
-        outcome = parseJobOutcome(decomposition.finalOutput);
+        try {
+          outcome = parseJobOutcome(decomposition.finalOutput);
+        } catch (error) {
+          throw failure("parser", "decomposer", job, provider, decomposition, error,
+            { finalOutput: decomposition.finalOutput });
+        }
         if (outcome.outcome !== "decomposed" && outcome.outcome !== "blocked") {
-          throw new Error("Decomposer returned an unsupported outcome");
+          throw failure("decomposition", "decomposer", job, provider, decomposition,
+            "Decomposer returned an unsupported outcome");
         }
       }
 
@@ -164,11 +188,18 @@ export function createJobRunner({
             `Worker decomposed this issue into: ${outcome.childIssues.map((child) => `#${child.number}`).join(", ")}.`);
         }
       } else {
-        throw new Error("Issue worker returned an unresolved decomposition request");
+        throw failure("implementation", "issue-worker", job, provider, implementation,
+          "Issue worker returned an unresolved decomposition request");
       }
     } catch (error) {
       const message = safeError(error);
-      reachedTerminalState = await jobRepository.finishRunning(job.id, "FAILED", { errorMessage: message });
+      const currentDiagnostics = error instanceof AgentExecutionError
+        ? error.diagnostics
+        : minimalDiagnostics(error, { provider: provider.name, model: job.model });
+      reachedTerminalState = await jobRepository.finishRunning(job.id, "FAILED", {
+        errorMessage: message,
+        diagnostics: jsonValue(currentDiagnostics),
+      });
       if (reachedTerminalState) {
         await events.record({
           ...terminalEvent(job, "JOB_FAILED", message),
@@ -190,30 +221,54 @@ export function createJobRunner({
       workingDirectory: string,
       abortSignal: AbortSignal,
       currentJob: RunningJob,
-    ) {
+    ): Promise<RoleExecution> {
+      const diagnosticEvents: DiagnosticEvent[] = [];
       const schemaPath = resultSchemaPath(config.AGENT_RUNTIME_DIR, role);
-      return provider.execute({
-        role,
-        workingDirectory,
-        task,
-        context,
-        instructions: await loadAgentInstructions(config.AGENT_RUNTIME_DIR),
-        artifacts: { "Required JSON schema": await Bun.file(schemaPath).text() },
-        model: currentJob.model,
-        reasoningEffort: currentJob.reasoningEffort as Config["CODEX_REASONING_EFFORT"] | undefined,
-        outputSchemaPath: schemaPath,
-        signal: abortSignal,
-        onEvent: async (agentEvent) => {
-          await events.record({
-            type: agentEvent.type === "AGENT_OUTPUT" ? "AGENT_OUTPUT" : `AGENT_${agentEvent.type}`,
-            message: (agentEvent.message || agentEvent.type).slice(0, 8_000),
-            jobId: currentJob.id,
-            repositoryId: currentJob.repositoryId,
-            scanRunId: currentJob.scanRunId ?? undefined,
-            metadata: agentEvent.metadata as Prisma.InputJsonValue | undefined,
-          });
-        },
-      });
+      let result: AgentResult;
+      try {
+        result = await provider.execute({
+          role,
+          workingDirectory,
+          task,
+          context,
+          instructions: await loadAgentInstructions(config.AGENT_RUNTIME_DIR),
+          artifacts: { "Required JSON schema": await Bun.file(schemaPath).text() },
+          model: currentJob.model,
+          reasoningEffort: currentJob.reasoningEffort as Config["CODEX_REASONING_EFFORT"] | undefined,
+          outputSchemaPath: schemaPath,
+          signal: abortSignal,
+          onEvent: async (agentEvent) => {
+            diagnosticEvents.push({
+              type: agentEvent.type,
+              timestamp: agentEvent.timestamp,
+              message: agentEvent.message ? redactSecrets(agentEvent.message).slice(0, 8_000) : undefined,
+              tool: agentEvent.tool,
+            });
+            await events.record({
+              type: agentEvent.type === "AGENT_OUTPUT" ? "AGENT_OUTPUT" : `AGENT_${agentEvent.type}`,
+              message: (agentEvent.message || agentEvent.type).slice(0, 8_000),
+              jobId: currentJob.id,
+              repositoryId: currentJob.repositoryId,
+              scanRunId: currentJob.scanRunId ?? undefined,
+              metadata: agentEvent.metadata as Prisma.InputJsonValue | undefined,
+            });
+          },
+        });
+      } catch (error) {
+        throw new AgentExecutionError(safeError(error), {
+          stage: error instanceof ProviderProcessError ? "provider_process" : roleStage(role),
+          role,
+          provider: provider.name,
+          model: currentJob.model,
+          sessionId: null,
+          exitCode: error instanceof ProviderProcessError ? error.exitCode : null,
+          error: safeError(error),
+          causeChain: causeChain(error),
+          stderr: error instanceof ProviderProcessError ? error.stderr : undefined,
+          events: diagnosticEvents,
+        });
+      }
+      return { ...result, events: diagnosticEvents };
     }
 
     async function reviewImplementation(
@@ -258,8 +313,17 @@ export function createJobRunner({
           abortSignal,
           currentJob,
         );
-        if (result.exitCode !== 0) throw new Error(result.stderr || "Automated review failed");
-        const review = parseReviewOutcome(result.finalOutput);
+        if (result.exitCode !== 0) {
+          throw failure("review", "reviewer", currentJob, provider, result,
+            result.stderr || "Automated review failed");
+        }
+        let review: ReviewOutcome;
+        try {
+          review = parseReviewOutcome(result.finalOutput);
+        } catch (error) {
+          throw failure("parser", "reviewer", currentJob, provider, result, error,
+            { finalOutput: result.finalOutput });
+        }
         await reviewRepository.finish(
           reviewRow.id,
           review.verdict === "pass" ? "PASSED" : "CHANGES_REQUESTED",
@@ -377,6 +441,35 @@ function terminalEvent(
 
 function safeError(error: unknown) {
   return redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000);
+}
+
+function roleStage(role: AgentRole): JobDiagnostics["stage"] {
+  return role === "issue-worker" ? "implementation" : role === "decomposer" ? "decomposition" : "review";
+}
+
+function failure(
+  stage: JobDiagnostics["stage"],
+  role: AgentRole | null,
+  job: { model: string },
+  provider: AgentProvider,
+  result: RoleExecution,
+  error: unknown,
+  extra: { cause?: unknown; finalOutput?: string; stderr?: string } = {},
+) {
+  const message = error instanceof Error ? error.message : String(error);
+  return new AgentExecutionError(safeError(message), {
+    stage,
+    role,
+    provider: provider.name,
+    model: job.model,
+    sessionId: result.sessionId,
+    exitCode: result.exitCode,
+    error: safeError(message),
+    causeChain: causeChain(extra.cause ?? error),
+    stderr: extra.stderr ?? (result.stderr || undefined),
+    finalOutput: extra.finalOutput ?? (result.finalOutput.trim() ? tail(result.finalOutput, 20_000) : undefined),
+    events: result.events,
+  });
 }
 
 function jsonValue(value: unknown) {

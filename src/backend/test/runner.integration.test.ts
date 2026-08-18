@@ -131,6 +131,47 @@ integration("job runner", () => {
     expect(failedStored.status).toBe("FAILED");
     expect(failedStored.activeIssueKey).toBeNull();
     expect(failedStored.errorMessage).toContain("provider failed");
+    expect(failedStored.diagnostics).toMatchObject({
+      stage: "implementation",
+      role: "issue-worker",
+      provider: "codex",
+      model: "gpt-5.6-luna",
+      sessionId: "failed",
+      exitCode: 2,
+      stderr: "provider failed",
+    });
+  });
+
+  test("persists parser diagnostics with the final provider output and event timeline", async () => {
+    const job = await claimed(issueBase + 6);
+    const provider = new FakeProvider([{
+      provider: "codex",
+      sessionId: "parser-session",
+      exitCode: 0,
+      finalOutput: "The agent chat went somewhere and left trailing prose without a JSON document.",
+      stderr: "",
+    }]);
+    const runner = createJobRunner({
+      config,
+      provider,
+      github: fakeGitHub(job.issueNumber, job.branchName),
+      createWorktree: async (input) => input.worktreePath,
+    });
+    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(stored.status).toBe("FAILED");
+    expect(stored.errorMessage).toBe("Agent result is not valid JSON");
+    expect(stored.diagnostics).toMatchObject({
+      stage: "parser",
+      role: "issue-worker",
+      provider: "codex",
+      model: "gpt-5.6-luna",
+      sessionId: "parser-session",
+      exitCode: 0,
+      finalOutput: "The agent chat went somewhere and left trailing prose without a JSON document.",
+      causeChain: [expect.stringContaining("Agent result is not valid JSON")],
+      events: [{ type: "SESSION_STARTED" }],
+    });
   });
 
   test("aborts an active provider when cancellation makes its heartbeat fail", async () => {
