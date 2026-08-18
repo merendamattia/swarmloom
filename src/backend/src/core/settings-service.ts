@@ -8,6 +8,7 @@ import {
   runtimeSettingDefinitions,
   runtimeSettingValues,
   runtimeSettingsView,
+  telegramBootstrapValues,
 } from "./runtime-settings.ts";
 import { settingsRepository } from "../repositories/settings.ts";
 
@@ -26,11 +27,16 @@ export function createSettingsService(config: Config) {
     const rows = await settingsRepository.list(config.APP_ENV);
     const existing = new Set(rows.map((row) => row.key));
     const values = runtimeSettingValues(config);
+    const bootstrap = telegramBootstrapValues(config, rows);
+    const bootstrapKeys = new Set(Object.keys(bootstrap));
     await settingsRepository.upsertMany(config.APP_ENV, runtimeSettingDefinitions
-      .filter(({ key, secret }) => !existing.has(key) && (!secret || Boolean(values[key])))
+      .filter(({ key, secret }) => (!existing.has(key) || bootstrapKeys.has(key))
+        && (!secret || Boolean(bootstrap[key] ?? values[key])))
       .map(({ key, secret }) => ({
         key,
-        value: secret ? encryptSetting(values[key]!, config.SETTINGS_ENCRYPTION_KEY) : values[key]!,
+        value: secret
+          ? encryptSetting((bootstrap[key] ?? values[key])!, config.SETTINGS_ENCRYPTION_KEY)
+          : (bootstrap[key] ?? values[key])!,
         secret,
       })));
     return reload();

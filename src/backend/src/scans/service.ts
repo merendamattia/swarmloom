@@ -37,6 +37,12 @@ export function createScanService({
     let queuedCount = 0;
     const agent = configuredAgent(config);
     try {
+      await events.record({
+        type: "SCAN_STARTED",
+        message: `${source === "SCHEDULED" ? "Scheduled" : "Manual"} scan started for ${config.githubRepositories.length} repositories`,
+        scanRunId: scan.id,
+        metadata: { source, repositories: config.githubRepositories },
+      });
       for (const fullName of config.githubRepositories) {
         let repository = await repositoryRepository.upsertConfigured(fullName, "");
         try {
@@ -81,6 +87,7 @@ export function createScanService({
                 jobId: job.id,
                 repositoryId: repository.id,
                 scanRunId: scan.id,
+                metadata: { issueUrl: issue.url, issueNumber: issue.number },
               });
             } catch (error) {
               await jobRepository.failQueued(job.id, safeError(error));
@@ -91,6 +98,7 @@ export function createScanService({
                 jobId: job.id,
                 repositoryId: repository.id,
                 scanRunId: scan.id,
+                metadata: { issueUrl: issue.url, issueNumber: issue.number },
               });
             }
           }
@@ -118,9 +126,23 @@ export function createScanService({
         }
       }
       const discovered = await scanRunRepository.finishDiscovery(scan.id, queuedCount);
+      await events.record({
+        type: "SCAN_DISCOVERY_COMPLETED",
+        message: `Scan found ${queuedCount} new job${queuedCount === 1 ? "" : "s"} across ${config.githubRepositories.length} repositories`,
+        scanRunId: scan.id,
+        metadata: { source, queuedCount, repositories: config.githubRepositories.length },
+      });
       return await finishScanIfComplete(scan.id, config.APP_ENV, events) ?? discovered;
     } catch (error) {
-      await scanRunRepository.fail(scan.id, safeError(error));
+      const message = safeError(error);
+      await scanRunRepository.fail(scan.id, message);
+      await events.record({
+        type: "SCAN_FAILED",
+        level: "ERROR",
+        message: `Scan failed: ${message}`,
+        scanRunId: scan.id,
+        metadata: { source },
+      });
       throw error;
     }
   }

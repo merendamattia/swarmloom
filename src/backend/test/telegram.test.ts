@@ -7,15 +7,25 @@ describe("Telegram notifier", () => {
     const notifier = createTelegramNotifier({
       token: "secret-token",
       chatId: "123",
+      dashboardUrl: "http://localhost:18420",
       fetch: async (input, init) => {
         requests.push(new Request(input, init));
         return Response.json({ ok: true });
       },
     });
-    await notifier.send({ type: "JOB_COMPLETED", message: "Done <safely>", id: "event-1" });
+    await notifier.send({
+      type: "JOB_COMPLETED",
+      message: "Done <safely>",
+      id: "event-1",
+      jobId: "job-1",
+      metadata: {
+        issueUrl: "https://github.com/acme/api/issues/7",
+        pullRequestUrl: "https://github.com/acme/api/pull/8",
+      },
+    });
     expect(await requests[0].json()).toEqual({
       chat_id: "123",
-      text: "JOB_COMPLETED\nDone &lt;safely&gt;",
+      text: "✅ <b>Job completed</b>\nDone &lt;safely&gt;\n\n🔗 <a href=\"https://github.com/acme/api/issues/7\">Issue</a> · <a href=\"https://github.com/acme/api/pull/8\">Pull request</a> · <a href=\"http://localhost:18420/jobs/job-1\">Dashboard</a>",
       parse_mode: "HTML",
       disable_web_page_preview: true,
     });

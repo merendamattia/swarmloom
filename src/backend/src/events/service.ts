@@ -2,12 +2,21 @@ import { redactSecrets } from "../core/secrets.ts";
 import { eventRepository, type RecordEventInput } from "../repositories/events.ts";
 
 const notifiableTypes = new Set([
+  "SCAN_STARTED",
+  "SCAN_DISCOVERY_COMPLETED",
+  "SCAN_FAILED",
   "JOB_STARTED",
+  "JOB_QUEUED",
   "JOB_COMPLETED",
   "JOB_FAILED",
   "JOB_BLOCKED",
   "JOB_DECOMPOSED",
+  "JOB_CANCELLED",
+  "JOB_RETRY_REQUESTED",
   "REPOSITORY_INVALID",
+  "REPOSITORY_ERROR",
+  "GITHUB_RECONCILIATION_REQUIRED",
+  "PR_OPENED",
   "REVIEW_COMPLETED",
   "SCAN_COMPLETED",
   "TELEGRAM_TEST",

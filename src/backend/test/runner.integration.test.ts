@@ -82,6 +82,8 @@ integration("job runner", () => {
       expect(github.labels).toContain(config.ISSUE_COMPLETED_LABEL);
       expect(github.comments.some((comment) => comment.issue === job.issueNumber && comment.body.includes("Automated review")))
         .toBe(true);
+      expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "PR_OPENED" } }))
+        .toMatchObject({ metadata: { pullRequestUrl: `https://github.com/acme/runner/pull/${job.issueNumber}` } });
     }
   });
 

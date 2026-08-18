@@ -149,6 +149,22 @@ export function runtimeSettingValues(config: Config) {
   return Object.fromEntries(runtimeSettingDefinitions.map(({ key }) => [key, environment[key] ?? ""]));
 }
 
+export function telegramBootstrapValues(
+  config: Config,
+  rows: Array<{ key: string; value: string }>,
+): Record<string, string> {
+  const hasPersistedCredentials = rows.some(({ key, value }) =>
+    (key === "TELEGRAM_BOT_TOKEN" || key === "TELEGRAM_CHAT_ID") && Boolean(value));
+  if (hasPersistedCredentials || !config.TELEGRAM_ENABLED || !config.TELEGRAM_BOT_TOKEN || !config.TELEGRAM_CHAT_ID) {
+    return {};
+  }
+  return {
+    TELEGRAM_ENABLED: "true",
+    TELEGRAM_BOT_TOKEN: config.TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CHAT_ID: config.TELEGRAM_CHAT_ID,
+  };
+}
+
 function isCron(value: string) {
   try {
     new CronPattern(value, undefined, { mode: "5-part" });

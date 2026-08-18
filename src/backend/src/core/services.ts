@@ -12,6 +12,7 @@ export function createSharedServices(config: Config, queue: JobQueue) {
     send: (event: Parameters<ReturnType<typeof createTelegramNotifier>["send"]>[0]) => createTelegramNotifier({
       token: config.TELEGRAM_BOT_TOKEN!,
       chatId: config.TELEGRAM_CHAT_ID!,
+      dashboardUrl: config.FRONTEND_URL,
     }).send(event),
   };
   const events = createEventService(notifier);
