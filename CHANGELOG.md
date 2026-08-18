@@ -1,3 +1,17 @@
+# [1.5.0](https://github.com/merendamattia/swarmloom/compare/v1.4.1...v1.5.0) (2026-08-18)
+
+
+### Bug Fixes
+
+* **runner:** derive retry guidance from the parse error ([8b33e25](https://github.com/merendamattia/swarmloom/commit/8b33e25729dede3338a5ca5bf190397e111d0840))
+* **runner:** retry a role when its response file lacks an outcome marker ([1ea4035](https://github.com/merendamattia/swarmloom/commit/1ea4035468e16d2dd0ce18f154aae96fb9e94056))
+* **telegram:** correct queued-summary truncation count ([ddc4329](https://github.com/merendamattia/swarmloom/commit/ddc4329ba18512eccc77bfa5b50ddc1649b9042b))
+
+
+### Features
+
+* **telegram:** aggregate queued job notifications per scan ([8544031](https://github.com/merendamattia/swarmloom/commit/8544031c9d475b74dc9850a66e0c85dc990859a8))
+
 ## [1.4.1](https://github.com/merendamattia/swarmloom/compare/v1.4.0...v1.4.1) (2026-08-18)
 
 
