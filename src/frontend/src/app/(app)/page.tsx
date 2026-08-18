@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, BellRing, CircleAlert, CircleCheck, Play } from "lucide-react";
+import { Activity, CircleAlert, CircleCheck, Play } from "lucide-react";
 import Link from "next/link";
 import {
   ActionMessage,
@@ -12,7 +12,7 @@ import {
   SectionHeading,
   StatusPill,
 } from "@/components/operational";
-import { useDashboard, useHealth, useRunScan, useStatus, useTestNotification } from "@/hooks/api";
+import { useDashboard, useHealth, useRunScan, useStatus } from "@/hooks/api";
 import { dateTime, duration, shortCommit, statusLabel } from "@/lib/format";
 
 const exceptionStatuses = new Set(["FAILED", "BLOCKED", "STALE"]);
@@ -22,7 +22,6 @@ export default function OverviewPage() {
   const health = useHealth();
   const status = useStatus();
   const runScan = useRunScan();
-  const testNotification = useTestNotification();
   const pending = dashboard.isPending || health.isPending || status.isPending;
   const error = dashboard.error || health.error || status.error;
 
@@ -115,7 +114,6 @@ export default function OverviewPage() {
         <section className="panel">
           <SectionHeading title="Recent scans" description="Scheduled and manual discovery use the same durable path." />
           {dashboard.data.scans.length ? <ul className="plain-list">{dashboard.data.scans.slice(0, 5).map((scan) => <li key={scan.id}><div className="list-line"><strong>{statusLabel(scan.source)} scan</strong><StatusPill status={scan.status} /></div><p className="list-meta">{dateTime(scan.startedAt)} · {scan.queuedCount} queued · {duration(scan.durationMs)}</p></li>)}</ul> : <EmptyState title="No scans recorded" description="Run a manual scan to create the first durable scan record." />}
-          {status.data.telegram.configured ? <><button className="button secondary" type="button" onClick={() => testNotification.mutate()} disabled={testNotification.isPending}><BellRing size={16} aria-hidden="true" />{testNotification.isPending ? "Sending test…" : "Test Telegram"}</button><ActionMessage pending={testNotification.isPending} error={testNotification.error} success={testNotification.isSuccess} pendingText="Sending a test notification…" /></> : null}
         </section>
       </div>
     </>
