@@ -10,6 +10,7 @@ import { parseRuntimeSettingsPatch, runtimeSettingsView } from "../core/runtime-
 import { prisma } from "../core/db.ts";
 import { logger } from "../core/logger.ts";
 import { redactSecrets } from "../core/secrets.ts";
+import { checkProviderAuthentication } from "../core/startup.ts";
 import type { EventService } from "../events/service.ts";
 import type { GitHubClient } from "../github/client.ts";
 import { replaceWorkerLabels } from "../github/labels.ts";
@@ -82,13 +83,17 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       });
     })
     .get("/status", async (context) => {
-      const lastNotification = config.TELEGRAM_ENABLED ? await prisma.jobEvent.findFirst({
-        where: { OR: [{ notifiedAt: { not: null } }, { notificationError: { not: null } }] },
-        orderBy: { createdAt: "desc" },
-        select: { notifiedAt: true },
-      }) : null;
+      const [lastNotification, providerAuth] = await Promise.all([
+        config.TELEGRAM_ENABLED ? prisma.jobEvent.findFirst({
+          where: { OR: [{ notifiedAt: { not: null } }, { notificationError: { not: null } }] },
+          orderBy: { createdAt: "desc" },
+          select: { notifiedAt: true },
+        }) : null,
+        checkProviderAuthentication(config.AGENT_PROVIDER),
+      ]);
       return context.json({
         ...startup,
+        providerAuth,
         schedule: { cron: config.SCHEDULE_CRON, timezone: config.SCHEDULE_TIMEZONE },
         provider: config.AGENT_PROVIDER,
         model: config.AGENT_PROVIDER === "codex" ? config.CODEX_MODEL : config.OPENCODE_MODEL,

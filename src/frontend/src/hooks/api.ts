@@ -51,7 +51,11 @@ export function useHealth() {
 }
 
 export function useStatus() {
-  return useQuery({ queryKey: ["status"], queryFn: async () => json<Status>(await api.status.$get()) });
+  return useQuery({
+    queryKey: ["status"],
+    queryFn: async () => json<Status>(await api.status.$get()),
+    refetchInterval: (query) => (query.state.data as Status | undefined)?.providerAuth.status === "required" ? 5_000 : false,
+  });
 }
 
 export function useSettings() {

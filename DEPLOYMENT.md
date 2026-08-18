@@ -207,26 +207,25 @@ The sequence below goes from a cloned repository to the first completed test job
    docker compose --env-file .env.production -f docker-compose.production.yaml build backend
    ```
 
-5. Log in interactively to the selected provider before normal startup.
+5. Start PostgreSQL, run migrations through the backend command, and start all roles:
+
+   ```bash
+   docker compose --env-file .env.production -f docker-compose.production.yaml up -d
+   docker compose --env-file .env.production -f docker-compose.production.yaml ps
+   ```
+
+6. Log in interactively to the selected provider from the online worker.
 
    For Codex account/device auth, run:
 
    ```bash
-   docker compose --env-file .env.production -f docker-compose.production.yaml run --rm --no-deps backend codex login --device-auth
+   docker compose --env-file .env.production -f docker-compose.production.yaml exec worker codex login --device-auth
    ```
 
    For OpenCode + DeepSeek, run:
 
    ```bash
-   docker compose --env-file .env.production -f docker-compose.production.yaml run --rm --no-deps worker opencode auth login
-   ```
-
-6. Start PostgreSQL, run migrations through the backend command, and start all roles:
-
-   ```bash
-   docker compose --env-file .env.production -f docker-compose.production.yaml up -d
-   docker compose --env-file .env.production -f docker-compose.production.yaml ps
-   docker compose --env-file .env.production -f docker-compose.production.yaml logs -f backend worker
+   docker compose --env-file .env.production -f docker-compose.production.yaml exec worker opencode auth login
    ```
 
 7. Verify readiness and the selected runtime:
@@ -394,10 +393,10 @@ provider) rather than pay-per-token API billing. Authenticate the provider insid
 container once and store its key in the persistent `opencode_data` volume:
 
 1. Subscribe to OpenCode Go at [opencode.ai/auth](https://opencode.ai/auth) and copy the API key.
-2. Run the login command and select **OpenCode Go**:
+2. Run the login command from the online worker and select **OpenCode Go**:
 
    ```bash
-   docker compose --env-file .env.production -f docker-compose.production.yaml run --rm worker opencode auth login
+   docker compose --env-file .env.production -f docker-compose.production.yaml exec worker opencode auth login
    ```
 
 3. Confirm the provider is available:
@@ -646,9 +645,9 @@ The repository becomes `INVALID`, emits `REPOSITORY_INVALID`, and queues no issu
 
 ### Codex authentication/runtime
 
-- `codex login status` must succeed.
+- `codex login status` must succeed after completing the login from the online worker.
 - Confirm `CODEX_HOME=/data/codex-home` and that `codex_home` is mounted into backend and worker.
-- Re-run device login with `docker compose run --rm --no-deps backend codex login --device-auth`.
+- Re-run device login with `docker compose exec worker codex login --device-auth`.
 - Verify the configured account can access `CODEX_MODEL`.
 
 ### OpenCode authentication/runtime
