@@ -42,14 +42,20 @@ gh api --paginate repos/<owner>/<repo>/issues/<issue-number>/comments
 gh api repos/<owner>/<repo>/issues/<issue-number>/labels
 ```
 
-Read a Pull Request and its diff:
+Read a Pull Request and its complete discussion:
 
 ```bash
 gh pr view <pr-number> --repo <owner>/<repo> \
-  --json number,title,body,state,baseRefName,headRefName,url,commits,files
+  --json number,title,body,state,baseRefName,headRefName,url,reviews,comments,commits,files
 gh pr diff <pr-number> --repo <owner>/<repo>
 gh api --paginate repos/<owner>/<repo>/pulls/<pr-number>/comments
+gh api --paginate repos/<owner>/<repo>/pulls/<pr-number>/reviews
 ```
+
+When the issue carries an automated review follow-up or references linked pull requests, read the
+complete nested context before editing: the full linked pull request, its description, and its
+diff; every pull request review and review comment; every issue comment; and any linked or nested
+issues relevant to the request.
 
 Check the required repository baseline and local worktree:
 

@@ -49,6 +49,10 @@ integration("repository scan", () => {
       body: `Closes #${issueNumber}`,
     }),
     getPullRequestDiff: async () => "diff --git a/src/a.ts b/src/a.ts",
+    listIssueComments: async () => [{ id: 1, body: "Issue comment" }],
+    listPullRequestComments: async () => [{ id: 2, body: "Line comment" }],
+    listPullRequestReviews: async () => [{ id: 3, state: "COMMENTED", body: "Review summary" }],
+    updateIssue: async () => {},
     addIssueComment: async () => {},
   };
   const sync = async ({ fullName }: { fullName: string }) => {

@@ -13,10 +13,12 @@ import { jobRepository } from "../repositories/jobs.ts";
 import { reviewRepository } from "../repositories/reviews.ts";
 import { loadAgentInstructions, resultSchemaPath } from "../runtime/instructions.ts";
 import { finishScanIfComplete } from "../scans/finalize.ts";
-import { parseJobOutcome, parseReviewOutcome, type JobOutcome, type ReviewOutcome } from "./outcomes.ts";
+import { parseJobOutcome, parseReviewOutcome, requiresFollowUp, type JobOutcome, type ReviewOutcome } from "./outcomes.ts";
 
 type RunnerGitHub = Pick<GitHubClient,
-  "getIssue" | "getPullRequest" | "getPullRequestDiff" | "setIssueLabels" | "addIssueComment">;
+  "getIssue" | "getPullRequest" | "getPullRequestDiff" | "listIssueComments"
+  | "listPullRequestComments" | "listPullRequestReviews" | "updateIssue"
+  | "setIssueLabels" | "addIssueComment">;
 
 type CreateWorktree = typeof createTargetWorktree;
 type RunningJob = NonNullable<Awaited<ReturnType<typeof jobRepository.findRunning>>>;
@@ -118,6 +120,7 @@ export function createJobRunner({
 
       if (outcome.outcome === "implemented") {
         const { review, pullRequestUrl } = await reviewImplementation(job, outcome, worktreePath, signal);
+        const followUp = requiresFollowUp(review);
         reachedTerminalState = await jobRepository.finishRunning(job.id, "COMPLETED", {
           result: jsonValue({ ...outcome, pr: { ...outcome.pr, url: pullRequestUrl }, review }),
           exitCode: implementation.exitCode,
@@ -127,7 +130,9 @@ export function createJobRunner({
         if (reachedTerminalState) {
           await events.record({
             type: "JOB_COMPLETED",
-            message: `Completed ${job.repository.fullName}#${job.issueNumber} with PR #${outcome.pr.number} using ${provider.name}/${job.model} in ${duration(job.startedAt)}`,
+            message: followUp
+              ? `Review requested changes on ${job.repository.fullName}#${job.issueNumber} PR #${outcome.pr.number}; issue requeued for follow-up in ${duration(job.startedAt)}`
+              : `Completed ${job.repository.fullName}#${job.issueNumber} with PR #${outcome.pr.number} using ${provider.name}/${job.model} in ${duration(job.startedAt)}`,
             jobId: job.id,
             repositoryId: job.repositoryId,
             scanRunId: job.scanRunId ?? undefined,
@@ -137,10 +142,15 @@ export function createJobRunner({
               provider: provider.name,
               model: job.model,
               review: review.verdict,
+              requeued: followUp,
             },
           });
-          await finalizeIssue(job, [config.ISSUE_COMPLETED_LABEL],
-            `Implemented in ${pullRequestUrl}. Automated review: **${review.verdict}** — ${review.summary}`);
+          if (followUp) {
+            await requeueIssue(job, pullRequestUrl, review);
+          } else {
+            await finalizeIssue(job, [config.ISSUE_COMPLETED_LABEL],
+              `Implemented in ${pullRequestUrl}. Automated review: **${review.verdict}** — ${review.summary}`);
+          }
           await postReview(job.repository.fullName, outcome.pr.number, review);
         }
       } else if (outcome.outcome === "blocked") {
@@ -243,6 +253,11 @@ export function createJobRunner({
         },
       });
       const diff = await github.getPullRequestDiff(currentJob.repository.fullName, outcome.pr.number);
+      const [issueComments, pullRequestComments, pullRequestReviews] = await Promise.all([
+        github.listIssueComments(currentJob.repository.fullName, currentJob.issueNumber),
+        github.listPullRequestComments(currentJob.repository.fullName, outcome.pr.number),
+        github.listPullRequestReviews(currentJob.repository.fullName, outcome.pr.number),
+      ]);
       const reviewRow = await reviewRepository.start(
         currentJob.id,
         currentJob.provider,
@@ -253,7 +268,7 @@ export function createJobRunner({
         const result = await executeRole(
           "reviewer",
           `Independently review ${pullRequest.url}`,
-          `${issueContext(currentJob)}\n\nPull Request: ${JSON.stringify(pullRequest)}\nTests: ${outcome.tests.join(", ")}\n\nDiff from develop:\n${diff}`,
+          reviewContext(currentJob, pullRequest, outcome, diff, { issueComments, pullRequestComments, pullRequestReviews }),
           workingDirectory,
           abortSignal,
           currentJob,
@@ -312,6 +327,31 @@ export function createJobRunner({
       }
     }
 
+    async function requeueIssue(currentJob: RunningJob, pullRequestUrl: string, review: ReviewOutcome) {
+      try {
+        const issue = await github.getIssue(currentJob.repository.fullName, currentJob.issueNumber);
+        const body = redactSecrets(`${issue.body}\n\n${followUpSection(pullRequestUrl, review)}`);
+        await github.updateIssue(currentJob.repository.fullName, currentJob.issueNumber, body);
+        await github.setIssueLabels(
+          currentJob.repository.fullName,
+          currentJob.issueNumber,
+          replaceWorkerLabels(issue.labels, config, [config.ISSUE_READY_LABEL]),
+        );
+        await github.addIssueComment(currentJob.repository.fullName, currentJob.issueNumber,
+          `Automated review requested follow-up work on ${pullRequestUrl}. The issue was marked \`${config.ISSUE_READY_LABEL}\` and will be picked up by the next scan.`);
+      } catch (error) {
+        await events.record({
+          type: "GITHUB_RECONCILIATION_REQUIRED",
+          level: "ERROR",
+          message: `Could not requeue GitHub state for ${currentJob.repository.fullName}#${currentJob.issueNumber}: ${safeError(error)}`,
+          jobId: currentJob.id,
+          repositoryId: currentJob.repositoryId,
+          scanRunId: currentJob.scanRunId ?? undefined,
+          metadata: { issueUrl: currentJob.issueUrl },
+        });
+      }
+    }
+
     async function postReview(fullName: string, pullRequestNumber: number, review: ReviewOutcome) {
       const findings = review.findings.map((finding) =>
         `- **${finding.severity}** ${finding.file}${finding.line ? `:${finding.line}` : ""}: ${finding.problem} Correction: ${finding.correction}`
@@ -357,6 +397,56 @@ function issueContext(job: {
     `Baseline: origin/develop at ${job.baselineCommit}`,
     `Assigned branch: ${job.branchName}`,
     `Body:\n${job.issueBody}`,
+  ].join("\n");
+}
+
+function reviewContext(
+  job: {
+    issueNumber: number;
+    issueTitle: string;
+    issueUrl: string;
+    issueBody: string;
+    baselineCommit: string;
+    branchName: string;
+  },
+  pullRequest: { url: string },
+  outcome: Extract<JobOutcome, { outcome: "implemented" }>,
+  diff: string,
+  discussion: {
+    issueComments: Array<{ id: number; body: string }>;
+    pullRequestComments: Array<{ id: number; body: string }>;
+    pullRequestReviews: Array<{ id: number; state: string; body: string }>;
+  },
+) {
+  return redactSecrets([
+    issueContext(job),
+    `Pull Request: ${JSON.stringify(pullRequest)}`,
+    `Tests: ${outcome.tests.join(", ")}`,
+    `Issue comments:\n${discussion.issueComments.map(({ id, body }) => `- #${id}: ${body}`).join("\n") || "(none)"}`,
+    `Pull request reviews:\n${discussion.pullRequestReviews.map(({ id, state, body }) => `- #${id} (${state}): ${body}`).join("\n") || "(none)"}`,
+    `Pull request review comments:\n${discussion.pullRequestComments.map(({ id, body }) => `- #${id}: ${body}`).join("\n") || "(none)"}`,
+    `Diff from develop:\n${diff}`,
+  ].join("\n\n"));
+}
+
+function followUpSection(pullRequestUrl: string, review: ReviewOutcome) {
+  const findings = review.findings.map((finding) =>
+    `- **${finding.severity}** ${finding.file}${finding.line ? `:${finding.line}` : ""}: ${finding.problem} Correction: ${finding.correction}`
+  ).join("\n");
+  return [
+    "---",
+    "",
+    "## Automated review follow-up",
+    "",
+    `The automated review of ${pullRequestUrl} requested follow-up work.`,
+    "",
+    `**Verdict:** ${review.verdict}`,
+    `**Summary:** ${review.summary}`,
+    ...(findings ? ["", "**Findings:**", findings] : []),
+    "",
+    "Read the complete nested context before editing: the full linked pull request, its",
+    "description, and its diff; all pull request reviews and review comments; all issue comments;",
+    "and any linked or nested issues relevant to this request.",
   ].join("\n");
 }
 

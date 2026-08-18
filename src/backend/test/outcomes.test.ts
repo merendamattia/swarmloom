@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseJobOutcome, parseReviewOutcome } from "../src/runner/outcomes.ts";
+import { parseJobOutcome, parseReviewOutcome, requiresFollowUp } from "../src/runner/outcomes.ts";
 
 describe("agent outcomes", () => {
 test("accepts the four explicit job outcomes", () => {
@@ -37,6 +37,15 @@ test("accepts the four explicit job outcomes", () => {
       .toBe("pass");
     expect(() => parseReviewOutcome('{"verdict":"changes_requested","summary":"Broken","findings":[]}'))
       .toThrow("invalid review outcome");
+  });
+
+  test("requeues on changes requested or any finding, but keeps a clean pass terminal", () => {
+    const cleanPass = parseReviewOutcome('{"verdict":"pass","summary":"Ready","findings":[]}');
+    const passingWithFinding = parseReviewOutcome('{"verdict":"pass","summary":"Ready","findings":[{"file":"README.md","line":1,"severity":"low","problem":"Cosmetic","correction":"Tidy"}]}');
+    const changes = parseReviewOutcome('{"verdict":"changes_requested","summary":"Broken","findings":[{"file":"src/a.ts","line":2,"severity":"high","problem":"Guard","correction":"Add"}]}');
+    expect(requiresFollowUp(cleanPass)).toBe(false);
+    expect(requiresFollowUp(passingWithFinding)).toBe(true);
+    expect(requiresFollowUp(changes)).toBe(true);
   });
 
   test("accepts Codex structured output null placeholders", () => {

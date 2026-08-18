@@ -130,6 +130,10 @@ export function parseReviewOutcome(text: string) {
   return parsed.data;
 }
 
+export function requiresFollowUp(review: ReviewOutcome) {
+  return review.verdict === "changes_requested" || review.findings.length > 0;
+}
+
 function stripNullPlaceholders(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== null));

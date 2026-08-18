@@ -49,6 +49,37 @@ describe("GitHub client", () => {
     expect(await requests[1].json()).toEqual({ body: "The worker started this job." });
   });
 
+  test("lists issue and pull request discussion and updates the issue body", async () => {
+    const requests: Request[] = [];
+    const client = createGitHubClient({
+      token: "secret-token",
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        requests.push(request);
+        if (request.method === "PATCH") return Response.json({}, { status: 200 });
+        if (request.url.includes("/pulls/9/reviews")) return Response.json([
+          { id: 41, state: "CHANGES_REQUESTED", body: "Fix the guard" },
+        ]);
+        if (request.url.includes("/pulls/9/comments")) return Response.json([
+          { id: 42, body: "Line comment" },
+        ]);
+        return Response.json([{ id: 40, body: "What about the retry?" }]);
+      },
+    });
+
+    expect(await client.listIssueComments("acme/app", 7)).toEqual([{ id: 40, body: "What about the retry?" }]);
+    expect(await client.listPullRequestComments("acme/app", 9)).toEqual([{ id: 42, body: "Line comment" }]);
+    expect(await client.listPullRequestReviews("acme/app", 9))
+      .toEqual([{ id: 41, state: "CHANGES_REQUESTED", body: "Fix the guard" }]);
+    await client.updateIssue("acme/app", 7, "Follow-up body");
+
+    const patch = requests.find((request) => request.method === "PATCH")!;
+    expect(patch.url).toContain("/repos/acme/app/issues/7");
+    expect(await patch.json()).toEqual({ body: "Follow-up body" });
+    expect(requests.filter((request) => request.url.includes("/pulls/9/comments"))[0]?.headers.get("authorization"))
+      .toBe("Bearer secret-token");
+  });
+
   test("returns repository clone metadata without including credentials in the URL", async () => {
     const client = createGitHubClient({
       token: "secret-token",

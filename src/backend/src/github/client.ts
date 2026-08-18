@@ -18,6 +18,8 @@ const pullRequestSchema = z.object({
   head: z.object({ ref: z.string() }),
   body: z.string().nullable(),
 });
+const commentSchema = z.object({ id: z.number().int().positive(), body: z.string() });
+const reviewSchema = z.object({ id: z.number().int().positive(), state: z.string(), body: z.string() });
 
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -152,6 +154,36 @@ export function createGitHubClient(options: GitHubClientOptions) {
     }, true) as string;
   }
 
+  async function listIssueComments(fullName: string, issueNumber: number) {
+    return paginate(`/repos/${fullName}/issues/${issueNumber}/comments`, commentSchema);
+  }
+
+  async function listPullRequestComments(fullName: string, pullRequestNumber: number) {
+    return paginate(`/repos/${fullName}/pulls/${pullRequestNumber}/comments`, commentSchema);
+  }
+
+  async function listPullRequestReviews(fullName: string, pullRequestNumber: number) {
+    return paginate(`/repos/${fullName}/pulls/${pullRequestNumber}/reviews`, reviewSchema);
+  }
+
+  async function updateIssue(fullName: string, issueNumber: number, body: string) {
+    await request(`/repos/${fullName}/issues/${issueNumber}`, {
+      method: "PATCH",
+      body: JSON.stringify({ body }),
+    });
+  }
+
+  async function paginate<T>(path: string, schema: z.ZodType<T>) {
+    const items: T[] = [];
+    for (let page = 1; ; page += 1) {
+      const batch = z.array(schema).parse(await request(
+        `${path}${path.includes("?") ? "&" : "?"}per_page=100&page=${page}`,
+      ));
+      items.push(...batch);
+      if (batch.length < 100) return items;
+    }
+  }
+
   async function setIssueLabels(fullName: string, issueNumber: number, labels: string[]) {
     await request(`/repos/${fullName}/issues/${issueNumber}/labels`, {
       method: "PUT",
@@ -173,6 +205,10 @@ export function createGitHubClient(options: GitHubClientOptions) {
     getIssue,
     getPullRequest,
     getPullRequestDiff,
+    listIssueComments,
+    listPullRequestComments,
+    listPullRequestReviews,
+    updateIssue,
     setIssueLabels,
     addIssueComment,
   };

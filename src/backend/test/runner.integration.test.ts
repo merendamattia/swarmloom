@@ -46,12 +46,24 @@ integration("job runner", () => {
     await prisma.$disconnect();
   });
 
-  test("completes implementation and records independent pass/changes-requested reviews", async () => {
-    for (const [offset, verdict] of [[0, "pass"], [1, "changes_requested"]] as const) {
-      const job = await claimed(issueBase + offset);
-      const findings = verdict === "pass" ? [] : [{
-        file: "src/app.ts", line: 12, severity: "high", problem: "Missing guard", correction: "Add guard",
-      }];
+  test("requeues the issue when a review requests changes or reports findings, and keeps a clean pass terminal", async () => {
+    const cases = [
+      { offset: 0, verdict: "pass", findings: [], requeued: false },
+      {
+        offset: 1,
+        verdict: "changes_requested",
+        findings: [{ file: "src/app.ts", line: 12, severity: "high", problem: "Missing guard", correction: "Add guard" }],
+        requeued: true,
+      },
+      {
+        offset: 2,
+        verdict: "pass",
+        findings: [{ file: "src/app.ts", line: 3, severity: "low", problem: "Cosmetic issue", correction: "Tidy it up" }],
+        requeued: true,
+      },
+    ] as const;
+    for (const testCase of cases) {
+      const job = await claimed(issueBase + testCase.offset);
       const provider = new FakeProvider([
         success(JSON.stringify({
           outcome: "implemented",
@@ -59,8 +71,8 @@ integration("job runner", () => {
           tests: ["bun test"],
           commit: "abcdef1",
           pr: { number: job.issueNumber, url: `https://github.com/[REDACTED]/runner/pull/${job.issueNumber}`, base: "develop", head: job.branchName },
-        }), `implementation-${offset}`),
-        success(JSON.stringify({ verdict, summary: "Reviewed", findings }), `review-${offset}`),
+        }), `implementation-${testCase.offset}`),
+        success(JSON.stringify({ verdict: testCase.verdict, summary: "Reviewed", findings: testCase.findings }), `review-${testCase.offset}`),
       ]);
       const github = fakeGitHub(job.issueNumber, job.branchName);
       const runner = createJobRunner({
@@ -76,14 +88,29 @@ integration("job runner", () => {
       expect(stored.pullRequestNumber).toBe(job.issueNumber);
       expect(stored.pullRequestUrl).toBe(`https://github.com/acme/runner/pull/${job.issueNumber}`);
       expect(stored.result).toMatchObject({ pr: { url: `https://github.com/acme/runner/pull/${job.issueNumber}` } });
-      expect(stored.review?.status).toBe(verdict === "pass" ? "PASSED" : "CHANGES_REQUESTED");
+      expect(stored.review?.status).toBe(testCase.verdict === "pass" ? "PASSED" : "CHANGES_REQUESTED");
       expect(provider.calls.map((call) => call.role)).toEqual(["issue-worker", "reviewer"]);
       expect(new Set(provider.calls.map((call) => call.signal)).size).toBe(1);
-      expect(github.labels).toContain(config.ISSUE_COMPLETED_LABEL);
+      expect(provider.calls[1]?.context).toContain("Issue comments");
+      expect(provider.calls[1]?.context).toContain("Pull request reviews");
+      expect(provider.calls[1]?.context).toContain("Pull request review comments");
       expect(github.comments.some((comment) => comment.issue === job.issueNumber && comment.body.includes("Automated review")))
         .toBe(true);
       expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "PR_OPENED" } }))
         .toMatchObject({ metadata: { pullRequestUrl: `https://github.com/acme/runner/pull/${job.issueNumber}` } });
+      if (testCase.requeued) {
+        expect(github.labels).toContain(config.ISSUE_READY_LABEL);
+        expect(github.labels).not.toContain(config.ISSUE_COMPLETED_LABEL);
+        expect(github.bodies.some(({ issue, body }) => issue === job.issueNumber && body.includes("Automated review follow-up")))
+          .toBe(true);
+        expect(github.comments.some((comment) => comment.issue === job.issueNumber && comment.body.includes("follow-up work")))
+          .toBe(true);
+      } else {
+        expect(github.labels).toContain(config.ISSUE_COMPLETED_LABEL);
+        expect(github.bodies).toHaveLength(0);
+        expect(github.comments.some((comment) => comment.issue === job.issueNumber && comment.body.includes("Implemented in")))
+          .toBe(true);
+      }
     }
   });
 
@@ -203,6 +230,7 @@ function fakeGitHub(issueNumber: number, branchName: string) {
   const state = {
     labels: ["bug", "agent:working"],
     comments: [] as Array<{ issue: number; body: string }>,
+    bodies: [] as Array<{ issue: number; body: string }>,
     async getIssue() {
       return { number: issueNumber, title: "Issue", body: "Body", url: "https://github.com/acme/runner/issues/1", labels: [...state.labels] };
     },
@@ -216,6 +244,10 @@ function fakeGitHub(issueNumber: number, branchName: string) {
       };
     },
     async getPullRequestDiff() { return "diff --git a/src/app.ts b/src/app.ts"; },
+    async listIssueComments() { return [{ id: 1, body: "What about retries?" }]; },
+    async listPullRequestComments() { return [{ id: 2, body: "Add a guard here" }]; },
+    async listPullRequestReviews() { return [{ id: 3, state: "COMMENTED", body: "Reviewed the diff" }]; },
+    async updateIssue(_fullName: string, issue: number, body: string) { state.bodies.push({ issue, body }); },
     async setIssueLabels(_fullName: string, _number: number, labels: string[]) { state.labels = labels; },
     async addIssueComment(_fullName: string, issue: number, body: string) { state.comments.push({ issue, body }); },
   };
