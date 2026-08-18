@@ -1,3 +1,11 @@
+# [1.4.0](https://github.com/merendamattia/swarmloom/compare/v1.3.2...v1.4.0) (2026-08-18)
+
+
+### Features
+
+* **frontend:** cap Next.js build workers at five CPUs ([467853a](https://github.com/merendamattia/swarmloom/commit/467853ab2a48a80b2db210dfc527621b301565ed)), closes [#26](https://github.com/merendamattia/swarmloom/issues/26)
+* **repositories:** add functions to remove job worktrees and perform garbage collection ([f5c4104](https://github.com/merendamattia/swarmloom/commit/f5c4104e202f30b477194b74cfd8e7bf28aff99e))
+
 ## [1.3.2](https://github.com/merendamattia/swarmloom/compare/v1.3.1...v1.3.2) (2026-08-18)
 
 
