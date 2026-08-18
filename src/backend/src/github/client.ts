@@ -22,6 +22,98 @@ const pullRequestSchema = z.object({
   deletions: z.number().int().nonnegative(),
   changed_files: z.number().int().nonnegative(),
 });
+const issueCommentSchema = z.object({
+  body: z.string().nullable(),
+  html_url: z.url(),
+  user: z.object({ login: z.string() }).nullable().optional(),
+  created_at: z.string().optional(),
+});
+const pullRequestReviewSchema = z.object({
+  body: z.string().nullable(),
+  state: z.string(),
+  html_url: z.url(),
+  user: z.object({ login: z.string() }).nullable().optional(),
+  submitted_at: z.string().nullable().optional(),
+});
+const pullRequestCommentSchema = z.object({
+  body: z.string().nullable(),
+  path: z.string().nullable().optional(),
+  line: z.number().int().nullable().optional(),
+  original_line: z.number().int().nullable().optional(),
+  html_url: z.url(),
+  user: z.object({ login: z.string() }).nullable().optional(),
+  created_at: z.string().optional(),
+});
+const checkRunsResponseSchema = z.object({
+  check_runs: z.array(z.object({
+    name: z.string(),
+    status: z.string(),
+    conclusion: z.string().nullable(),
+    html_url: z.url().nullable().optional(),
+    details_url: z.url().nullable().optional(),
+  })),
+});
+const commitStatusResponseSchema = z.object({
+  state: z.string(),
+  statuses: z.array(z.object({
+    context: z.string(),
+    state: z.string(),
+    target_url: z.url().nullable().optional(),
+  })),
+});
+const createdIssueSchema = z.object({ number: z.number().int().positive(), html_url: z.url() });
+
+export type PullRequestCheck = {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  url: string | null;
+};
+
+export type GitHubIssueContext = {
+  issue: GitHubIssue;
+  issueComments: Array<{
+    body: string;
+    url: string;
+    user: string | null;
+    createdAt: string | null;
+  }>;
+  pullRequests: Array<{
+    number: number;
+    title: string;
+    url: string;
+    base: string;
+    head: string;
+    body: string;
+    diff: string;
+    additions: number;
+    deletions: number;
+    changedFiles: number;
+    reviews: Array<{
+      body: string;
+      state: string;
+      url: string;
+      user: string | null;
+      submittedAt: string | null;
+    }>;
+    comments: Array<{
+      body: string;
+      path: string | null;
+      line: number | null;
+      url: string;
+      user: string | null;
+      createdAt: string | null;
+    }>;
+  }>;
+};
+
+export type GitHubIssue = {
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  labels: string[];
+};
 
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -160,6 +252,125 @@ export function createGitHubClient(options: GitHubClientOptions) {
     }, true) as string;
   }
 
+  async function getIssueContext(fullName: string, issueNumber: number, issueUrl: string): Promise<GitHubIssueContext> {
+    const [issue, issueComments, pullRequests] = await Promise.all([
+      getIssue(fullName, issueNumber),
+      listIssueComments(fullName, issueNumber),
+      listPullRequests(fullName),
+    ]);
+    const linkedPullRequests = pullRequests.filter((pullRequest) =>
+      (pullRequest.body ?? "").includes(`#${issueNumber}`) || (pullRequest.body ?? "").includes(issueUrl));
+    return {
+      issue,
+      issueComments,
+      pullRequests: await Promise.all(linkedPullRequests.map(async (pullRequest) => {
+        const [metadata, diff, reviews, comments] = await Promise.all([
+          getPullRequest(fullName, pullRequest.number),
+          getPullRequestDiff(fullName, pullRequest.number),
+          listPullRequestReviews(fullName, pullRequest.number),
+          listPullRequestComments(fullName, pullRequest.number),
+        ]);
+        return { ...metadata, diff, reviews, comments };
+      })),
+    };
+  }
+
+  async function listIssueComments(fullName: string, issueNumber: number) {
+    const comments: GitHubIssueContext["issueComments"] = [];
+    for (let page = 1; ; page += 1) {
+      const batch = z.array(issueCommentSchema).parse(await request(
+        `/repos/${fullName}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
+      ));
+      comments.push(...batch.map((comment) => ({
+        body: comment.body ?? "",
+        url: comment.html_url,
+        user: comment.user?.login ?? null,
+        createdAt: comment.created_at ?? null,
+      })));
+      if (batch.length < 100) return comments;
+    }
+  }
+
+  async function listPullRequests(fullName: string) {
+    const pullRequests: Array<z.infer<typeof pullRequestSchema>> = [];
+    for (let page = 1; ; page += 1) {
+      const batch = z.array(pullRequestSchema).parse(await request(
+        `/repos/${fullName}/pulls?state=all&per_page=100&page=${page}`,
+      ));
+      pullRequests.push(...batch);
+      if (batch.length < 100) return pullRequests;
+    }
+  }
+
+  async function listPullRequestReviews(fullName: string, pullRequestNumber: number) {
+    const reviews: GitHubIssueContext["pullRequests"][number]["reviews"] = [];
+    for (let page = 1; ; page += 1) {
+      const batch = z.array(pullRequestReviewSchema).parse(await request(
+        `/repos/${fullName}/pulls/${pullRequestNumber}/reviews?per_page=100&page=${page}`,
+      ));
+      reviews.push(...batch.map((review) => ({
+        body: review.body ?? "",
+        state: review.state,
+        url: review.html_url,
+        user: review.user?.login ?? null,
+        submittedAt: review.submitted_at ?? null,
+      })));
+      if (batch.length < 100) return reviews;
+    }
+  }
+
+  async function listPullRequestComments(fullName: string, pullRequestNumber: number) {
+    const comments: GitHubIssueContext["pullRequests"][number]["comments"] = [];
+    for (let page = 1; ; page += 1) {
+      const batch = z.array(pullRequestCommentSchema).parse(await request(
+        `/repos/${fullName}/pulls/${pullRequestNumber}/comments?per_page=100&page=${page}`,
+      ));
+      comments.push(...batch.map((comment) => ({
+        body: comment.body ?? "",
+        path: comment.path ?? null,
+        line: comment.line ?? comment.original_line ?? null,
+        url: comment.html_url,
+        user: comment.user?.login ?? null,
+        createdAt: comment.created_at ?? null,
+      })));
+      if (batch.length < 100) return comments;
+    }
+  }
+
+  async function getPullRequestChecks(fullName: string, ref: string): Promise<PullRequestCheck[]> {
+    const encodedRef = encodeURIComponent(ref);
+    const [checkRuns, commitStatus] = await Promise.all([
+      request(`/repos/${fullName}/commits/${encodedRef}/check-runs`),
+      request(`/repos/${fullName}/commits/${encodedRef}/status`),
+    ]);
+    const runs = checkRunsResponseSchema.parse(checkRuns).check_runs.map((check) => ({
+      name: check.name,
+      status: check.status,
+      conclusion: check.conclusion,
+      url: check.html_url ?? check.details_url ?? null,
+    }));
+    const status = commitStatusResponseSchema.parse(commitStatus);
+    const statuses = status.statuses.length > 0 ? status.statuses : [{
+      context: "commit-status",
+      state: status.state,
+      target_url: null,
+    }];
+    return [...runs, ...statuses.map((item) => ({
+      name: item.context,
+      status: item.state === "pending" ? "in_progress" : "completed",
+      conclusion: item.state === "pending" ? null : item.state === "success" ? "success" : item.state,
+      url: item.target_url ?? null,
+    }))];
+  }
+
+  async function createIssue(fullName: string, title: string, body: string, labels: string[]) {
+    const issue = createdIssueSchema.parse(await request(`/repos/${fullName}/issues`, {
+      method: "POST",
+      body: JSON.stringify({ title, body, labels }),
+    }));
+    return { number: issue.number, url: issue.html_url };
+  }
+
   async function setIssueLabels(fullName: string, issueNumber: number, labels: string[]) {
     await request(`/repos/${fullName}/issues/${issueNumber}/labels`, {
       method: "PUT",
@@ -181,6 +392,9 @@ export function createGitHubClient(options: GitHubClientOptions) {
     getIssue,
     getPullRequest,
     getPullRequestDiff,
+    getIssueContext,
+    getPullRequestChecks,
+    createIssue,
     setIssueLabels,
     addIssueComment,
   };

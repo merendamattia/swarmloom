@@ -26,7 +26,6 @@ export function buildCodexCommand(request: AgentRequest) {
     command.push("--config", `model_reasoning_effort=\"${request.reasoningEffort}\"`);
   }
   command.push("--cd", request.workingDirectory);
-  if (request.outputSchemaPath) command.push("--output-schema", request.outputSchemaPath);
   command.push("-");
   return command;
 }

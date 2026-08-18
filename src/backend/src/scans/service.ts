@@ -56,7 +56,10 @@ export function createScanService({
           });
           await repositoryRepository.markReady(repository.id, synced.localPath, synced.baselineCommit);
           await github.ensureLabels?.(fullName, agentLabelDefinitions(config));
-          const issues = await github.listReadyIssues(fullName, config.ISSUE_READY_LABEL);
+          const issues = [
+            ...await github.listReadyIssues(fullName, config.ISSUE_READY_LABEL),
+            ...await github.listReadyIssues(fullName, config.ISSUE_REVIEW_REQUESTED_LABEL),
+          ];
           for (const issue of issues) {
             const job = await jobRepository.tryCreateQueued({
               repositoryId: repository.id,

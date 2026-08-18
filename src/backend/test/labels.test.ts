@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseConfig } from "../src/core/config-schema.ts";
-import { replaceWorkerLabels } from "../src/github/labels.ts";
+import { agentLabelDefinitions, replaceWorkerLabels } from "../src/github/labels.ts";
 
 const config = parseConfig({
   DATABASE_URL: "postgresql://worker:worker@localhost:5432/worker",
@@ -18,5 +18,15 @@ describe("worker labels", () => {
       config,
       [config.ISSUE_BLOCKED_LABEL, config.ISSUE_HUMAN_REVIEW_LABEL],
     )).toEqual(["bug", config.ISSUE_BLOCKED_LABEL, config.ISSUE_HUMAN_REVIEW_LABEL]);
+  });
+
+  test("treats review requested as a worker trigger and clears it when acquired", () => {
+    expect(agentLabelDefinitions(config).map(({ name }) => name))
+      .toContain(config.ISSUE_REVIEW_REQUESTED_LABEL);
+    expect(replaceWorkerLabels(
+      ["bug", config.ISSUE_REVIEW_REQUESTED_LABEL],
+      config,
+      [config.ISSUE_WORKING_LABEL],
+    )).toEqual(["bug", config.ISSUE_WORKING_LABEL]);
   });
 });

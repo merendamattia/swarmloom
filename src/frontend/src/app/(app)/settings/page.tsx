@@ -20,6 +20,7 @@ import {
 type SettingsForm = SettingsPatch & {
   githubRepositories: string;
   issueReadyLabel: string;
+  issueReviewRequestedLabel: string;
   issueWorkingLabel: string;
   issueBlockedLabel: string;
   issueCompletedLabel: string;
@@ -44,6 +45,7 @@ function formFromSettings(settings: Settings): SettingsForm {
   return {
     githubRepositories: settings.githubRepositories,
     issueReadyLabel: settings.issueReadyLabel,
+    issueReviewRequestedLabel: settings.issueReviewRequestedLabel,
     issueWorkingLabel: settings.issueWorkingLabel,
     issueBlockedLabel: settings.issueBlockedLabel,
     issueCompletedLabel: settings.issueCompletedLabel,
@@ -119,7 +121,7 @@ export default function SettingsPage() {
           <SectionHeading title="Issue labels" description="These labels are synchronized on the configured repositories during startup and scans." />
           <div className="settings-grid">
             {([
-              ["issueReadyLabel", "Ready label"], ["issueWorkingLabel", "Working label"], ["issueBlockedLabel", "Blocked label"],
+              ["issueReadyLabel", "Ready label"], ["issueReviewRequestedLabel", "Review requested label"], ["issueWorkingLabel", "Working label"], ["issueBlockedLabel", "Blocked label"],
               ["issueCompletedLabel", "Completed label"], ["issueDecomposedLabel", "Decomposed label"], ["issueHumanReviewLabel", "Human review label"],
             ] as const).map(([key, label]) => <div className="field" key={key}><label htmlFor={key}>{label}</label><input className="input" id={key} value={form[key]} onChange={(event) => set(key, event.target.value)} /></div>)}
           </div>

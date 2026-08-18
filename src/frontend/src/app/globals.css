@@ -56,8 +56,8 @@ h3 { font-size: 1rem; line-height: 1.35; font-weight: 650; }
 .app-frame { min-height: 100vh; }
 .app-header { position: sticky; z-index: 10; top: 0; border-bottom: 1px solid var(--border); background: var(--canvas); box-shadow: 0 1px 0 var(--border); }
 .header-inner { display: flex; min-width: 0; max-width: 74rem; min-height: 4rem; margin: 0 auto; padding: 0 var(--space-lg); align-items: center; gap: var(--space-lg); }
-.brand { display: inline-flex; min-width: max-content; min-height: 44px; align-items: center; gap: 10px; border-radius: var(--radius-sm); font-size: .875rem; font-weight: 700; letter-spacing: -.01em; text-decoration: none; }
-.brand-mark { display: grid; width: 32px; height: 32px; place-items: center; border-radius: var(--radius-sm); background: var(--ink); color: var(--surface); }
+.brand { display: inline-flex; min-width: max-content; min-height: 44px; align-items: center; border-radius: var(--radius-sm); text-decoration: none; }
+.brand-logo { display: block; width: 132px; height: 34px; object-fit: contain; }
 .primary-nav { display: flex; min-width: 0; margin-left: auto; gap: var(--space-xs); overflow-x: auto; scrollbar-width: none; }
 .primary-nav::-webkit-scrollbar { display: none; }
 .nav-link { display: inline-flex; min-width: max-content; min-height: 44px; align-items: center; gap: 7px; border-radius: var(--radius-sm); padding: 0 11px; color: var(--ink-muted); font-size: .8125rem; font-weight: 650; text-decoration: none; transition: color 140ms ease-out, background 140ms ease-out; }
@@ -313,7 +313,7 @@ h3 { font-size: 1rem; line-height: 1.35; font-weight: 650; }
 }
 
 @media (max-width: 25rem) {
-  .brand-name { font-size: .8125rem; }
+  .brand-logo { width: 118px; height: 30px; }
   .nav-link { padding-inline: 8px; }
   .health-facts, .facts, .repository-facts, .result-facts { grid-template-columns: 1fr; }
   .data-table td, .data-table td:first-child, .data-table td:last-child { grid-template-columns: 1fr; gap: 2px; }

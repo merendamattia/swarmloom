@@ -26,6 +26,7 @@ describe("runtime settings", () => {
       AGENT_PROVIDER: "opencode",
       OPENCODE_MODEL: "opencode-go/test-model",
       ISSUE_READY_LABEL: "ready-for-agent",
+      ISSUE_REVIEW_REQUESTED_LABEL: "review-requested",
     });
 
     expect(config.SCHEDULE_CRON).toBe("*/5 * * * *");
@@ -33,6 +34,7 @@ describe("runtime settings", () => {
     expect(config.AGENT_PROVIDER).toBe("opencode");
     expect(config.OPENCODE_MODEL).toBe("opencode-go/test-model");
     expect(config.ISSUE_READY_LABEL).toBe("ready-for-agent");
+    expect(config.ISSUE_REVIEW_REQUESTED_LABEL).toBe("review-requested");
     expect(config.DATABASE_URL).toBe(base.DATABASE_URL);
     expect(config.GITHUB_TOKEN).toBe(base.GITHUB_TOKEN);
   });

@@ -41,6 +41,7 @@ const environmentSchema = z.object({
   GIT_AUTHOR_NAME: z.string().min(1).default("swarmloom"),
   GIT_AUTHOR_EMAIL: z.email().default("swarmloom@users.noreply.github.com"),
   ISSUE_READY_LABEL: z.string().min(1).default("agent:ready"),
+  ISSUE_REVIEW_REQUESTED_LABEL: z.string().min(1).default("agent:review-requested"),
   ISSUE_WORKING_LABEL: z.string().min(1).default("agent:working"),
   ISSUE_BLOCKED_LABEL: z.string().min(1).default("agent:blocked"),
   ISSUE_COMPLETED_LABEL: z.string().min(1).default("agent:done"),

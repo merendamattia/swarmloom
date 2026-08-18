@@ -1,6 +1,7 @@
 "use client";
 
-import { Activity, CircleAlert, GitBranch, LayoutDashboard, ListChecks, Settings } from "lucide-react";
+import { CircleAlert, GitBranch, LayoutDashboard, ListChecks, Settings } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useStatus } from "@/hooks/api";
@@ -47,8 +48,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <header className="app-header">
         <div className="header-inner">
           <Link href="/" className="brand" aria-label="Swarmloom overview">
-            <span className="brand-mark" aria-hidden="true"><Activity size={18} /></span>
-            <span className="brand-name">Swarmloom</span>
+            <Image className="brand-logo" src="/brand/logo.png" alt="Swarmloom" width={132} height={34} priority />
           </Link>
           <nav className="primary-nav" aria-label="Primary navigation">
             {links.map(({ href, label, icon: Icon }) => {

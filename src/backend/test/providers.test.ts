@@ -4,7 +4,7 @@ import {
   buildOpenCodeCommand, normalizeOpenCodeEvent, openCodeEnvironment, OpenCodeProvider,
 } from "../src/providers/opencode.ts";
 import { redactSecrets } from "../src/core/secrets.ts";
-import type { AgentEvent, AgentRequest } from "../src/providers/types.ts";
+import { buildAgentPrompt, type AgentEvent, type AgentRequest } from "../src/providers/types.ts";
 
 const request: AgentRequest = {
   role: "issue-worker",
@@ -13,16 +13,14 @@ const request: AgentRequest = {
   context: "Base commit abc123",
   model: "test-model",
   reasoningEffort: "max",
-  outputSchemaPath: "/runtime/result.schema.json",
 };
 
 describe("Codex provider", () => {
-  test("builds a fresh, noninteractive, schema-constrained command", () => {
+  test("builds a fresh, noninteractive command", () => {
     expect(buildCodexCommand(request)).toEqual([
       "codex", "exec", "--json", "--ignore-user-config", "--model", "test-model",
       "--approve-for-me", "--config",
-      'model_reasoning_effort="max"', "--cd", "/work/repository", "--output-schema",
-      "/runtime/result.schema.json", "-",
+      'model_reasoning_effort="max"', "--cd", "/work/repository", "-",
     ]);
   });
 
@@ -149,4 +147,10 @@ test("redacts configured credentials from provider output", () => {
     "request failed for secret-token and postgres://user:pass@db/app",
     { GITHUB_TOKEN: "secret-token", DATABASE_URL: "postgres://user:pass@db/app", PUBLIC_NAME: "keep" },
   )).toBe("request failed for [REDACTED] and [REDACTED]");
+});
+
+test("injects the result file contract into the shared prompt", () => {
+  const prompt = buildAgentPrompt({ ...request, resultFilePath: "/data/outcomes/job-issue-worker.json" });
+  expect(prompt).toContain("Result file: /data/outcomes/job-issue-worker.json");
+  expect(prompt).toContain("Role: issue-worker");
 });

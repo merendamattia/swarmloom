@@ -5,19 +5,25 @@ v2 and the production file `docker-compose.production.yaml`. Run them from the r
 
 ## What the application does
 
-Swarmloom scans configured repositories for open issues carrying `agent:ready` (or the
-configured equivalent). For every acquired issue it:
+Swarmloom scans configured repositories for open issues carrying `agent:ready` or
+`agent:review-requested` (or the configured equivalents). For every acquired issue it:
 
 1. fetches the current `origin/develop`;
 2. stores the issue snapshot and exact baseline commit in PostgreSQL;
 3. removes the ready label, adds the working label, and queues a durable job;
 4. creates a dedicated branch and persistent Git worktree from that exact commit;
 5. starts a fresh Codex or OpenCode session with the canonical material in `agent-runtime`;
+   the request also includes the current issue, every comment, and the full context of linked Pull
+   Requests including diffs and review threads;
 6. implements one coherent issue, decomposes broad work, or reports a precise blocker;
 7. verifies that an implementation PR points from the assigned branch to `develop` and links the
    original issue;
-8. starts a separate, fresh review session and records `pass` or `changes_requested` findings;
-9. stores lifecycle data and events in PostgreSQL, reconciles GitHub labels/comments, and sends
+8. waits for all Pull Request check runs and commit statuses to complete before reviewing it;
+9. starts a separate, fresh review session and records `pass` or `changes_requested` findings;
+10. on a failed check or failed job, starts the Pull Request diagnostic agent when possible, posts
+    the redacted error and stack trace to the issue and Pull Request, and opens a new
+    `agent:ready` diagnostic issue;
+11. stores lifecycle data and events in PostgreSQL, reconciles GitHub labels/comments, and sends
    selected Telegram notifications.
 
 The API/scheduler, BullMQ worker, and dashboard are process roles of one TypeScript application.
@@ -111,6 +117,11 @@ Label flow:
 
 - `ready` → `working` when discovery atomically acquires the issue;
 - `working` → `done` after an implementation PR and automated review;
+- `working` → `review-requested` when the automated review requests changes; the next scheduled
+  scan acquires the issue again and runs the worker;
+- a failed Pull Request check also adds `review-requested` to the original issue, comments the
+  failed checks and diagnosis on the issue/PR, and creates a separate `agent:ready` diagnostic issue;
+- any other failed job creates an `agent:ready` diagnostic issue with its redacted stack trace;
 - `working` → `blocked` when essential information is missing;
 - `working` → `decomposed` after child issues are created;
 - worker labels are removed after failure or cancellation;
@@ -136,6 +147,7 @@ validation.
 | `GIT_AUTHOR_NAME` | `swarmloom` | Commit author/committer name for agent sessions |
 | `GIT_AUTHOR_EMAIL` | noreply default | Commit author/committer email |
 | `ISSUE_READY_LABEL` | `agent:ready` | Queue label |
+| `ISSUE_REVIEW_REQUESTED_LABEL` | `agent:review-requested` | Queue label for changes requested by review |
 | `ISSUE_WORKING_LABEL` | `agent:working` | Acquired/running label |
 | `ISSUE_BLOCKED_LABEL` | `agent:blocked` | Missing-information label |
 | `ISSUE_COMPLETED_LABEL` | `agent:done` | Implemented/reviewed label |
