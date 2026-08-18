@@ -222,6 +222,23 @@ h3 { font-size: 1rem; line-height: 1.35; font-weight: 650; }
 .response-evidence { border-top: 1px solid var(--border); padding-top: var(--space-xl); }
 .response-evidence .rich-text { color: var(--ink); font-size: 1rem; white-space: pre-wrap; }
 .review-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); }
+.outcome-message { display: flex; align-items: flex-start; gap: var(--space-md); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-lg); }
+.outcome-message[data-tone="danger"] { border-color: color-mix(in oklch, var(--danger), var(--border) 55%); background: var(--danger-soft); color: var(--danger); }
+.outcome-message > div { display: grid; gap: var(--space-xs); }
+.outcome-message h3, .outcome-message p { color: var(--ink); }
+.diagnostics-details { border-top: 1px solid var(--border); margin-top: var(--space-xl); padding-top: var(--space-lg); }
+.diagnostics-details summary { display: inline-flex; min-height: 44px; align-items: center; gap: var(--space-sm); color: var(--accent); font-size: .8125rem; font-weight: 650; cursor: pointer; list-style: none; }
+.diagnostics-details summary::-webkit-details-marker { display: none; }
+.diagnostics-details summary svg { transition: transform 140ms ease-out; }
+.diagnostics-details[open] summary svg { transform: rotate(180deg); }
+.diagnostics-block { display: grid; gap: var(--space-xs); margin-top: var(--space-lg); }
+.diagnostics-block h3 { color: var(--ink-muted); font-size: .75rem; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
+.diagnostics-pre { max-height: 20rem; overflow: auto; margin: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-subtle); padding: var(--space-md); font-family: var(--font-mono); font-size: .8125rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diagnostics-timeline { display: grid; margin: 0; padding: 0; list-style: none; gap: var(--space-sm); }
+.diagnostics-timeline li { display: grid; gap: 2px; border-top: 1px solid var(--border); padding-top: var(--space-sm); }
+.diagnostics-timeline li:first-child { border-top: 0; padding-top: 0; }
+.diagnostics-event-time { color: var(--ink-muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.diagnostics-timeline p { color: var(--ink-muted); overflow-wrap: anywhere; }
 
 .repository-card { display: grid; gap: var(--space-xl); border-top: 1px solid var(--border); padding: var(--space-xl) 0; }
 .repository-card:first-child { border-top: 0; padding-top: 0; }
