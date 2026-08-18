@@ -1,6 +1,6 @@
 import type { Config } from "../core/config-schema.ts";
 import { redactSecrets } from "../core/secrets.ts";
-import type { EventService } from "../events/service.ts";
+import type { EventService, QueuedJobInfo } from "../events/service.ts";
 import type { GitHubClient } from "../github/client.ts";
 import { githubGitEnvironment } from "../github/git-auth.ts";
 import { agentLabelDefinitions, replaceWorkerLabels } from "../github/labels.ts";
@@ -27,7 +27,7 @@ type ScanServiceDependencies = {
 export function createScanService({
   config,
   github,
-  events = { record: eventRepository.create },
+  events = { record: eventRepository.create, notifyQueuedSummary: async () => {} },
   queue = { enqueue: async () => {} },
   syncRepository = syncTargetRepository,
 }: ScanServiceDependencies) {
@@ -35,6 +35,7 @@ export function createScanService({
     const scan = await scanRunRepository.start(config.APP_ENV, source, config.githubRepositories.length);
     if (scan.status === "SKIPPED") return scan;
     let queuedCount = 0;
+    const queuedJobs: QueuedJobInfo[] = [];
     const agent = configuredAgent(config);
     try {
       await events.record({
@@ -84,6 +85,13 @@ export function createScanService({
               );
               await queue.enqueue(job.id);
               queuedCount += 1;
+              queuedJobs.push({
+                repository: fullName,
+                issueNumber: issue.number,
+                issueTitle: issue.title,
+                issueUrl: issue.url,
+                jobId: job.id,
+              });
               await events.record({
                 type: "JOB_QUEUED",
                 message: `Queued ${fullName}#${issue.number} · ${issue.title}`,
@@ -135,6 +143,9 @@ export function createScanService({
         scanRunId: scan.id,
         metadata: { source, queuedCount, repositories: config.githubRepositories.length },
       });
+      if (queuedJobs.length > 0) {
+        await events.notifyQueuedSummary(scan.id, queuedJobs);
+      }
       return await finishScanIfComplete(scan.id, config.APP_ENV, events) ?? discovered;
     } catch (error) {
       const message = safeError(error);

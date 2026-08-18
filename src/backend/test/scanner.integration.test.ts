@@ -212,3 +212,148 @@ integration("repository scan", () => {
       .not.toBeNull();
   });
 });
+
+integration("aggregated queue notifications", () => {
+  let prisma: typeof import("../src/core/db.ts").prisma;
+  let createScanService: typeof import("../src/scans/service.ts").createScanService;
+  let createEventService: typeof import("../src/events/service.ts").createEventService;
+  const environment = `queue-summary-${crypto.randomUUID()}`;
+  const repositories = ["acme/queue-summary"];
+  let readyIssues: Array<{ number: number; title: string; body: string; url: string; labels: string[] }> = [];
+  const config = parseConfig({
+    DATABASE_URL: process.env.DATABASE_URL ?? "postgresql://unused:unused@localhost:5432/unused",
+    REDIS_URL: process.env.REDIS_URL ?? "redis://localhost:18422",
+    SETTINGS_ENCRYPTION_KEY: process.env.SETTINGS_ENCRYPTION_KEY ?? "test-settings-encryption-key-0123456789",
+    GITHUB_TOKEN: "test-token",
+    GITHUB_REPOSITORIES: repositories.join(","),
+    AGENT_PROVIDER: "codex",
+    APP_ENV: "test",
+    AGENT_RUNTIME_DIR: resolve(import.meta.dir, "../../../agent-runtime"),
+  });
+  const github = {
+    getRepository: async (fullName: string) => ({ cloneUrl: `https://github.com/${fullName}.git` }),
+    listReadyIssues: async (fullName: string, label: string) =>
+      fullName === repositories[0] && label === config.ISSUE_READY_LABEL ? readyIssues : [],
+    setIssueLabels: async () => {},
+  };
+  const sync = async () => ({ localPath: `/data/repositories/${repositories[0]}`, baselineCommit: "b".repeat(40) });
+
+  beforeAll(async () => {
+    ({ prisma } = await import("../src/core/db.ts"));
+    ({ createScanService } = await import("../src/scans/service.ts"));
+    ({ createEventService } = await import("../src/events/service.ts"));
+    await prisma.job.deleteMany({ where: { environment } });
+  });
+
+  afterAll(async () => {
+    const repositoryIds = (await prisma.repository.findMany({
+      where: { fullName: { in: repositories } },
+      select: { id: true },
+    })).map(({ id }) => id);
+    await prisma.jobEvent.deleteMany({ where: { repositoryId: { in: repositoryIds } } });
+    await prisma.job.deleteMany({ where: { environment } });
+    await prisma.scanRun.deleteMany({ where: { environment } });
+    await prisma.repository.deleteMany({ where: { id: { in: repositoryIds } } });
+    await prisma.$disconnect();
+  });
+
+  test("sends one queue summary instead of per-job or scan lifecycle notifications", async () => {
+    readyIssues = [
+      { number: 101, title: "Fix <alpha>", body: "Use SQL", url: "https://github.com/acme/queue-summary/issues/101", labels: ["agent:ready"] },
+      { number: 102, title: "Fix beta", body: "Use SQL", url: "https://github.com/acme/queue-summary/issues/102", labels: ["agent:ready"] },
+    ];
+    const sent: string[] = [];
+    const summaries: unknown[] = [];
+    const events = createEventService({
+      enabled: () => true,
+      send: async (event) => { sent.push(event.type); },
+      sendQueued: async (summary) => { summaries.push(summary); },
+    });
+    const scanner = createScanService({
+      config: { ...config, APP_ENV: environment as "test" },
+      github,
+      events,
+      queue: { enqueue: async () => {} },
+      syncRepository: sync,
+    });
+    const scan = await scanner.run("MANUAL");
+
+    expect(scan.queuedCount).toBe(2);
+    expect(sent).toEqual([]);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({
+      scanRunId: scan.id,
+      jobs: [
+        { repository: "acme/queue-summary", issueNumber: 101, issueTitle: "Fix <alpha>", issueUrl: "https://github.com/acme/queue-summary/issues/101" },
+        { repository: "acme/queue-summary", issueNumber: 102, issueTitle: "Fix beta", issueUrl: "https://github.com/acme/queue-summary/issues/102" },
+      ],
+    });
+    const queued = await prisma.jobEvent.findMany({ where: { scanRunId: scan.id, type: "JOB_QUEUED" } });
+    expect(queued).toHaveLength(2);
+    expect(queued.every((event) => event.notifiedAt !== null)).toBe(true);
+    for (const type of ["SCAN_STARTED", "SCAN_DISCOVERY_COMPLETED"]) {
+      const lifecycle = await prisma.jobEvent.findFirst({ where: { scanRunId: scan.id, type } });
+      expect(lifecycle).not.toBeNull();
+      expect(lifecycle!.notifiedAt).toBeNull();
+    }
+
+    const queuedJobs = await prisma.job.findMany({ where: { scanRunId: scan.id } });
+    await prisma.job.updateMany({
+      where: { id: { in: queuedJobs.map((job) => job.id) } },
+      data: { status: "CANCELLED", activeIssueKey: null, completedAt: new Date() },
+    });
+    const { scanRunRepository } = await import("../src/repositories/scan-runs.ts");
+    expect((await scanRunRepository.finishJobs(scan.id, environment))?.status).toBe("COMPLETED");
+  });
+
+  test("sends no queue summary when a scan queues zero jobs", async () => {
+    readyIssues = [];
+    const sent: string[] = [];
+    const summaries: unknown[] = [];
+    const events = createEventService({
+      enabled: () => true,
+      send: async (event) => { sent.push(event.type); },
+      sendQueued: async (summary) => { summaries.push(summary); },
+    });
+    const scanner = createScanService({
+      config: { ...config, APP_ENV: environment as "test" },
+      github,
+      events,
+      queue: { enqueue: async () => {} },
+      syncRepository: sync,
+    });
+    const scan = await scanner.run("MANUAL");
+
+    expect(scan.queuedCount).toBe(0);
+    expect(sent).toEqual([]);
+    expect(summaries).toEqual([]);
+  });
+
+  test("sends one queue summary when a scan queues a single job", async () => {
+    readyIssues = [
+      { number: 103, title: "Fix gamma", body: "Use SQL", url: "https://github.com/acme/queue-summary/issues/103", labels: ["agent:ready"] },
+    ];
+    const sent: string[] = [];
+    const summaries: unknown[] = [];
+    const events = createEventService({
+      enabled: () => true,
+      send: async (event) => { sent.push(event.type); },
+      sendQueued: async (summary) => { summaries.push(summary); },
+    });
+    const scanner = createScanService({
+      config: { ...config, APP_ENV: environment as "test" },
+      github,
+      events,
+      queue: { enqueue: async () => {} },
+      syncRepository: sync,
+    });
+    const scan = await scanner.run("MANUAL");
+
+    expect(scan.queuedCount).toBe(1);
+    expect(sent).toEqual([]);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({ jobs: [
+      { repository: "acme/queue-summary", issueNumber: 103, issueTitle: "Fix gamma" },
+    ] });
+  });
+});
