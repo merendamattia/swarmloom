@@ -121,10 +121,12 @@ Label flow:
   scan acquires the issue again and runs the worker;
 - a failed Pull Request check also adds `review-requested` to the original issue, comments the
   failed checks and diagnosis on the issue/PR, and creates a separate `agent:ready` diagnostic issue;
-- any other failed job creates an `agent:ready` diagnostic issue with its redacted stack trace;
+- any other failed job creates an `agent:ready` diagnostic issue with its redacted stack trace and
+  marks the original issue `blocked`;
 - `working` → `blocked` when essential information is missing;
 - `working` → `decomposed` after child issues are created;
-- worker labels are removed after failure or cancellation;
+- `working` → `blocked` when a stale worker is recovered without a final result;
+- worker labels are removed after cancellation;
 - Retry restores `ready`, then a new scan captures a new `origin/develop` baseline and creates a
   new history row. The earlier row is never overwritten.
 

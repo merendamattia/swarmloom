@@ -446,7 +446,7 @@ export function createJobRunner({
       ].filter((line): line is string => line !== undefined).join("\n");
       await finalizeIssue(
         currentJob,
-        [],
+        [config.ISSUE_BLOCKED_LABEL],
         comment,
       );
       if (pullRequest) {
