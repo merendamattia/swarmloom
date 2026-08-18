@@ -18,11 +18,7 @@ type TelegramEvent = {
 };
 
 const eventTitles: Record<string, [string, string]> = {
-  SCAN_STARTED: ["🔎", "Scan started"],
-  SCAN_DISCOVERY_COMPLETED: ["📋", "Scan discovery completed"],
-  SCAN_COMPLETED: ["✅", "Scan completed"],
   SCAN_FAILED: ["🚨", "Scan failed"],
-  JOB_QUEUED: ["📥", "Job queued"],
   JOB_STARTED: ["🚀", "Job started"],
   JOB_COMPLETED: ["✅", "Job completed"],
   JOB_FAILED: ["❌", "Job failed"],
@@ -38,30 +34,50 @@ const eventTitles: Record<string, [string, string]> = {
   TELEGRAM_TEST: ["📨", "Telegram test"],
 };
 
+export type TelegramQueueSummary = {
+  scanRunId?: string | null;
+  jobs: QueuedJob[];
+};
+
+type QueuedJob = {
+  repository: string;
+  issueNumber: number;
+  issueTitle: string;
+  issueUrl?: string | null;
+  jobId?: string | null;
+};
+
 export function createTelegramNotifier(options: TelegramOptions) {
   const fetch = options.fetch ?? globalThis.fetch;
   return {
     async send(event: TelegramEvent) {
-      try {
-        const response = await fetch(`https://api.telegram.org/bot${options.token}/sendMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: options.chatId,
-            text: formatTelegramEvent(event, options.dashboardUrl),
-            parse_mode: "HTML",
-            disable_web_page_preview: true,
-          }),
-        });
-        if (!response.ok) {
-          throw new Error(`Telegram request failed (${response.status}): ${(await response.text()).slice(0, 500)}`);
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(redactSecrets(message, { TELEGRAM_BOT_TOKEN: options.token }));
-      }
+      await sendText(formatTelegramEvent(event, options.dashboardUrl));
+    },
+    async sendQueued(summary: TelegramQueueSummary) {
+      await sendText(formatTelegramQueueSummary(summary));
     },
   };
+
+  async function sendText(text: string) {
+    try {
+      const response = await fetch(`https://api.telegram.org/bot${options.token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: options.chatId,
+          text,
+          parse_mode: "HTML",
+          disable_web_page_preview: true,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`Telegram request failed (${response.status}): ${(await response.text()).slice(0, 500)}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(redactSecrets(message, { TELEGRAM_BOT_TOKEN: options.token }));
+    }
+  }
 }
 
 export function formatTelegramEvent(event: TelegramEvent, dashboardUrl?: string) {
@@ -80,6 +96,36 @@ export function formatTelegramEvent(event: TelegramEvent, dashboardUrl?: string)
     pullRequest ? `\n${pullRequest}` : "",
     links.length ? `\n🔗 ${links.join(" · ")}` : "",
   ].filter(Boolean).join("\n");
+}
+
+const MAX_TELEGRAM_LENGTH = 4_000;
+
+export function formatTelegramQueueSummary(summary: TelegramQueueSummary) {
+  const lines = [
+    `📥 <b>Scan queued ${summary.jobs.length} job${summary.jobs.length === 1 ? "" : "s"}</b>`,
+    ...summary.jobs.map(queuedJobLine),
+  ];
+  return joinWithinLimit(lines, MAX_TELEGRAM_LENGTH);
+}
+
+function queuedJobLine(job: QueuedJob) {
+  const description = `<b>${escapeHtml(`${job.repository}#${job.issueNumber}`)}</b> · ${escapeHtmlWithLimit(job.issueTitle, 200)}`;
+  const issueLink = link(job.issueUrl, "Issue");
+  return issueLink ? `${description}\n🔗 ${issueLink}` : description;
+}
+
+function joinWithinLimit(lines: string[], max: number) {
+  let text = "";
+  for (let i = 0; i < lines.length; i++) {
+    const candidate = text ? `${text}\n${lines[i]}` : lines[i];
+    const dropped = lines.length - 1 - i;
+    const suffix = dropped > 0 ? `\n… and ${dropped} more job${dropped === 1 ? "" : "s"}` : "";
+    if (candidate.length + suffix.length > max) {
+      return text ? `${text}${suffix}` : candidate.slice(0, max);
+    }
+    text = candidate;
+  }
+  return text;
 }
 
 function pullRequestDetails(metadata: Record<string, unknown>) {

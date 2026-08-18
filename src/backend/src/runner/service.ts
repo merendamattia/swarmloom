@@ -38,7 +38,7 @@ export function createJobRunner({
   provider: defaultProvider,
   providers,
   github,
-  events = { record: eventRepository.create },
+  events = { record: eventRepository.create, notifyQueuedSummary: async () => {} },
   createWorktree = createTargetWorktree,
   heartbeatIntervalMs,
 }: RunnerDependencies) {
