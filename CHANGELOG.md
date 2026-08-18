@@ -1,3 +1,10 @@
+## [1.4.1](https://github.com/merendamattia/swarmloom/compare/v1.4.0...v1.4.1) (2026-08-18)
+
+
+### Bug Fixes
+
+* **runner:** keep trigger labels and continue the existing PR on review retries ([2127aa0](https://github.com/merendamattia/swarmloom/commit/2127aa042b1f97e25512129e241ccd6a8686381f))
+
 # [1.4.0](https://github.com/merendamattia/swarmloom/compare/v1.3.2...v1.4.0) (2026-08-18)
 
 
