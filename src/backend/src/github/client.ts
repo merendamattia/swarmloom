@@ -11,13 +11,15 @@ const issueSchema = z.object({
 
 const repositorySchema = z.object({ clone_url: z.url() });
 const labelSchema = z.object({ name: z.string(), color: z.string().optional(), description: z.string().nullable().optional() });
-const pullRequestSchema = z.object({
+const pullRequestListSchema = z.object({
   number: z.number().int().positive(),
   html_url: z.url(),
   title: z.string(),
   base: z.object({ ref: z.string() }),
   head: z.object({ ref: z.string() }),
   body: z.string().nullable(),
+});
+const pullRequestSchema = pullRequestListSchema.extend({
   additions: z.number().int().nonnegative(),
   deletions: z.number().int().nonnegative(),
   changed_files: z.number().int().nonnegative(),
@@ -292,9 +294,9 @@ export function createGitHubClient(options: GitHubClientOptions) {
   }
 
   async function listPullRequests(fullName: string) {
-    const pullRequests: Array<z.infer<typeof pullRequestSchema>> = [];
+    const pullRequests: Array<z.infer<typeof pullRequestListSchema>> = [];
     for (let page = 1; ; page += 1) {
-      const batch = z.array(pullRequestSchema).parse(await request(
+      const batch = z.array(pullRequestListSchema).parse(await request(
         `/repos/${fullName}/pulls?state=all&per_page=100&page=${page}`,
       ));
       pullRequests.push(...batch);

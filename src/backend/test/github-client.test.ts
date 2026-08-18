@@ -120,9 +120,6 @@ describe("GitHub client", () => {
           base: { ref: "develop" },
           head: { ref: "agent/issue-7" },
           body: "Closes #7",
-          additions: 12,
-          deletions: 3,
-          changed_files: 2,
         }]);
         if (request.url.includes("/pulls/9/reviews")) return Response.json([{
           body: "Add a regression test.",
