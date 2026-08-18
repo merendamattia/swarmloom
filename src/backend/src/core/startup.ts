@@ -7,6 +7,7 @@ import { redactSecrets } from "./secrets.ts";
 import { createGitHubClient } from "../github/client.ts";
 import { agentLabelDefinitions } from "../github/labels.ts";
 import { loadAgentInstructions, resultSchemaPath } from "../runtime/instructions.ts";
+import { providerLoginCommand } from "./provider-auth.ts";
 
 export async function validateStartup(config: Config) {
   const repositories = resolve(config.DATA_DIR, "repositories");
@@ -27,10 +28,6 @@ export async function validateStartup(config: Config) {
     command([config.AGENT_PROVIDER, "--version"]),
   ]);
   await command(["gh", "auth", "status"], { ...process.env, GH_TOKEN: config.GITHUB_TOKEN });
-  if (config.AGENT_PROVIDER === "codex") await command(["codex", "login", "status"]);
-  if (config.AGENT_PROVIDER === "opencode" && !hasOpenCodeLogin()) {
-    throw new Error("OpenCode needs a persistent login; run opencode auth login");
-  }
   const github = createGitHubClient({ token: config.GITHUB_TOKEN, apiUrl: config.GITHUB_API_URL });
   await Promise.all(config.githubRepositories.map((repository) =>
     github.ensureLabels(repository, agentLabelDefinitions(config))));
@@ -42,6 +39,16 @@ export async function validateStartup(config: Config) {
     ghVersion: firstLine(ghVersion),
     provider: config.AGENT_PROVIDER,
     providerVersion: firstLine(providerVersion),
+  };
+}
+
+export async function checkProviderAuthentication(provider: Config["AGENT_PROVIDER"]) {
+  const authenticated = provider === "codex"
+    ? await command(["codex", "login", "status"]).then(() => true, () => false)
+    : hasOpenCodeLogin();
+  return {
+    status: authenticated ? "authenticated" as const : "required" as const,
+    loginCommand: providerLoginCommand(provider),
   };
 }
 

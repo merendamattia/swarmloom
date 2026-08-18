@@ -46,27 +46,24 @@ in [DEPLOYMENT.md](DEPLOYMENT.md#github-token-and-labels).
 cp .env.example .env
 ```
 
-Edit `.env`: replace `GITHUB_TOKEN`, `SETTINGS_ENCRYPTION_KEY`, and `GITHUB_REPOSITORIES`, then choose one provider. The local Compose Redis URL is already configured. Build the
-shared image, then log in interactively with the selected provider (see [Provider login](#provider-login)):
+Edit `.env`: replace `GITHUB_TOKEN`, `SETTINGS_ENCRYPTION_KEY`, and `GITHUB_REPOSITORIES`, then choose one provider. The local Compose Redis URL is already configured. Build and start the shared image:
 
 ```bash
 docker compose build backend
-
-# Codex: keep AGENT_PROVIDER=codex
-docker compose run --rm --no-deps backend codex login --device-auth
-
-# Or OpenCode: set AGENT_PROVIDER=opencode
-docker compose run --rm --no-deps worker opencode auth login
-```
-
-Run only the login command for the selected provider, then verify it as described in
-[Provider login](#provider-login).
-
-Start the complete stack:
-
-```bash
 docker compose up -d
 docker compose ps
+```
+
+Then log in once with the selected provider (see [Provider login](#provider-login)). Run only the
+applicable command:
+
+```bash
+# Codex: keep AGENT_PROVIDER=codex
+docker compose exec worker codex login --device-auth
+
+# Or OpenCode: set AGENT_PROVIDER=opencode
+docker compose exec worker opencode auth login
+
 curl --fail http://127.0.0.1:18421/api/health
 ```
 
@@ -85,7 +82,7 @@ being stored in PostgreSQL and never returned by the API.
 
 ## Provider login
 
-Log in once per environment with the selected provider before starting the stack. The session is
+Start the stack first, then log in once per environment with the selected provider. The session is
 stored in a named Docker volume and survives container recreation; `docker compose down` keeps it.
 Run only the commands for the provider set in `AGENT_PROVIDER`.
 
@@ -97,7 +94,7 @@ The commands below use the local Compose file. On a server, add
 Requires a Codex CLI account; authentication uses the device flow.
 
 ```bash
-docker compose run --rm --no-deps backend codex login --device-auth
+docker compose exec worker codex login --device-auth
 ```
 
 Open the device URL shown in the terminal and approve. The session is stored in the `codex_home`
@@ -113,7 +110,7 @@ Requires an OpenCode Go subscription: subscribe and copy the API key at
 <https://opencode.ai/auth>.
 
 ```bash
-docker compose run --rm --no-deps worker opencode auth login
+docker compose exec worker opencode auth login
 ```
 
 Select **OpenCode Go** and paste the API key. The session is stored in the `opencode_data` volume
@@ -131,7 +128,7 @@ docker compose exec worker opencode models opencode-go
 curl --fail http://127.0.0.1:18421/api/status
 ```
 
-Startup also fails fast when the selected provider is not logged in. A login-status check does not
+The containers stay online while provider authentication is pending. A login-status check does not
 prove model access: run one disposable-issue end-to-end job as described in
 [DEPLOYMENT.md](DEPLOYMENT.md#first-deployment).
 
@@ -163,21 +160,23 @@ docker compose --env-file .env.production -f docker-compose.production.yaml conf
 docker compose --env-file .env.production -f docker-compose.production.yaml build backend
 ```
 
-Log in once with the selected provider (see [Provider login](#provider-login)):
-
-```bash
-# Codex
-docker compose --env-file .env.production -f docker-compose.production.yaml run --rm --no-deps backend codex login --device-auth
-
-# Or OpenCode
-docker compose --env-file .env.production -f docker-compose.production.yaml run --rm --no-deps worker opencode auth login
-```
-
-Run only the applicable login, verify it, then start and check the deployment:
+Start the stack:
 
 ```bash
 docker compose --env-file .env.production -f docker-compose.production.yaml up -d
 docker compose --env-file .env.production -f docker-compose.production.yaml ps
+```
+
+Then log in once with the selected provider (see [Provider login](#provider-login)). Run only the
+applicable login, verify it, and check the deployment:
+
+```bash
+# Codex
+docker compose --env-file .env.production -f docker-compose.production.yaml exec worker codex login --device-auth
+
+# Or OpenCode
+docker compose --env-file .env.production -f docker-compose.production.yaml exec worker opencode auth login
+
 curl --fail http://127.0.0.1:18421/api/health
 ```
 
