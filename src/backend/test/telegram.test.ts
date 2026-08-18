@@ -177,7 +177,7 @@ describe("Telegram queue summary", () => {
     })).toBe("📥 <b>Scan queued 1 job</b>\n<b>acme/api#7</b> · Fix");
   });
 
-  test("truncates oversized summaries with a count of dropped jobs", () => {
+  test("truncates oversized summaries with an exact count of dropped jobs", () => {
     const jobs = Array.from({ length: 20 }, (_, index) => ({
       repository: "acme/api",
       issueNumber: index + 1,
@@ -187,7 +187,10 @@ describe("Telegram queue summary", () => {
     const text = formatTelegramQueueSummary({ scanRunId: "scan-1", jobs });
 
     expect(text.length).toBeLessThanOrEqual(4_000);
-    expect(text).toMatch(/… and \d+ more jobs$/);
+    const visible = (text.match(/<b>acme\/api#\d+<\/b>/g) ?? []).length;
+    const suffix = text.match(/… and (\d+) more job(?:s)?$/);
+    expect(suffix).not.toBeNull();
+    expect(visible + Number(suffix![1])).toBe(jobs.length);
     expect(text).toContain("<b>acme/api#1</b>");
     expect(text).toContain("Issue number 1 with a very long title");
   });

@@ -118,7 +118,7 @@ function joinWithinLimit(lines: string[], max: number) {
   let text = "";
   for (let i = 0; i < lines.length; i++) {
     const candidate = text ? `${text}\n${lines[i]}` : lines[i];
-    const dropped = lines.length - 1 - i;
+    const dropped = lines.length - i;
     const suffix = dropped > 0 ? `\n… and ${dropped} more job${dropped === 1 ? "" : "s"}` : "";
     if (candidate.length + suffix.length > max) {
       return text ? `${text}${suffix}` : candidate.slice(0, max);
