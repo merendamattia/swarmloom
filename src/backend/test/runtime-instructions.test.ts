@@ -31,6 +31,18 @@ describe("canonical agent runtime", () => {
     expect(instructions).toContain("stop as soon as the acceptance criteria are met");
   });
 
+  test("uses the agent runtime baked into the production image", async () => {
+    const root = resolve(runtime, "..");
+    const [dockerfile, compose] = await Promise.all([
+      Bun.file(resolve(root, "Dockerfile")).text(),
+      Bun.file(resolve(root, "docker-compose.production.yaml")).text(),
+    ]);
+
+    expect(dockerfile).toContain("COPY agent-runtime agent-runtime");
+    expect(compose).not.toContain("AGENT_RUNTIME_HOST_PATH");
+    expect(compose).not.toContain(":/app/agent-runtime");
+  });
+
   test("selects the correct machine-readable result schema", () => {
     expect(resultSchemaPath(runtime, "reviewer")).toEndWith("review-result.schema.json");
     expect(resultSchemaPath(runtime, "decomposer")).toEndWith("decomposition-result.schema.json");
