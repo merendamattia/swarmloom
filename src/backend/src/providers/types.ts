@@ -1,4 +1,4 @@
-export type AgentRole = "issue-worker" | "decomposer" | "reviewer" | "pull-request";
+export type AgentRole = "issue-worker" | "decomposer" | "reviewer";
 
 export type AgentEventType =
   | "SESSION_STARTED"

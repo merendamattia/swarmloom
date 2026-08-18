@@ -46,31 +46,7 @@ const pullRequestCommentSchema = z.object({
   user: z.object({ login: z.string() }).nullable().optional(),
   created_at: z.string().optional(),
 });
-const checkRunsResponseSchema = z.object({
-  check_runs: z.array(z.object({
-    name: z.string(),
-    status: z.string(),
-    conclusion: z.string().nullable(),
-    html_url: z.url().nullable().optional(),
-    details_url: z.url().nullable().optional(),
-  })),
-});
-const commitStatusResponseSchema = z.object({
-  state: z.string(),
-  statuses: z.array(z.object({
-    context: z.string(),
-    state: z.string(),
-    target_url: z.url().nullable().optional(),
-  })),
-});
 const createdIssueSchema = z.object({ number: z.number().int().positive(), html_url: z.url() });
-
-export type PullRequestCheck = {
-  name: string;
-  status: string;
-  conclusion: string | null;
-  url: string | null;
-};
 
 export type GitHubIssueContext = {
   issue: GitHubIssue;
@@ -339,32 +315,6 @@ export function createGitHubClient(options: GitHubClientOptions) {
     }
   }
 
-  async function getPullRequestChecks(fullName: string, ref: string): Promise<PullRequestCheck[]> {
-    const encodedRef = encodeURIComponent(ref);
-    const [checkRuns, commitStatus] = await Promise.all([
-      request(`/repos/${fullName}/commits/${encodedRef}/check-runs`),
-      request(`/repos/${fullName}/commits/${encodedRef}/status`),
-    ]);
-    const runs = checkRunsResponseSchema.parse(checkRuns).check_runs.map((check) => ({
-      name: check.name,
-      status: check.status,
-      conclusion: check.conclusion,
-      url: check.html_url ?? check.details_url ?? null,
-    }));
-    const status = commitStatusResponseSchema.parse(commitStatus);
-    const statuses = status.statuses.length > 0 ? status.statuses : [{
-      context: "commit-status",
-      state: status.state,
-      target_url: null,
-    }];
-    return [...runs, ...statuses.map((item) => ({
-      name: item.context,
-      status: item.state === "pending" ? "in_progress" : "completed",
-      conclusion: item.state === "pending" ? null : item.state === "success" ? "success" : item.state,
-      url: item.target_url ?? null,
-    }))];
-  }
-
   async function createIssue(fullName: string, title: string, body: string, labels: string[]) {
     const issue = createdIssueSchema.parse(await request(`/repos/${fullName}/issues`, {
       method: "POST",
@@ -395,7 +345,6 @@ export function createGitHubClient(options: GitHubClientOptions) {
     getPullRequest,
     getPullRequestDiff,
     getIssueContext,
-    getPullRequestChecks,
     createIssue,
     setIssueLabels,
     addIssueComment,
