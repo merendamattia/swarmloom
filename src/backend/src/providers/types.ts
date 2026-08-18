@@ -22,10 +22,9 @@ export type AgentRequest = {
   task: string;
   context: string;
   instructions?: string;
-  artifacts?: Record<string, string>;
   model: string;
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-  resultFilePath?: string;
+  responseFilePath?: string;
   signal?: AbortSignal;
   onEvent?: (event: AgentEvent) => void | Promise<void>;
 };
@@ -50,15 +49,11 @@ export interface AgentProvider {
 }
 
 export function buildAgentPrompt(request: AgentRequest) {
-  const artifacts = Object.entries(request.artifacts ?? {})
-    .map(([name, value]) => `## ${name}\n${value}`)
-    .join("\n\n");
   return [
     request.instructions && `Instructions:\n${request.instructions}`,
     `Role: ${request.role}`,
     `Task:\n${request.task}`,
     `Context:\n${request.context}`,
-    artifacts && `Artifacts:\n${artifacts}`,
-    request.resultFilePath && `Result file: ${request.resultFilePath}`,
+    request.responseFilePath && `Response file: ${request.responseFilePath}`,
   ].filter(Boolean).join("\n\n");
 }

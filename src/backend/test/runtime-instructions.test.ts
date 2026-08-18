@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { loadAgentInstructions, resultSchemaPath } from "../src/runtime/instructions.ts";
+import { loadAgentInstructions } from "../src/runtime/instructions.ts";
 
 const runtime = resolve(import.meta.dir, "../../../agent-runtime");
 
@@ -31,6 +31,13 @@ describe("canonical agent runtime", () => {
     expect(instructions).toContain("stop as soon as the acceptance criteria are met");
   });
 
+  test("describes the plain text response file contract", async () => {
+    const instructions = await loadAgentInstructions(runtime);
+    expect(instructions).toContain("Response file");
+    expect(instructions).toContain("Outcome: implemented");
+    expect(instructions).toContain("Review: pass");
+  });
+
   test("uses the agent runtime baked into the production image", async () => {
     const root = resolve(runtime, "..");
     const [dockerfile, compose] = await Promise.all([
@@ -41,20 +48,5 @@ describe("canonical agent runtime", () => {
     expect(dockerfile).toContain("COPY agent-runtime agent-runtime");
     expect(compose).not.toContain("AGENT_RUNTIME_HOST_PATH");
     expect(compose).not.toContain(":/app/agent-runtime");
-  });
-
-  test("selects the correct machine-readable result schema", () => {
-    expect(resultSchemaPath(runtime, "reviewer")).toEndWith("review-result.schema.json");
-    expect(resultSchemaPath(runtime, "decomposer")).toEndWith("decomposition-result.schema.json");
-    expect(resultSchemaPath(runtime, "issue-worker")).toEndWith("job-result.schema.json");
-  });
-
-  test("keeps Codex schemas flat and fully required", async () => {
-    for (const role of ["issue-worker", "decomposer", "reviewer"] as const) {
-      const schema = await Bun.file(resultSchemaPath(runtime, role)).text();
-      expect(schema).not.toContain('"oneOf"');
-      const parsed = JSON.parse(schema) as { properties: Record<string, unknown>; required: string[] };
-      expect(parsed.required).toEqual(Object.keys(parsed.properties));
-    }
   });
 });

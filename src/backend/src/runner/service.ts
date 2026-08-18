@@ -1,10 +1,14 @@
 import type { Prisma } from "@prisma/client";
 import { dirname, resolve, sep } from "node:path";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import type { Config } from "../core/config-schema.ts";
 import { redactSecrets } from "../core/secrets.ts";
 import type { EventService } from "../events/service.ts";
-import { createJobWorktree as createTargetWorktree } from "../git/repositories.ts";
+import {
+  createJobWorktree as createTargetWorktree,
+  gcRepository,
+  removeJobWorktree as removeTargetWorktree,
+} from "../git/repositories.ts";
 import type { GitHubClient, GitHubIssueContext } from "../github/client.ts";
 import { githubGitEnvironment } from "../github/git-auth.ts";
 import { replaceWorkerLabels } from "../github/labels.ts";
@@ -12,15 +16,21 @@ import type { AgentProvider, AgentRole } from "../providers/index.ts";
 import { eventRepository } from "../repositories/events.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import { reviewRepository } from "../repositories/reviews.ts";
-import { loadAgentInstructions, resultSchemaPath } from "../runtime/instructions.ts";
+import { loadAgentInstructions } from "../runtime/instructions.ts";
 import { finishScanIfComplete } from "../scans/finalize.ts";
-import { parseJobOutcome, parseReviewOutcome, type JobOutcome, type ReviewOutcome } from "./outcomes.ts";
+import {
+  parseJobOutcome,
+  parsePullRequestUrl,
+  parseReviewOutcome,
+} from "./response.ts";
 
 type RunnerGitHub = Pick<GitHubClient,
   "getIssue" | "getIssueContext" | "getPullRequest" | "getPullRequestDiff" |
   "createIssue" | "setIssueLabels" | "addIssueComment">;
 
 type CreateWorktree = typeof createTargetWorktree;
+type RemoveWorktree = typeof removeTargetWorktree;
+type GcRepository = typeof gcRepository;
 type RunningJob = NonNullable<Awaited<ReturnType<typeof jobRepository.findRunning>>>;
 
 type RunnerDependencies = {
@@ -30,6 +40,8 @@ type RunnerDependencies = {
   github: RunnerGitHub;
   events?: EventService;
   createWorktree?: CreateWorktree;
+  removeWorktree?: RemoveWorktree;
+  gcRepository?: GcRepository;
   heartbeatIntervalMs?: number;
 };
 
@@ -40,6 +52,8 @@ export function createJobRunner({
   github,
   events = { record: eventRepository.create },
   createWorktree = createTargetWorktree,
+  removeWorktree = removeTargetWorktree,
+  gcRepository: gc = gcRepository,
   heartbeatIntervalMs,
 }: RunnerDependencies) {
   async function run(jobId: string, workerId: string) {
@@ -68,19 +82,26 @@ export function createJobRunner({
     let reachedTerminalState = false;
     let liveContext: GitHubIssueContext | undefined;
     let activePullRequest: { number: number; url: string } | undefined;
+    let worktreePath: string | undefined;
+    let worktreeCreated = false;
+    let repositoryPath: string | undefined;
     try {
       if (!selectedProvider) throw new Error(`No provider configured for ${job.provider}`);
       liveContext = await github.getIssueContext(job.repository.fullName, job.issueNumber, job.issueUrl);
       if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
-      const worktreePath = safeWorktreePath(config.DATA_DIR, job.id);
+      const localPath = job.repository.localPath;
+      worktreePath = safeWorktreePath(config.DATA_DIR, job.id);
+      const gitEnvironment = githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl);
       await createWorktree({
-        repositoryPath: job.repository.localPath,
+        repositoryPath: localPath,
         worktreePath,
         branchName: job.branchName,
         baselineCommit: job.baselineCommit,
-        gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
+        gitEnvironment,
       });
+      worktreeCreated = true;
       if (!await jobRepository.setWorktree(job.id, worktreePath)) return false;
+      repositoryPath = localPath;
       await events.record({
         type: "JOB_STARTED",
         message: `Started ${job.repository.fullName}#${job.issueNumber} · ${job.issueTitle}`,
@@ -102,12 +123,12 @@ export function createJobRunner({
       if (implementation.exitCode !== 0) {
         throw new Error(implementation.stderr || `${provider.name} exited with ${implementation.exitCode}`);
       }
-      let outcome = parseJobOutcome(await readOutcomeFile(implementation.resultFilePath));
-      if (outcome.outcome === "requires_decomposition") {
+      let outcome = parseJobOutcome(implementation.response);
+      if (outcome === "requires_decomposition") {
         const decomposition = await executeRole(
           "decomposer",
           `Decompose ${job.repository.fullName}#${job.issueNumber} into coherent native sub-issues`,
-          `${issueContext(job, config.ISSUE_REVIEW_REQUESTED_LABEL, liveContext)}\nQueue-ready label for actionable children: ${config.ISSUE_READY_LABEL}\n\nReason from triage:\n${outcome.reason}`,
+          `${issueContext(job, config.ISSUE_REVIEW_REQUESTED_LABEL, liveContext)}\nQueue-ready label for actionable children: ${config.ISSUE_READY_LABEL}`,
           worktreePath,
           signal,
           job,
@@ -115,24 +136,24 @@ export function createJobRunner({
         if (decomposition.exitCode !== 0) {
           throw new Error(decomposition.stderr || `${provider.name} decomposer exited unsuccessfully`);
         }
-        outcome = parseJobOutcome(await readOutcomeFile(decomposition.resultFilePath));
-        if (outcome.outcome !== "decomposed" && outcome.outcome !== "blocked") {
+        outcome = parseJobOutcome(decomposition.response);
+        if (outcome !== "decomposed" && outcome !== "blocked") {
           throw new Error("Decomposer returned an unsupported outcome");
         }
       }
 
-      if (outcome.outcome === "implemented") {
-        const { review, pullRequestUrl, pullRequest } = await reviewImplementation(job, outcome, worktreePath, signal);
+      if (outcome === "implemented") {
+        const { review, pullRequestUrl, pullRequest, response } = await reviewImplementation(job, implementation.response, worktreePath, signal);
         reachedTerminalState = await jobRepository.finishRunning(job.id, "COMPLETED", {
-          result: jsonValue({ ...outcome, pr: { ...outcome.pr, url: pullRequestUrl }, review }),
+          result: response,
           exitCode: implementation.exitCode,
-          pullRequestNumber: outcome.pr.number,
+          pullRequestNumber: pullRequest.number,
           pullRequestUrl,
         });
         if (reachedTerminalState) {
           await events.record({
             type: "JOB_COMPLETED",
-            message: `Completed ${job.repository.fullName}#${job.issueNumber} with PR #${outcome.pr.number} using ${provider.name}/${job.model} in ${duration(job.startedAt)}`,
+            message: `Completed ${job.repository.fullName}#${job.issueNumber} with PR #${pullRequest.number} using ${provider.name}/${job.model} in ${duration(job.startedAt)}`,
             jobId: job.id,
             repositoryId: job.repositoryId,
             scanRunId: job.scanRunId ?? undefined,
@@ -147,38 +168,32 @@ export function createJobRunner({
               deletions: pullRequest.deletions,
               provider: provider.name,
               model: job.model,
-              review: review.verdict,
             },
           });
           const nextLabel = review.verdict === "changes_requested"
             ? config.ISSUE_REVIEW_REQUESTED_LABEL
             : config.ISSUE_COMPLETED_LABEL;
-          await finalizeIssue(job, [nextLabel],
-            `Implemented in ${pullRequestUrl}. Automated review: **${review.verdict}** — ${review.summary}`);
-          await postReview(job.repository.fullName, outcome.pr.number, review);
+          await finalizeIssue(job, [nextLabel], response);
+          await postReview(job.repository.fullName, pullRequest.number, review.response);
         }
-      } else if (outcome.outcome === "blocked") {
+      } else if (outcome === "blocked") {
         reachedTerminalState = await jobRepository.finishRunning(job.id, "BLOCKED", {
-          result: jsonValue(outcome),
+          result: implementation.response,
           exitCode: implementation.exitCode,
         });
         if (reachedTerminalState) {
-          await events.record(terminalEvent(job, "JOB_BLOCKED", outcome.summary));
-          await finalizeIssue(job, [config.ISSUE_BLOCKED_LABEL, config.ISSUE_HUMAN_REVIEW_LABEL],
-            `Worker blocked: ${outcome.summary}\n\nRequired information: ${outcome.question}`);
+          await events.record(terminalEvent(job, "JOB_BLOCKED", "Worker blocked"));
+          await finalizeIssue(job, [config.ISSUE_BLOCKED_LABEL, config.ISSUE_HUMAN_REVIEW_LABEL], implementation.response);
         }
-      } else if (outcome.outcome === "decomposed") {
+      } else if (outcome === "decomposed") {
         reachedTerminalState = await jobRepository.finishRunning(job.id, "DECOMPOSED", {
-          result: jsonValue(outcome),
+          result: implementation.response,
           exitCode: implementation.exitCode,
         });
         if (reachedTerminalState) {
-          await events.record(terminalEvent(job, "JOB_DECOMPOSED", outcome.summary));
-          await finalizeIssue(job, [config.ISSUE_DECOMPOSED_LABEL],
-            `Worker decomposed this issue into: ${outcome.childIssues.map((child) => `#${child.number}`).join(", ")}.`);
+          await events.record(terminalEvent(job, "JOB_DECOMPOSED", "Worker decomposed the issue"));
+          await finalizeIssue(job, [config.ISSUE_DECOMPOSED_LABEL], implementation.response);
         }
-      } else {
-        throw new Error("Issue worker returned an unresolved decomposition request");
       }
     } catch (error) {
       const message = safeError(error);
@@ -193,6 +208,28 @@ export function createJobRunner({
     } finally {
       heartbeatStopped = true;
       if (heartbeatTimer) clearTimeout(heartbeatTimer);
+      if (worktreeCreated) {
+        try {
+          await removeWorktree({ worktreePath: worktreePath!, repositoryPath, gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl) });
+        } catch (error) {
+          await events.record({
+            type: "GITHUB_RECONCILIATION_REQUIRED",
+            level: "ERROR",
+            message: `Could not remove job worktree ${worktreePath}: ${safeError(error)}`,
+            jobId: job.id,
+            repositoryId: job.repositoryId,
+            scanRunId: job.scanRunId ?? undefined,
+            metadata: { issueUrl: job.issueUrl },
+          });
+        }
+      }
+      if (repositoryPath) {
+        try {
+          await gc({ repositoryPath, gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl) });
+        } catch {
+          // gc is best-effort; leave the local clone untouched on failure
+        }
+      }
       await finishScanIfComplete(job.scanRunId, job.environment, events);
     }
     return reachedTerminalState;
@@ -205,41 +242,51 @@ export function createJobRunner({
       abortSignal: AbortSignal,
       currentJob: RunningJob,
     ) {
-      const schemaPath = resultSchemaPath(config.AGENT_RUNTIME_DIR, role);
-      const resultFilePath = outcomeFilePath(config.DATA_DIR, currentJob.id, role);
-      await mkdir(dirname(resultFilePath), { recursive: true });
-      const result = await provider.execute({
-        role,
-        workingDirectory,
-        task,
-        context,
-        instructions: await loadAgentInstructions(config.AGENT_RUNTIME_DIR),
-        artifacts: { "Required JSON schema": await Bun.file(schemaPath).text() },
-        model: currentJob.model,
-        reasoningEffort: currentJob.reasoningEffort as Config["CODEX_REASONING_EFFORT"] | undefined,
-        resultFilePath,
-        signal: abortSignal,
-        onEvent: async (agentEvent) => {
-          await events.record({
-            type: agentEvent.type === "AGENT_OUTPUT" ? "AGENT_OUTPUT" : `AGENT_${agentEvent.type}`,
-            message: (agentEvent.message || agentEvent.type).slice(0, 8_000),
-            jobId: currentJob.id,
-            repositoryId: currentJob.repositoryId,
-            scanRunId: currentJob.scanRunId ?? undefined,
-            metadata: agentEvent.metadata as Prisma.InputJsonValue | undefined,
-          });
-        },
-      });
-      return { ...result, resultFilePath };
+      const responseFilePath = responseFilePathFor(config.DATA_DIR, currentJob.id, role);
+      await mkdir(dirname(responseFilePath), { recursive: true });
+      try {
+        const result = await provider.execute({
+          role,
+          workingDirectory,
+          task,
+          context,
+          instructions: await loadAgentInstructions(config.AGENT_RUNTIME_DIR),
+          model: currentJob.model,
+          reasoningEffort: currentJob.reasoningEffort as Config["CODEX_REASONING_EFFORT"] | undefined,
+          responseFilePath,
+          signal: abortSignal,
+          onEvent: async (agentEvent) => {
+            await events.record({
+              type: agentEvent.type === "AGENT_OUTPUT" ? "AGENT_OUTPUT" : `AGENT_${agentEvent.type}`,
+              message: (agentEvent.message || agentEvent.type).slice(0, 8_000),
+              jobId: currentJob.id,
+              repositoryId: currentJob.repositoryId,
+              scanRunId: currentJob.scanRunId ?? undefined,
+              metadata: agentEvent.metadata as Prisma.InputJsonValue | undefined,
+            });
+          },
+        });
+        if (result.exitCode !== 0) {
+          return { ...result, responseFilePath, response: "" };
+        }
+        return { ...result, responseFilePath, response: await readResponseFile(responseFilePath) };
+      } finally {
+        await removeResponseFile(responseFilePath);
+      }
     }
 
     async function reviewImplementation(
       currentJob: RunningJob,
-      outcome: Extract<JobOutcome, { outcome: "implemented" }>,
+      implementationResponse: string,
       workingDirectory: string,
       abortSignal: AbortSignal,
     ) {
-      const pullRequest = await github.getPullRequest(currentJob.repository.fullName, outcome.pr.number);
+      const pullRequestUrl = parsePullRequestUrl(implementationResponse);
+      if (!pullRequestUrl) {
+        throw new Error('Implemented agent response must include a "PR: <url>" line');
+      }
+      const pullRequestNumber = Number(/\/pull\/(\d+)/.exec(pullRequestUrl)?.[1]);
+      const pullRequest = await github.getPullRequest(currentJob.repository.fullName, pullRequestNumber);
       activePullRequest = { number: pullRequest.number, url: pullRequest.url };
       if (pullRequest.base !== "develop" || pullRequest.head !== currentJob.branchName) {
         throw new Error(`PR #${pullRequest.number} must use ${currentJob.branchName} -> develop`);
@@ -265,7 +312,7 @@ export function createJobRunner({
           deletions: pullRequest.deletions,
         },
       });
-      const diff = await github.getPullRequestDiff(currentJob.repository.fullName, outcome.pr.number);
+      const diff = await github.getPullRequestDiff(currentJob.repository.fullName, pullRequest.number);
       const reviewRow = await reviewRepository.start(
         currentJob.id,
         currentJob.provider,
@@ -276,37 +323,36 @@ export function createJobRunner({
         const result = await executeRole(
           "reviewer",
           `Independently review ${pullRequest.url}`,
-          `${issueContext(currentJob, config.ISSUE_REVIEW_REQUESTED_LABEL, liveContext)}\n\nPull Request: ${JSON.stringify(pullRequest)}\nTests: ${outcome.tests.join(", ")}\n\nDiff from develop:\n${diff}`,
+          `${issueContext(currentJob, config.ISSUE_REVIEW_REQUESTED_LABEL, liveContext)}\n\nPull Request: ${JSON.stringify(pullRequest)}\n\nDiff from develop:\n${diff}`,
           workingDirectory,
           abortSignal,
           currentJob,
         );
         if (result.exitCode !== 0) throw new Error(result.stderr || "Automated review failed");
-        const review = parseReviewOutcome(await readOutcomeFile(result.resultFilePath));
+        const reviewResponse = result.response;
+        const verdict = parseReviewOutcome(reviewResponse);
         await reviewRepository.finish(
           reviewRow.id,
-          review.verdict === "pass" ? "PASSED" : "CHANGES_REQUESTED",
+          verdict === "pass" ? "PASSED" : "CHANGES_REQUESTED",
           {
             sessionId: result.sessionId,
-            verdict: jsonValue({ verdict: review.verdict, summary: review.summary }),
-            findings: jsonValue(review.findings),
+            response: reviewResponse,
             exitCode: result.exitCode,
           },
         );
         await events.record({
           type: "REVIEW_COMPLETED",
-          message: `Review ${review.verdict} for ${currentJob.repository.fullName}#${outcome.pr.number}${review.findings.length ? ` · ${review.findings.length} finding${review.findings.length === 1 ? "" : "s"}` : ""}`,
+          message: `Review ${verdict} for ${currentJob.repository.fullName}#${pullRequest.number}`,
           jobId: currentJob.id,
           repositoryId: currentJob.repositoryId,
           scanRunId: currentJob.scanRunId ?? undefined,
           metadata: {
             issueUrl: currentJob.issueUrl,
             pullRequestUrl: pullRequest.url,
-            verdict: review.verdict,
-            findings: review.findings.length,
+            verdict,
           },
         });
-        return { review, pullRequestUrl: pullRequest.url, pullRequest };
+        return { review: { verdict, response: reviewResponse }, pullRequestUrl: pullRequest.url, pullRequest, response: implementationResponse };
       } catch (error) {
         await reviewRepository.finish(reviewRow.id, "FAILED", { errorMessage: safeError(error) });
         throw error;
@@ -396,13 +442,9 @@ export function createJobRunner({
       });
     }
 
-    async function postReview(fullName: string, pullRequestNumber: number, review: ReviewOutcome) {
-      const findings = review.findings.map((finding) =>
-        `- **${finding.severity}** ${finding.file}${finding.line ? `:${finding.line}` : ""}: ${finding.problem} Correction: ${finding.correction}`
-      ).join("\n");
+    async function postReview(fullName: string, pullRequestNumber: number, review: string) {
       try {
-        await github.addIssueComment(fullName, pullRequestNumber,
-          `## Automated review: ${review.verdict}\n\n${review.summary}${findings ? `\n\n${findings}` : ""}`);
+        await github.addIssueComment(fullName, pullRequestNumber, review);
       } catch (error) {
         await events.record({
           type: "GITHUB_RECONCILIATION_REQUIRED",
@@ -427,23 +469,27 @@ function safeWorktreePath(dataDirectory: string, jobId: string) {
   return path;
 }
 
-function outcomeFilePath(dataDirectory: string, jobId: string, role: AgentRole) {
+function responseFilePathFor(dataDirectory: string, jobId: string, role: AgentRole) {
   const root = resolve(dataDirectory, "outcomes");
-  const path = resolve(root, `${jobId}-${role}.json`);
-  if (!path.startsWith(`${root}${sep}`)) throw new Error("Outcome file path escapes data directory");
+  const path = resolve(root, `${jobId}-${role}.txt`);
+  if (!path.startsWith(`${root}${sep}`)) throw new Error("Response file path escapes data directory");
   return path;
 }
 
-async function readOutcomeFile(path: string) {
+async function readResponseFile(path: string) {
   const file = Bun.file(path);
   if (!await file.exists()) {
-    throw new Error(`Agent finished without writing the structured outcome to ${path}`);
+    throw new Error(`Agent finished without writing the response to ${path}`);
   }
   const content = await file.text();
   if (!content.trim()) {
-    throw new Error(`Agent wrote an empty structured outcome to ${path}`);
+    throw new Error(`Agent wrote an empty response to ${path}`);
   }
   return content;
+}
+
+async function removeResponseFile(path: string) {
+  await rm(path, { force: true });
 }
 
 function issueContext(job: {
@@ -490,10 +536,6 @@ function failureDetails(error: unknown, githubToken: string) {
     ...globalThis.process.env,
     GITHUB_TOKEN: githubToken,
   }).slice(0, 12_000);
-}
-
-function jsonValue(value: unknown) {
-  return value as Prisma.InputJsonValue;
 }
 
 function duration(startedAt: Date | null) {

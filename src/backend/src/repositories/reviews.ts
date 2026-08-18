@@ -1,4 +1,4 @@
-import type { AgentProvider, Prisma, ReviewStatus } from "@prisma/client";
+import type { AgentProvider, ReviewStatus } from "@prisma/client";
 import { prisma } from "../core/db.ts";
 
 async function start(
@@ -17,8 +17,7 @@ async function finish(
   status: Extract<ReviewStatus, "PASSED" | "CHANGES_REQUESTED" | "FAILED">,
   input: {
     sessionId?: string | null;
-    verdict?: Prisma.InputJsonValue;
-    findings?: Prisma.InputJsonValue;
+    response?: string;
     exitCode?: number;
     errorMessage?: string;
   },

@@ -49,18 +49,14 @@ integration("job runner", () => {
   test("completes implementation and records independent pass/changes-requested reviews", async () => {
     for (const [offset, verdict] of [[0, "pass"], [1, "changes_requested"]] as const) {
       const job = await claimed(issueBase + offset);
-      const findings = verdict === "pass" ? [] : [{
-        file: "src/app.ts", line: 12, severity: "high", problem: "Missing guard", correction: "Add guard",
-      }];
+      const implementationResponse = [
+        `Outcome: implemented`,
+        `PR: https://github.com/acme/runner/pull/${job.issueNumber}`,
+        `Implemented the requested change and ran the checks.`,
+      ].join("\n");
       const provider = new FakeProvider([
-        success(JSON.stringify({
-          outcome: "implemented",
-          summary: "Implemented",
-          tests: ["bun test"],
-          commit: "abcdef1",
-          pr: { number: job.issueNumber, url: `https://github.com/[REDACTED]/runner/pull/${job.issueNumber}`, base: "develop", head: job.branchName },
-        }), `implementation-${offset}`),
-        success(JSON.stringify({ verdict, summary: "Reviewed", findings }), `review-${offset}`),
+        success(implementationResponse, `implementation-${offset}`),
+        success(`Review: ${verdict}\nThe change is ${verdict === "pass" ? "ready" : "not ready yet"}.\n${verdict === "changes_requested" ? "Add a guard." : ""}`.trim(), `review-${offset}`),
       ]);
       const github = fakeGitHub(job.issueNumber, job.branchName);
       const runner = createJobRunner({
@@ -75,15 +71,18 @@ integration("job runner", () => {
       expect(stored.status).toBe("COMPLETED");
       expect(stored.pullRequestNumber).toBe(job.issueNumber);
       expect(stored.pullRequestUrl).toBe(`https://github.com/acme/runner/pull/${job.issueNumber}`);
-      expect(stored.result).toMatchObject({ pr: { url: `https://github.com/acme/runner/pull/${job.issueNumber}` } });
+      expect(stored.result).toBe(implementationResponse);
       expect(stored.review?.status).toBe(verdict === "pass" ? "PASSED" : "CHANGES_REQUESTED");
+      expect(stored.review?.response).toContain(`Review: ${verdict}`);
       expect(provider.calls.map((call) => call.role)).toEqual(["issue-worker", "reviewer"]);
       expect(new Set(provider.calls.map((call) => call.signal)).size).toBe(1);
       expect(provider.calls[0]?.context).toContain("Live GitHub context fetched before execution");
       expect(github.labels).toContain(
         verdict === "pass" ? config.ISSUE_COMPLETED_LABEL : config.ISSUE_REVIEW_REQUESTED_LABEL,
       );
-      expect(github.comments.some((comment) => comment.issue === job.issueNumber && comment.body.includes("Automated review")))
+      expect(github.comments.some((comment) => comment.issue === job.issueNumber && comment.body === implementationResponse))
+        .toBe(true);
+      expect(github.comments.some((comment) => comment.issue === job.issueNumber && comment.body.includes(`Review: ${verdict}`)))
         .toBe(true);
       expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "PR_OPENED" } }))
         .toMatchObject({
@@ -102,8 +101,8 @@ integration("job runner", () => {
   test("uses a fresh decomposer session and records native child references", async () => {
     const job = await claimed(issueBase + 2);
     const provider = new FakeProvider([
-      success('{"outcome":"requires_decomposition","summary":"Broad","reason":"Two releases"}', "triage"),
-      success(`{"outcome":"decomposed","summary":"Split","childIssues":[{"number":${job.issueNumber + 10},"url":"https://github.com/acme/runner/issues/${job.issueNumber + 10}","ready":true},{"number":${job.issueNumber + 11},"url":"https://github.com/acme/runner/issues/${job.issueNumber + 11}","ready":false}]}`, "decomposer"),
+      success("Outcome: requires_decomposition\nToo broad to fit one PR.", "triage"),
+      success("Outcome: decomposed\nSplit into two children.", "decomposer"),
     ]);
     const github = fakeGitHub(job.issueNumber, job.branchName);
     const runner = createJobRunner({ config, provider, github, createWorktree: async (input) => input.worktreePath });
@@ -113,7 +112,7 @@ integration("job runner", () => {
     expect(provider.calls.map((call) => call.role)).toEqual(["issue-worker", "decomposer"]);
     expect(provider.sessions).toEqual(["triage", "decomposer"]);
     expect(provider.calls[1]?.context).toContain(`Queue-ready label for actionable children: ${config.ISSUE_READY_LABEL}`);
-    expect(provider.calls[1]?.resultFilePath).toEndWith(`${job.id}-decomposer.json`);
+    expect(provider.calls[1]?.responseFilePath).toEndWith(`${job.id}-decomposer.txt`);
     expect(github.labels).toContain(config.ISSUE_DECOMPOSED_LABEL);
   });
 
@@ -122,7 +121,7 @@ integration("job runner", () => {
     const blockedGitHub = fakeGitHub(blocked.issueNumber, blocked.branchName);
     const blockedRunner = createJobRunner({
       config,
-      provider: new FakeProvider([success('{"outcome":"blocked","summary":"Need contract","question":"Which response code?"}', "blocked")]),
+      provider: new FakeProvider([success("Outcome: blocked\nNeed the response contract.", "blocked")]),
       github: blockedGitHub,
       createWorktree: async (input) => input.worktreePath,
     });
@@ -174,7 +173,7 @@ integration("job runner", () => {
     expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("CANCELLED");
   });
 
-  test("fails with a clear message when the agent finishes without writing the outcome", async () => {
+  test("fails with a clear message when the agent finishes without writing the response", async () => {
     const job = await claimed(issueBase + 6);
     const provider: AgentProvider = {
       name: "opencode",
@@ -190,7 +189,7 @@ integration("job runner", () => {
     expect(await runner.run(job.id, "runner-worker")).toBe(true);
     const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
     expect(stored.status).toBe("FAILED");
-    expect(stored.errorMessage).toContain("without writing the structured outcome");
+    expect(stored.errorMessage).toContain("without writing the response");
   });
 
   async function claimed(issueNumber: number) {
@@ -224,7 +223,7 @@ class FakeProvider implements AgentProvider {
     const result = this.results.shift();
     if (!result) throw new Error("Missing fake provider result");
     if (result.sessionId) this.sessions.push(result.sessionId);
-    if (request.resultFilePath) await Bun.write(request.resultFilePath, result.finalOutput);
+    if (request.responseFilePath) await Bun.write(request.responseFilePath, result.finalOutput);
     await request.onEvent?.({ type: "SESSION_STARTED", timestamp: new Date().toISOString() });
     return result;
   }

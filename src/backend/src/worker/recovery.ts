@@ -3,6 +3,7 @@ import type { GitHubClient } from "../github/client.ts";
 import { replaceWorkerLabels } from "../github/labels.ts";
 import { redactSecrets } from "../core/secrets.ts";
 import type { Config } from "../core/config-schema.ts";
+import { removeJobWorktree, repositoryPath } from "../git/repositories.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import { finishScanIfComplete } from "../scans/finalize.ts";
 
@@ -12,6 +13,13 @@ export async function recoverStaleJobs(config: Config, github: GitHubClient, eve
     new Date(Date.now() - config.STALE_JOB_THRESHOLD_MS),
   );
   for (const job of staleJobs) {
+    if (job.worktreePath) {
+      await removeJobWorktree({
+        worktreePath: job.worktreePath,
+        repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
+        gitEnvironment: undefined,
+      });
+    }
     await events.record({
       type: "JOB_FAILED",
       level: "ERROR",

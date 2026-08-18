@@ -6,7 +6,7 @@ import { prisma } from "./db.ts";
 import { redactSecrets } from "./secrets.ts";
 import { createGitHubClient } from "../github/client.ts";
 import { agentLabelDefinitions } from "../github/labels.ts";
-import { loadAgentInstructions, resultSchemaPath } from "../runtime/instructions.ts";
+import { loadAgentInstructions } from "../runtime/instructions.ts";
 import { providerLoginCommand } from "./provider-auth.ts";
 
 export async function validateStartup(config: Config) {
@@ -16,9 +16,6 @@ export async function validateStartup(config: Config) {
   await Promise.all([access(repositories, constants.R_OK | constants.W_OK), access(worktrees, constants.R_OK | constants.W_OK)]);
   await Promise.all([
     loadAgentInstructions(config.AGENT_RUNTIME_DIR),
-    access(resultSchemaPath(config.AGENT_RUNTIME_DIR, "issue-worker"), constants.R_OK),
-    access(resultSchemaPath(config.AGENT_RUNTIME_DIR, "decomposer"), constants.R_OK),
-    access(resultSchemaPath(config.AGENT_RUNTIME_DIR, "reviewer"), constants.R_OK),
     prisma.$queryRaw`SELECT 1`,
   ]);
 

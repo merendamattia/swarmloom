@@ -149,8 +149,9 @@ test("redacts configured credentials from provider output", () => {
   )).toBe("request failed for [REDACTED] and [REDACTED]");
 });
 
-test("injects the result file contract into the shared prompt", () => {
-  const prompt = buildAgentPrompt({ ...request, resultFilePath: "/data/outcomes/job-issue-worker.json" });
-  expect(prompt).toContain("Result file: /data/outcomes/job-issue-worker.json");
+test("injects the response file contract into the shared prompt", () => {
+  const prompt = buildAgentPrompt({ ...request, responseFilePath: "/data/outcomes/job-issue-worker.txt" });
+  expect(prompt).toContain("Response file: /data/outcomes/job-issue-worker.txt");
   expect(prompt).toContain("Role: issue-worker");
+  expect(prompt).not.toContain("Result file");
 });
