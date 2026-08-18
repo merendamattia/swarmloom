@@ -3,7 +3,7 @@ import { redactSecrets } from "../core/secrets.ts";
 import type { EventService } from "../events/service.ts";
 import type { GitHubClient } from "../github/client.ts";
 import { githubGitEnvironment } from "../github/git-auth.ts";
-import { agentLabelDefinitions, replaceWorkerLabels } from "../github/labels.ts";
+import { agentLabelDefinitions, acquireIssueLabels } from "../github/labels.ts";
 import { MissingDevelopBranchError, syncRepository as syncTargetRepository } from "../git/repositories.ts";
 import { eventRepository } from "../repositories/events.ts";
 import { jobRepository } from "../repositories/jobs.ts";
@@ -80,7 +80,7 @@ export function createScanService({
               await github.setIssueLabels(
                 fullName,
                 issue.number,
-                replaceWorkerLabels(issue.labels, config, [config.ISSUE_WORKING_LABEL]),
+                acquireIssueLabels(issue.labels, config),
               );
               await queue.enqueue(job.id);
               queuedCount += 1;

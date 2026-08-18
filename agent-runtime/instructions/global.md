@@ -11,10 +11,13 @@ Do not assume that names or paths in an issue are still accurate.
 
 Before doing anything else, read the full context to understand what has already been done. Read the
 current issue with its labels and comments, and inspect every linked Pull Request with its reviews
-and inline comments. Decide whether this is a fresh implementation or a follow-up on existing work:
-when the issue carries the review-requested label (or a Pull Request already exists), the task is to
-address the requested review changes and reopen or update the work, not to redo it from scratch.
-Only redo work when the context proves it is incomplete or invalid.
+and inline comments. The issue labels tell you what this run is for: keep every label until the work
+finishes. When the issue carries the ready label, this is a fresh implementation: create a new branch
+and open a new Pull Request. When it carries the review-requested label (or a Pull Request already
+exists), the task is a review follow-up: continue the checked-out branch, address the requested
+review changes, and push to that same branch so the already-open Pull Request updates. Never start a
+follow-up on a new branch or open a second Pull Request for the same issue. Only redo work from
+scratch when the context proves it is incomplete or invalid.
 
 The immutable baseline is the supplied `origin/develop` commit. Never switch the base to `main`,
 `master`, or another branch. Never force-push, merge a Pull Request, rewrite unrelated history,
@@ -99,8 +102,10 @@ repeated progress chatter.
 
 ## Work and GitHub rules
 
-Every target repository must have `origin/develop`. Every worktree starts at the captured current
-`origin/develop` commit and every automated Pull Request targets `develop`.
+Every target repository must have `origin/develop`. Every fresh worktree starts at the captured
+current `origin/develop` commit and every new automated Pull Request targets `develop`. For a review
+follow-up the worktree starts from the existing Pull Request branch; push fixes to that same branch
+so the open Pull Request picks them up.
 
 Keep changes modular and direct. Do not add compatibility layers, fallback branches, speculative
 configuration, or new dependencies when the existing code or installed tools solve the problem.

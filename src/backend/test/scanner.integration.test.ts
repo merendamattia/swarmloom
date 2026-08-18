@@ -16,6 +16,8 @@ integration("repository scan", () => {
   const scannedLabels: string[] = [];
   let issueNumber = 42;
   let labelFailure = false;
+  let freezeReadyList = false;
+  const reviewRequestedIssues: Array<{ number: number; labels: string[] }> = [];
   let firstScanId = "";
   let activeBranch = "";
   const config = parseConfig({
@@ -32,13 +34,24 @@ integration("repository scan", () => {
     getRepository: async (fullName: string) => ({ cloneUrl: `https://github.com/${fullName}.git` }),
     listReadyIssues: async (fullName: string, label: string) => {
       scannedLabels.push(label);
-      return fullName === "acme/app" && label === config.ISSUE_READY_LABEL ? [{
+      if (fullName !== "acme/app") return [];
+      if (label === config.ISSUE_REVIEW_REQUESTED_LABEL) {
+        return reviewRequestedIssues.map((issue) => ({
+          number: issue.number,
+          title: "Address the review",
+          body: "A review requested changes",
+          url: `https://github.com/acme/app/issues/${issue.number}`,
+          labels: issue.labels,
+        }));
+      }
+      if (label !== config.ISSUE_READY_LABEL || freezeReadyList) return [];
+      return [{
         number: issueNumber,
         title: "Make the queue durable",
         body: "Use PostgreSQL",
         url: `https://github.com/acme/app/issues/${issueNumber}`,
         labels: ["bug", "agent:ready"],
-      }] : [];
+      }];
     },
     setIssueLabels: async (repository: string, issue: number, nextLabels: string[]) => {
       if (labelFailure) throw new Error("GitHub labels unavailable");
@@ -210,5 +223,29 @@ integration("repository scan", () => {
       .toMatchObject({ status: "COMPLETED", successCount: 1, reviewsCount: 1 });
     expect(await prisma.jobEvent.findFirst({ where: { scanRunId: scan.id, type: "SCAN_COMPLETED" } }))
       .not.toBeNull();
+  });
+
+  test("acquiring a review retry keeps the review-requested label while working", async () => {
+    freezeReadyList = true;
+    reviewRequestedIssues.push({
+      number: 45,
+      labels: ["bug", config.ISSUE_REVIEW_REQUESTED_LABEL],
+    });
+    try {
+      const scanner = createScanService({ config: { ...config, APP_ENV: environment as "test" }, github, syncRepository: sync });
+      const scan = await scanner.run("MANUAL");
+      expect(scan.queuedCount).toBe(1);
+      expect(labels.at(-1)).toEqual({
+        repository: "acme/app",
+        issue: 45,
+        labels: ["bug", config.ISSUE_REVIEW_REQUESTED_LABEL, config.ISSUE_WORKING_LABEL],
+      });
+      expect(await prisma.job.findFirstOrThrow({ where: { environment, issueNumber: 45 } }))
+        .toMatchObject({ status: "QUEUED" });
+    } finally {
+      await prisma.job.deleteMany({ where: { environment, issueNumber: 45 } });
+      reviewRequestedIssues.length = 0;
+      freezeReadyList = false;
+    }
   });
 });
