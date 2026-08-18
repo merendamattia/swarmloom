@@ -14,6 +14,11 @@ export function createSharedServices(config: Config, queue: JobQueue) {
       chatId: config.TELEGRAM_CHAT_ID!,
       dashboardUrl: config.FRONTEND_URL,
     }).send(event),
+    sendQueued: (summary: Parameters<ReturnType<typeof createTelegramNotifier>["sendQueued"]>[0]) => createTelegramNotifier({
+      token: config.TELEGRAM_BOT_TOKEN!,
+      chatId: config.TELEGRAM_CHAT_ID!,
+      dashboardUrl: config.FRONTEND_URL,
+    }).sendQueued(summary),
   };
   const events = createEventService(notifier);
   const scanner = createScanService({ config, github, events, queue });

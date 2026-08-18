@@ -2,11 +2,8 @@ import { redactSecrets } from "../core/secrets.ts";
 import { eventRepository, type RecordEventInput } from "../repositories/events.ts";
 
 const notifiableTypes = new Set([
-  "SCAN_STARTED",
-  "SCAN_DISCOVERY_COMPLETED",
   "SCAN_FAILED",
   "JOB_STARTED",
-  "JOB_QUEUED",
   "JOB_COMPLETED",
   "JOB_FAILED",
   "JOB_BLOCKED",
@@ -18,12 +15,20 @@ const notifiableTypes = new Set([
   "GITHUB_RECONCILIATION_REQUIRED",
   "PR_OPENED",
   "REVIEW_COMPLETED",
-  "SCAN_COMPLETED",
   "TELEGRAM_TEST",
 ]);
 
+export type QueuedJobInfo = {
+  repository: string;
+  issueNumber: number;
+  issueTitle: string;
+  issueUrl?: string | null;
+  jobId?: string | null;
+};
+
 type EventNotifier = {
   send(event: Awaited<ReturnType<typeof eventRepository.create>>): Promise<void>;
+  sendQueued?(summary: { scanRunId: string; jobs: QueuedJobInfo[] }): Promise<void>;
   enabled?: () => boolean;
 };
 
@@ -41,6 +46,18 @@ export function createEventService(notifier?: EventNotifier) {
           redactSecrets(error instanceof Error ? error.message : String(error)),
         );
         return event;
+      }
+    },
+    async notifyQueuedSummary(scanRunId: string, jobs: QueuedJobInfo[]) {
+      if (!notifier?.sendQueued || notifier.enabled?.() === false || jobs.length === 0) return;
+      try {
+        await notifier.sendQueued({ scanRunId, jobs });
+        await eventRepository.markQueuedNotified(scanRunId);
+      } catch (error) {
+        await eventRepository.markQueuedNotificationFailed(
+          scanRunId,
+          redactSecrets(error instanceof Error ? error.message : String(error)),
+        );
       }
     },
   };

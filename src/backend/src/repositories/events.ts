@@ -24,4 +24,24 @@ async function markNotificationFailed(id: string, error: string) {
   return prisma.jobEvent.update({ where: { id }, data: { notificationError: error.slice(0, 2_000) } });
 }
 
-export const eventRepository = { create, markNotified, markNotificationFailed };
+async function markQueuedNotified(scanRunId: string) {
+  return prisma.jobEvent.updateMany({
+    where: { scanRunId, type: "JOB_QUEUED", notifiedAt: null },
+    data: { notifiedAt: new Date(), notificationError: null },
+  });
+}
+
+async function markQueuedNotificationFailed(scanRunId: string, error: string) {
+  return prisma.jobEvent.updateMany({
+    where: { scanRunId, type: "JOB_QUEUED", notifiedAt: null },
+    data: { notificationError: error.slice(0, 2_000) },
+  });
+}
+
+export const eventRepository = {
+  create,
+  markNotified,
+  markNotificationFailed,
+  markQueuedNotified,
+  markQueuedNotificationFailed,
+};
