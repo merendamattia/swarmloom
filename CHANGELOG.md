@@ -1,3 +1,11 @@
+# [1.3.0](https://github.com/merendamattia/swarmloom/compare/v1.2.0...v1.3.0) (2026-08-18)
+
+
+### Features
+
+* **frontend:** ship Swarmloom branding ([c6f6758](https://github.com/merendamattia/swarmloom/commit/c6f6758a025647f790224697210d5f2d45dee817))
+* **runner:** gate jobs on pull request checks ([ad4a726](https://github.com/merendamattia/swarmloom/commit/ad4a7265caf096160aaea2d8f88dac61fb239de8))
+
 # [1.2.0](https://github.com/merendamattia/swarmloom/compare/v1.1.1...v1.2.0) (2026-08-18)
 
 
