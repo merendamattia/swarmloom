@@ -1,3 +1,15 @@
+# [1.2.0](https://github.com/merendamattia/swarmloom/compare/v1.1.1...v1.2.0) (2026-08-18)
+
+
+### Bug Fixes
+
+* **overview:** remove Test Telegram from Recent scans ([54b073e](https://github.com/merendamattia/swarmloom/commit/54b073ee85ef7f364bce1a73d8dff3c175881978))
+
+
+### Features
+
+* **telegram:** enrich notifications with compact pull request details ([7efb706](https://github.com/merendamattia/swarmloom/commit/7efb706586b02d16c4b62da61e80c392fb75aea9))
+
 ## [1.1.1](https://github.com/merendamattia/swarmloom/compare/v1.1.0...v1.1.1) (2026-08-18)
 
 
