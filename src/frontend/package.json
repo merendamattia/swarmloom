@@ -1,5 +1,5 @@
 {
-  "name": "github-agent-worker-frontend",
+  "name": "swarmloom-frontend",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -13,7 +13,7 @@
   "dependencies": {
     "@tanstack/react-query": "^5.101.0",
     "hono": "^4.12.25",
-    "github-agent-worker-backend": "workspace:*",
+    "swarmloom-backend": "workspace:*",
     "lucide-react": "^1.18.0",
     "next": "16.2.9",
     "react": "19.2.4",

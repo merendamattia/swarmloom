@@ -8,8 +8,8 @@ x-app-environment: &app-environment
   GH_TOKEN: ${GITHUB_TOKEN:?GITHUB_TOKEN is required}
   GITHUB_REPOSITORIES: ${GITHUB_REPOSITORIES:?GITHUB_REPOSITORIES is required}
   GITHUB_API_URL: ${GITHUB_API_URL:-https://api.github.com}
-  GIT_AUTHOR_NAME: ${GIT_AUTHOR_NAME:-github-agent-worker}
-  GIT_AUTHOR_EMAIL: ${GIT_AUTHOR_EMAIL:-github-agent-worker@users.noreply.github.com}
+  GIT_AUTHOR_NAME: ${GIT_AUTHOR_NAME:-swarmloom}
+  GIT_AUTHOR_EMAIL: ${GIT_AUTHOR_EMAIL:-swarmloom@users.noreply.github.com}
   ISSUE_READY_LABEL: ${ISSUE_READY_LABEL:-agent:ready}
   ISSUE_WORKING_LABEL: ${ISSUE_WORKING_LABEL:-agent:working}
   ISSUE_BLOCKED_LABEL: ${ISSUE_BLOCKED_LABEL:-agent:blocked}
@@ -55,12 +55,12 @@ services:
         NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL is required}
         CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.147.0}
         OPENCODE_CLI_VERSION: ${OPENCODE_CLI_VERSION:-1.18.18}
-    image: github-agent-worker:production
+    image: swarmloom:production
     restart: unless-stopped
     environment:
       <<: *app-environment
       PORT: 18421
-    command: ["sh", "-c", "bun run db:deploy && bun run --filter github-agent-worker-backend start"]
+    command: ["sh", "-c", "bun run db:deploy && bun run --filter swarmloom-backend start"]
     ports: ["127.0.0.1:${BACKEND_PORT:-18421}:18421"]
     healthcheck:
       test: ["CMD", "bun", "-e", "const r=await fetch('http://localhost:18421/api/health');process.exit(r.ok?0:1)"]
@@ -70,10 +70,10 @@ services:
     volumes: *app-volumes
 
   worker:
-    image: github-agent-worker:production
+    image: swarmloom:production
     restart: unless-stopped
     environment: *app-environment
-    command: ["bun", "run", "--filter", "github-agent-worker-backend", "worker"]
+    command: ["bun", "run", "--filter", "swarmloom-backend", "worker"]
     depends_on:
       backend: {condition: service_healthy}
     healthcheck:
@@ -84,10 +84,10 @@ services:
     volumes: *app-volumes
 
   frontend:
-    image: github-agent-worker:production
+    image: swarmloom:production
     restart: unless-stopped
     environment: {NODE_ENV: production, PORT: 18420}
-    command: ["bun", "run", "--filter", "github-agent-worker-frontend", "start"]
+    command: ["bun", "run", "--filter", "swarmloom-frontend", "start"]
     ports: ["127.0.0.1:${FRONTEND_PORT:-18420}:18420"]
     depends_on: {backend: {condition: service_healthy}}
 

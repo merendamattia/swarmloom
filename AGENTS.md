@@ -1,4 +1,4 @@
-# GitHub Agent Worker instructions
+# Swarmloom instructions
 
 - Do not preserve backward compatibility. Remove obsolete paths instead of
 adding compatibility layers, fallbacks, or migrations.

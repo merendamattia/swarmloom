@@ -46,9 +46,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <ProviderAuthBanner />
       <header className="app-header">
         <div className="header-inner">
-          <Link href="/" className="brand" aria-label="GitHub Agent Worker overview">
+          <Link href="/" className="brand" aria-label="Swarmloom overview">
             <span className="brand-mark" aria-hidden="true"><Activity size={18} /></span>
-            <span className="brand-name">GitHub Agent Worker</span>
+            <span className="brand-name">Swarmloom</span>
           </Link>
           <nav className="primary-nav" aria-label="Primary navigation">
             {links.map(({ href, label, icon: Icon }) => {

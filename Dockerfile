@@ -79,4 +79,4 @@ RUN mkdir -p /data/codex-home /data/opencode-data /data/opencode-config \
 USER bun
 WORKDIR /app
 EXPOSE 18420 18421
-CMD ["bun", "run", "--filter", "github-agent-worker-backend", "start"]
+CMD ["bun", "run", "--filter", "swarmloom-backend", "start"]

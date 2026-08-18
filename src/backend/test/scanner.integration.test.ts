@@ -114,6 +114,14 @@ integration("repository scan", () => {
     });
     expect(await prisma.repository.findUniqueOrThrow({ where: { fullName: "acme/main-only" } }))
       .toMatchObject({ status: "INVALID", developAvailable: false });
+    expect((await prisma.jobEvent.findMany({
+      where: { scanRunId: scan.id },
+      select: { type: true },
+    })).map(({ type }) => type)).toEqual(expect.arrayContaining([
+      "SCAN_STARTED",
+      "JOB_QUEUED",
+      "SCAN_DISCOVERY_COMPLETED",
+    ]));
     expect(await prisma.jobEvent.findFirst({
       where: { repository: { fullName: "acme/main-only" }, type: "REPOSITORY_INVALID" },
     })).not.toBeNull();
@@ -146,6 +154,8 @@ integration("repository scan", () => {
       .toMatchObject({ status: "FAILED", activeIssueKey: null });
     expect(await prisma.jobEvent.findFirst({ where: { scanRunId: scan.id, type: "SCAN_COMPLETED" } }))
       .not.toBeNull();
+    expect(await prisma.jobEvent.findFirst({ where: { scanRunId: scan.id, type: "SCAN_DISCOVERY_COMPLETED" } }))
+      .toMatchObject({ metadata: { queuedCount: 0 } });
     labelFailure = false;
   });
 

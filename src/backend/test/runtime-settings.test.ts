@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { parseConfig } from "../src/core/config-schema.ts";
 import { decryptSetting, encryptSetting } from "../src/core/settings-crypto.ts";
-import { applyRuntimeSettings, parseRuntimeSettingsPatch } from "../src/core/runtime-settings.ts";
+import {
+  applyRuntimeSettings,
+  configEnvironment,
+  parseRuntimeSettingsPatch,
+  telegramBootstrapValues,
+} from "../src/core/runtime-settings.ts";
 
 const key = "test-settings-encryption-key-0123456789";
 const base = parseConfig({
-  DATABASE_URL: "postgresql://worker:worker@localhost:17432/github_agent_worker",
+  DATABASE_URL: "postgresql://worker:worker@localhost:17432/swarmloom",
   REDIS_URL: "redis://localhost:18422",
   SETTINGS_ENCRYPTION_KEY: key,
   GITHUB_TOKEN: "test-token",
@@ -42,5 +47,23 @@ describe("runtime settings", () => {
 
     expect(encrypted).not.toContain("bot-token");
     expect(decryptSetting(encrypted, key)).toBe("bot-token");
+  });
+
+  test("bootstraps Telegram env values until Settings has credentials", () => {
+    const telegramConfig = parseConfig({
+      ...configEnvironment(base),
+      TELEGRAM_ENABLED: "true",
+      TELEGRAM_BOT_TOKEN: "bot-token",
+      TELEGRAM_CHAT_ID: "123",
+    });
+
+    expect(telegramBootstrapValues(telegramConfig, [])).toEqual({
+      TELEGRAM_ENABLED: "true",
+      TELEGRAM_BOT_TOKEN: "bot-token",
+      TELEGRAM_CHAT_ID: "123",
+    });
+    expect(telegramBootstrapValues(telegramConfig, [
+      { key: "TELEGRAM_BOT_TOKEN", value: "encrypted-token" },
+    ])).toEqual({});
   });
 });

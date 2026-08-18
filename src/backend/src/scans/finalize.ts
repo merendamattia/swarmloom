@@ -22,6 +22,7 @@ export async function finishScanIfComplete(
       decomposed: scan.decomposedCount,
       pullRequests: scan.pullRequestsCount,
       reviews: scan.reviewsCount,
+      queued: scan.queuedCount,
       queueRemaining: scan.queueRemaining,
       durationMs: scan.durationMs,
     },

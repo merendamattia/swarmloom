@@ -82,7 +82,7 @@ export function createJobRunner({
         jobId: job.id,
         repositoryId: job.repositoryId,
         scanRunId: job.scanRunId ?? undefined,
-        metadata: { provider: provider.name, model: job.model },
+        metadata: { issueUrl: job.issueUrl, provider: provider.name, model: job.model },
       });
 
       const implementation = await executeRole(
@@ -131,7 +131,13 @@ export function createJobRunner({
             jobId: job.id,
             repositoryId: job.repositoryId,
             scanRunId: job.scanRunId ?? undefined,
-            metadata: { provider: provider.name, model: job.model, review: review.verdict },
+            metadata: {
+              issueUrl: job.issueUrl,
+              pullRequestUrl,
+              provider: provider.name,
+              model: job.model,
+              review: review.verdict,
+            },
           });
           await finalizeIssue(job, [config.ISSUE_COMPLETED_LABEL],
             `Implemented in ${pullRequestUrl}. Automated review: **${review.verdict}** — ${review.summary}`);
@@ -224,6 +230,18 @@ export function createJobRunner({
         && !pullRequest.body.includes(currentJob.issueUrl)) {
         throw new Error(`PR #${pullRequest.number} is not linked to issue #${currentJob.issueNumber}`);
       }
+      await events.record({
+        type: "PR_OPENED",
+        message: `Opened PR #${pullRequest.number} for ${currentJob.repository.fullName}#${currentJob.issueNumber}`,
+        jobId: currentJob.id,
+        repositoryId: currentJob.repositoryId,
+        scanRunId: currentJob.scanRunId ?? undefined,
+        metadata: {
+          issueUrl: currentJob.issueUrl,
+          pullRequestUrl: pullRequest.url,
+          pullRequestNumber: pullRequest.number,
+        },
+      });
       const diff = await github.getPullRequestDiff(currentJob.repository.fullName, outcome.pr.number);
       const reviewRow = await reviewRepository.start(
         currentJob.id,
@@ -258,7 +276,12 @@ export function createJobRunner({
           jobId: currentJob.id,
           repositoryId: currentJob.repositoryId,
           scanRunId: currentJob.scanRunId ?? undefined,
-          metadata: { verdict: review.verdict, findings: review.findings.length },
+          metadata: {
+            issueUrl: currentJob.issueUrl,
+            pullRequestUrl: pullRequest.url,
+            verdict: review.verdict,
+            findings: review.findings.length,
+          },
         });
         return { review, pullRequestUrl: pullRequest.url };
       } catch (error) {
@@ -284,6 +307,7 @@ export function createJobRunner({
           jobId: currentJob.id,
           repositoryId: currentJob.repositoryId,
           scanRunId: currentJob.scanRunId ?? undefined,
+          metadata: { issueUrl: currentJob.issueUrl },
         });
       }
     }
@@ -303,6 +327,7 @@ export function createJobRunner({
           jobId: (job as RunningJob).id,
           repositoryId: (job as RunningJob).repositoryId,
           scanRunId: (job as RunningJob).scanRunId ?? undefined,
+          metadata: { issueUrl: (job as RunningJob).issueUrl },
         });
       }
     }
@@ -336,7 +361,7 @@ function issueContext(job: {
 }
 
 function terminalEvent(
-  job: { id: string; repositoryId: string; scanRunId: string | null },
+  job: { id: string; repositoryId: string; scanRunId: string | null; issueUrl: string },
   type: string,
   message: string,
 ) {
@@ -346,6 +371,7 @@ function terminalEvent(
     jobId: job.id,
     repositoryId: job.repositoryId,
     scanRunId: job.scanRunId ?? undefined,
+    metadata: { issueUrl: job.issueUrl },
   };
 }
 

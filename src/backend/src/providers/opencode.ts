@@ -20,7 +20,7 @@ function event(type: NonNullable<NormalizedProviderEvent["event"]>["type"], fiel
 export function buildOpenCodeCommand(request: AgentRequest) {
   return [
     "opencode", "run", "--format", "json", "--model", request.model,
-    "--dir", request.workingDirectory, "--title", `GitHub Agent Worker: ${request.role}`,
+    "--dir", request.workingDirectory, "--title", `Swarmloom: ${request.role}`,
   ];
 }
 

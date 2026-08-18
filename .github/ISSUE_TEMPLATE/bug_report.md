@@ -11,7 +11,7 @@ assignees: merendamattia
 A clear and concise description of what the bug is.
 
 **Reproducibility information**
-Report the version (or the commit hash) to identify the point in time where this bug happens. Try to refer to commits already present on the master branch if possible.
+Report the version (or the commit hash) to identify the point in time where this bug happens. Try to refer to commits already present on the main branch if possible.
 
 **Expected behavior**
 Describe what is expected to happen (output, logs, exceptions, ...).

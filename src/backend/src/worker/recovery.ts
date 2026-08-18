@@ -19,6 +19,7 @@ export async function recoverStaleJobs(config: Config, github: GitHubClient, eve
       jobId: job.id,
       repositoryId: job.repositoryId,
       scanRunId: job.scanRunId ?? undefined,
+      metadata: { issueUrl: job.issueUrl },
     });
     try {
       const issue = await github.getIssue(job.repository.fullName, job.issueNumber);
@@ -39,6 +40,7 @@ export async function recoverStaleJobs(config: Config, github: GitHubClient, eve
         message: `Could not reconcile stale ${job.repository.fullName}#${job.issueNumber}: ${redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
         jobId: job.id,
         repositoryId: job.repositoryId,
+        metadata: { issueUrl: job.issueUrl },
       });
     }
   }

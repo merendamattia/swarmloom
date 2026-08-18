@@ -12,12 +12,12 @@ jobs:
       postgres:
         image: postgres:17-alpine
         env:
-          POSTGRES_DB: github_agent_worker
+          POSTGRES_DB: swarmloom
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U postgres -d github_agent_worker"
+          --health-cmd "pg_isready -U postgres -d swarmloom"
           --health-interval 5s --health-timeout 5s --health-retries 20
       redis:
         image: redis:7-alpine
@@ -29,7 +29,7 @@ jobs:
       APP_ENV: test
       NODE_ENV: test
       RUN_INTEGRATION: "1"
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/github_agent_worker
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/swarmloom
       REDIS_URL: redis://localhost:6379
       SETTINGS_ENCRYPTION_KEY: test-settings-encryption-key-0123456789
       GITHUB_TOKEN: test-token

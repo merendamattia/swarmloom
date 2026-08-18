@@ -224,6 +224,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         jobId: job.id,
         repositoryId: job.repositoryId,
         scanRunId: job.scanRunId ?? undefined,
+        metadata: { issueUrl: job.issueUrl },
       });
       await reconcileIssue(job, [], "Worker job cancelled by an operator.");
       await finishScanIfComplete(job.scanRunId, job.environment, events);
@@ -246,6 +247,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         message: `Retry requested for ${job.repository.fullName}#${job.issueNumber}`,
         jobId: job.id,
         repositoryId: job.repositoryId,
+        metadata: { issueUrl: job.issueUrl },
       });
       const scan = await scanner.run("MANUAL");
       return context.json({ scanId: scan.id, scanStatus: scan.status }, 202);
@@ -266,14 +268,14 @@ export function createApp({ config, scanner, github, events, startup, queue, set
     })
     .post("/notifications/test", async (context) => {
       if (!config.TELEGRAM_ENABLED) return context.json({ error: "Telegram is disabled" }, 409);
-      const event = await events.record({ type: "TELEGRAM_TEST", message: "GitHub Agent Worker test notification" });
+      const event = await events.record({ type: "TELEGRAM_TEST", message: "Swarmloom test notification" });
       return event.notificationError
         ? context.json({ error: event.notificationError }, 502)
         : context.json({ status: "sent" });
     });
 
   async function reconcileIssue(
-    job: { issueNumber: number; repository: { fullName: string }; id: string; repositoryId: string },
+    job: { issueNumber: number; issueUrl: string; repository: { fullName: string }; id: string; repositoryId: string },
     labels: string[],
     comment: string,
   ) {
@@ -293,6 +295,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         message: `Could not update ${job.repository.fullName}#${job.issueNumber}: ${redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
         jobId: job.id,
         repositoryId: job.repositoryId,
+        metadata: { issueUrl: job.issueUrl },
       });
       return false;
     }

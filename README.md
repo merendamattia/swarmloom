@@ -1,6 +1,6 @@
-# GitHub Agent Worker
+# Swarmloom
 
-GitHub Agent Worker is a Dockerized TypeScript application that turns ready-labelled GitHub issues
+Swarmloom is a Dockerized TypeScript application that turns ready-labelled GitHub issues
 into BullMQ jobs, runs them through interchangeable Codex or OpenCode sessions, opens
 Pull Requests to mandatory `develop`, and performs an independent automated review.
 
@@ -34,7 +34,7 @@ pre-commit run --all-files
 Pull requests target `develop` and use the commit types in `git-conventional-commits.yaml`.
 Before a commit, run `scripts/verify-before-commit.sh` (or
 `/usr/local/bin/verify-before-commit` inside the application containers); it runs pre-commit,
-typecheck, lint, and tests. Pushes to `main` or `master` run Semantic Release.
+typecheck, lint, and tests. Pushes to `main` run Semantic Release.
 
 ## Run locally
 
@@ -138,8 +138,8 @@ The recommended boundary is a Linux VPS with Docker/Compose and SSH access. Put 
 private Git repository, then on the server:
 
 ```bash
-git clone YOUR_PRIVATE_REPOSITORY_URL github-agent-worker
-cd github-agent-worker
+git clone YOUR_PRIVATE_REPOSITORY_URL swarmloom
+cd swarmloom
 cp .env.production.example .env.production
 chmod 600 .env.production
 ```
