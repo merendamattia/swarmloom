@@ -266,7 +266,7 @@ export function createJobRunner({
       abortSignal: AbortSignal,
       currentJob: RunningJob,
     ): Promise<Awaited<ReturnType<typeof executeRole>>> {
-      const guidance = `\n\nYour previous response was not accepted: the response file must begin with a recognized outcome line. Start it with exactly one of "Outcome: implemented", "Outcome: blocked", "Outcome: decomposed", or "Outcome: requires_decomposition".`;
+      let guidance: string | undefined;
       for (let attempt = 0; ; attempt++) {
         const result = await executeRole(role, task, attempt === 0 ? context : `${context}${guidance}`, workingDirectory, abortSignal, currentJob);
         if (result.exitCode !== 0) return result;
@@ -275,6 +275,7 @@ export function createJobRunner({
           return result;
         } catch (error) {
           if (attempt >= 1) throw error;
+          guidance = `\n\nYour previous response was not accepted: ${error instanceof Error ? error.message : String(error)}`;
         }
       }
     }
