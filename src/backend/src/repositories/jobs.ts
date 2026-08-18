@@ -16,6 +16,13 @@ export type QueuedJobInput = {
   reasoningEffort?: string;
 };
 
+export type BlockedByInput = {
+  blockedByIssueNumber: number;
+  blockedByIssueTitle: string;
+  blockedByIssueUrl: string;
+  blockedReason: string;
+};
+
 async function tryCreateQueued(input: QueuedJobInput) {
   const id = crypto.randomUUID();
   const [job] = await prisma.$queryRaw<Job[]>`
@@ -33,6 +40,61 @@ async function tryCreateQueued(input: QueuedJobInput) {
     RETURNING *
   `;
   return job ?? null;
+}
+
+async function tryCreateDeferred(input: QueuedJobInput & BlockedByInput) {
+  const id = crypto.randomUUID();
+  const [job] = await prisma.$queryRaw<Job[]>`
+    INSERT INTO "job" (
+      "id", "queueJobId", "repositoryId", "scanRunId", "environment", "issueNumber", "issueTitle", "issueUrl", "issueBody",
+      "branchName", "baselineCommit", "provider", "model", "reasoningEffort", "activeIssueKey", "status",
+      "blockedByIssueNumber", "blockedByIssueTitle", "blockedByIssueUrl", "blockedReason",
+      "updatedAt"
+    ) VALUES (
+      ${id}, ${id}, ${input.repositoryId}, ${input.scanRunId ?? null}, ${input.environment}, ${input.issueNumber},
+      ${input.issueTitle}, ${input.issueUrl}, ${input.issueBody}, ${input.branchName},
+      ${input.baselineCommit}, ${input.provider}::"AgentProvider", ${input.model},
+      ${input.reasoningEffort ?? null}, ${`${input.repositoryId}:${input.issueNumber}`}, 'DEFERRED'::"JobStatus",
+      ${input.blockedByIssueNumber}, ${input.blockedByIssueTitle}, ${input.blockedByIssueUrl}, ${input.blockedReason},
+      CURRENT_TIMESTAMP
+    )
+    ON CONFLICT ("activeIssueKey") DO NOTHING
+    RETURNING *
+  `;
+  return job ?? null;
+}
+
+async function promoteDeferred(activeIssueKey: string) {
+  const [job] = await prisma.$queryRaw<Job[]>`
+    UPDATE "job"
+    SET "status" = 'QUEUED'::"JobStatus",
+        "queuedAt" = CURRENT_TIMESTAMP,
+        "blockedByIssueNumber" = NULL,
+        "blockedByIssueTitle" = NULL,
+        "blockedByIssueUrl" = NULL,
+        "blockedReason" = NULL,
+        "updatedAt" = CURRENT_TIMESTAMP
+    WHERE "activeIssueKey" = ${activeIssueKey}
+      AND "status" = 'DEFERRED'::"JobStatus"
+    RETURNING *
+  `;
+  return job ?? null;
+}
+
+async function deferRunning(id: string, blocker: BlockedByInput) {
+  const updated = await prisma.job.updateMany({
+    where: { id, status: "RUNNING" },
+    data: {
+      status: "DEFERRED",
+      workerId: null,
+      heartbeatAt: null,
+      blockedByIssueNumber: blocker.blockedByIssueNumber,
+      blockedByIssueTitle: blocker.blockedByIssueTitle,
+      blockedByIssueUrl: blocker.blockedByIssueUrl,
+      blockedReason: blocker.blockedReason,
+    },
+  });
+  return updated.count === 1;
 }
 
 async function claim(id: string, environment: string, workerId: string) {
@@ -175,6 +237,9 @@ async function failQueued(id: string, errorMessage: string) {
 
 export const jobRepository = {
   tryCreateQueued,
+  tryCreateDeferred,
+  promoteDeferred,
+  deferRunning,
   claim,
   complete,
   cancel,

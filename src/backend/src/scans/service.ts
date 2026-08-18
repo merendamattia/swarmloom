@@ -2,6 +2,7 @@ import type { Config } from "../core/config-schema.ts";
 import { redactSecrets } from "../core/secrets.ts";
 import type { EventService } from "../events/service.ts";
 import type { GitHubClient } from "../github/client.ts";
+import { dependencyStatus } from "../github/dependencies.ts";
 import { githubGitEnvironment } from "../github/git-auth.ts";
 import { agentLabelDefinitions, replaceWorkerLabels } from "../github/labels.ts";
 import { MissingDevelopBranchError, syncRepository as syncTargetRepository } from "../git/repositories.ts";
@@ -17,7 +18,7 @@ type SyncRepository = typeof syncTargetRepository;
 
 type ScanServiceDependencies = {
   config: Config;
-  github: Pick<GitHubClient, "getRepository" | "listReadyIssues" | "setIssueLabels"> &
+  github: Pick<GitHubClient, "getRepository" | "listReadyIssues" | "getParentIssue" | "setIssueLabels"> &
     Partial<Pick<GitHubClient, "ensureLabels">>;
   events?: EventService;
   queue?: Pick<JobQueue, "enqueue">;
@@ -58,7 +59,42 @@ export function createScanService({
           await github.ensureLabels?.(fullName, agentLabelDefinitions(config));
           const issues = await github.listReadyIssues(fullName, config.ISSUE_READY_LABEL);
           for (const issue of issues) {
-            const job = await jobRepository.tryCreateQueued({
+            const parent = await github.getParentIssue(fullName, issue.number);
+            if (parent) {
+              const dependency = dependencyStatus(parent);
+              if (!dependency.satisfied) {
+                const deferred = await jobRepository.tryCreateDeferred({
+                  repositoryId: repository.id,
+                  scanRunId: scan.id,
+                  environment: config.APP_ENV,
+                  issueNumber: issue.number,
+                  issueTitle: issue.title,
+                  issueUrl: issue.url,
+                  issueBody: issue.body,
+                  branchName: `agent/issue-${issue.number}-${crypto.randomUUID().slice(0, 8)}`,
+                  baselineCommit: synced.baselineCommit,
+                  provider: agent.provider,
+                  model: agent.model,
+                  reasoningEffort: agent.reasoningEffort,
+                  blockedByIssueNumber: parent.number,
+                  blockedByIssueTitle: parent.title,
+                  blockedByIssueUrl: parent.url,
+                  blockedReason: dependency.reason,
+                });
+                if (deferred) {
+                  await events.record({
+                    type: "JOB_DEFERRED",
+                    message: `Deferred ${fullName}#${issue.number} until prerequisite ${fullName}#${parent.number} is implemented`,
+                    jobId: deferred.id,
+                    repositoryId: repository.id,
+                    scanRunId: scan.id,
+                    metadata: { issueUrl: issue.url, blockedByIssueNumber: parent.number, blockedByIssueUrl: parent.url },
+                  });
+                }
+                continue;
+              }
+            }
+            let job = await jobRepository.tryCreateQueued({
               repositoryId: repository.id,
               scanRunId: scan.id,
               environment: config.APP_ENV,
@@ -72,6 +108,7 @@ export function createScanService({
               model: agent.model,
               reasoningEffort: agent.reasoningEffort,
             });
+            if (!job) job = await jobRepository.promoteDeferred(`${repository.id}:${issue.number}`);
             if (!job) continue;
             try {
               await github.setIssueLabels(

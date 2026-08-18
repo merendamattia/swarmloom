@@ -159,6 +159,37 @@ integration("job runner", () => {
     expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("CANCELLED");
   });
 
+  test("re-defers a claimed job when its prerequisite is reopened before execution", async () => {
+    const job = await claimed(issueBase + 6);
+    const provider = new FakeProvider([]);
+    const runner = createJobRunner({
+      config,
+      provider,
+      github: {
+        ...fakeGitHub(job.issueNumber, job.branchName),
+        getParentIssue: async () => ({
+          number: 3,
+          title: "Foundation",
+          url: "https://github.com/acme/runner/issues/3",
+          state: "open",
+          stateReason: "reopened",
+        }),
+      },
+      createWorktree: async (input) => input.worktreePath,
+    });
+
+    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(provider.calls).toHaveLength(0);
+    const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(stored).toMatchObject({
+      status: "DEFERRED",
+      blockedByIssueNumber: 3,
+      blockedReason: "Waiting for prerequisite issue #3 to be implemented",
+    });
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "JOB_DEFERRED" } }))
+      .not.toBeNull();
+  });
+
   async function claimed(issueNumber: number) {
     const queued = await jobs.tryCreateQueued({
       repositoryId,
@@ -206,6 +237,7 @@ function fakeGitHub(issueNumber: number, branchName: string) {
     async getIssue() {
       return { number: issueNumber, title: "Issue", body: "Body", url: "https://github.com/acme/runner/issues/1", labels: [...state.labels] };
     },
+    async getParentIssue() { return null; },
     async getPullRequest(_fullName: string, number: number) {
       return {
         number,

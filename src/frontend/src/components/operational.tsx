@@ -31,6 +31,7 @@ const states: Record<string, { tone: Tone; icon: LucideIcon }> = {
   INVALID: { tone: "danger", icon: CircleX },
   STALE: { tone: "danger", icon: CircleAlert },
   BLOCKED: { tone: "warning", icon: TriangleAlert },
+  DEFERRED: { tone: "warning", icon: TriangleAlert },
   CHANGES_REQUESTED: { tone: "warning", icon: TriangleAlert },
   DECOMPOSED: { tone: "neutral", icon: Split },
   REQUIRES_DECOMPOSITION: { tone: "warning", icon: TriangleAlert },

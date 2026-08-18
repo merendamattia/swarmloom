@@ -10,6 +10,7 @@ const notifiableTypes = new Set([
   "JOB_COMPLETED",
   "JOB_FAILED",
   "JOB_BLOCKED",
+  "JOB_DEFERRED",
   "JOB_DECOMPOSED",
   "JOB_CANCELLED",
   "JOB_RETRY_REQUESTED",

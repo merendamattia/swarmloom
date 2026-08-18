@@ -34,7 +34,7 @@ type Dependencies = {
 };
 
 const jobQuery = z.object({
-  status: z.enum(["QUEUED", "RUNNING", "COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"]).optional(),
+  status: z.enum(["QUEUED", "RUNNING", "COMPLETED", "FAILED", "BLOCKED", "DEFERRED", "DECOMPOSED", "CANCELLED", "STALE"]).optional(),
   provider: z.enum(["CODEX", "OPENCODE"]).optional(),
   repositoryId: z.string().optional(),
   q: z.string().trim().min(1).max(100).optional(),

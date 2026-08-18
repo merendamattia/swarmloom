@@ -76,6 +76,8 @@ export default function JobPage() {
 
       {data.errorMessage ? <div className="notice" role="alert"><CircleAlert size={20} aria-hidden="true" /><div><strong>The job requires attention</strong><p>{data.errorMessage}</p></div></div> : null}
 
+      <BlockedByNotice data={data} />
+
       <div className="detail-grid">
         <div className="detail-main">
           <section className="panel">
@@ -129,6 +131,19 @@ export default function JobPage() {
         </aside>
       </div>
     </>
+  );
+}
+
+function BlockedByNotice({ data }: { data: Job }) {
+  if (data.status !== "DEFERRED" || !data.blockedByIssueNumber || !data.blockedByIssueUrl) return null;
+  return (
+    <div className="notice" role="status">
+      <CircleAlert size={20} aria-hidden="true" />
+      <div>
+        <strong>Deferred pending prerequisite</strong>
+        <p>This job waits on <a className="text-link" href={data.blockedByIssueUrl} target="_blank" rel="noreferrer">{data.repository.fullName} #{data.blockedByIssueNumber}</a> — {data.blockedByIssueTitle}. {data.blockedReason}</p>
+      </div>
+    </div>
   );
 }
 

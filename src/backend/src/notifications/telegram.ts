@@ -27,6 +27,7 @@ const eventTitles: Record<string, [string, string]> = {
   JOB_COMPLETED: ["✅", "Job completed"],
   JOB_FAILED: ["❌", "Job failed"],
   JOB_BLOCKED: ["⛔", "Job blocked"],
+  JOB_DEFERRED: ["⏳", "Job deferred"],
   JOB_DECOMPOSED: ["🧩", "Job decomposed"],
   JOB_CANCELLED: ["🛑", "Job cancelled"],
   JOB_RETRY_REQUESTED: ["🔁", "Job retry requested"],

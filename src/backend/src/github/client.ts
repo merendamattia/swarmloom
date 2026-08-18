@@ -9,6 +9,14 @@ const issueSchema = z.object({
   pull_request: z.unknown().optional(),
 });
 
+const parentIssueSchema = z.object({
+  number: z.number().int().positive(),
+  title: z.string(),
+  html_url: z.url(),
+  state: z.string(),
+  state_reason: z.string().nullable().optional(),
+});
+
 const repositorySchema = z.object({ clone_url: z.url() });
 const labelSchema = z.object({ name: z.string(), color: z.string().optional(), description: z.string().nullable().optional() });
 const pullRequestSchema = z.object({
@@ -133,6 +141,24 @@ export function createGitHubClient(options: GitHubClientOptions) {
     };
   }
 
+  async function getParentIssue(fullName: string, issueNumber: number) {
+    let response: unknown;
+    try {
+      response = await request(`/repos/${fullName}/issues/${issueNumber}/parent`);
+    } catch (error) {
+      if (isResourceMissing(error)) return null;
+      throw error;
+    }
+    const parent = parentIssueSchema.parse(response);
+    return {
+      number: parent.number,
+      title: parent.title,
+      url: parent.html_url,
+      state: parent.state,
+      stateReason: parent.state_reason ?? null,
+    };
+  }
+
   async function getPullRequest(fullName: string, pullRequestNumber: number) {
     const pullRequest = pullRequestSchema.parse(
       await request(`/repos/${fullName}/pulls/${pullRequestNumber}`),
@@ -171,6 +197,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
     ensureLabels,
     listReadyIssues,
     getIssue,
+    getParentIssue,
     getPullRequest,
     getPullRequestDiff,
     setIssueLabels,
@@ -178,8 +205,22 @@ export function createGitHubClient(options: GitHubClientOptions) {
   };
 }
 
+function isResourceMissing(error: unknown) {
+  return error instanceof Error
+    && (error.message.includes("GitHub API request failed (404)")
+      || error.message.includes("GitHub API request failed (410)"));
+}
+
 function isUnprocessableEntity(error: unknown) {
   return error instanceof Error && error.message.includes("GitHub API request failed (422)");
 }
+
+export type ParentIssue = {
+  number: number;
+  title: string;
+  url: string;
+  state: string;
+  stateReason: string | null;
+};
 
 export type GitHubClient = ReturnType<typeof createGitHubClient>;

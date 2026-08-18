@@ -17,6 +17,7 @@ integration("repository scan", () => {
   let labelFailure = false;
   let firstScanId = "";
   let activeBranch = "";
+  let parentIssue: { state: string; stateReason: string | null } | null = null;
   const config = parseConfig({
     DATABASE_URL: process.env.DATABASE_URL ?? "postgresql://unused:unused@localhost:5432/unused",
     REDIS_URL: process.env.REDIS_URL ?? "redis://localhost:18422",
@@ -40,6 +41,15 @@ integration("repository scan", () => {
       if (labelFailure) throw new Error("GitHub labels unavailable");
       labels.push({ repository, issue, labels: nextLabels });
     },
+    getParentIssue: async () => parentIssue
+      ? {
+        number: 5,
+        title: "Foundation first",
+        url: "https://github.com/acme/app/issues/5",
+        state: parentIssue.state,
+        stateReason: parentIssue.stateReason,
+      }
+      : null,
     getIssue: async () => ({ number: issueNumber, title: "Issue", body: "", url: "https://github.com/acme/app/issues/1", labels: ["agent:working"] }),
     getPullRequest: async (_repository: string, number: number) => ({
       number,
@@ -199,6 +209,38 @@ integration("repository scan", () => {
     expect(await prisma.scanRun.findUniqueOrThrow({ where: { id: scan.id } }))
       .toMatchObject({ status: "COMPLETED", successCount: 1, reviewsCount: 1 });
     expect(await prisma.jobEvent.findFirst({ where: { scanRunId: scan.id, type: "SCAN_COMPLETED" } }))
+      .not.toBeNull();
+  });
+
+  test("defers a ready child until its prerequisite parent is implemented", async () => {
+    issueNumber = 45;
+    parentIssue = { state: "open", stateReason: null };
+    const scanner = createScanService({ config: { ...config, APP_ENV: environment as "test" }, github, syncRepository: sync });
+    const scan = await scanner.run("MANUAL");
+
+    expect(scan).toMatchObject({ status: "COMPLETED", queuedCount: 0 });
+    const deferred = await prisma.job.findFirstOrThrow({ where: { environment, issueNumber: 45 } });
+    expect(deferred).toMatchObject({ status: "DEFERRED", blockedByIssueNumber: 5, blockedReason: "Waiting for prerequisite issue #5 to be implemented" });
+    expect(await prisma.jobEvent.findFirst({ where: { scanRunId: scan.id, type: "JOB_DEFERRED" } }))
+      .toMatchObject({ metadata: { issueUrl: `https://github.com/acme/app/issues/45`, blockedByIssueNumber: 5 } });
+  });
+
+  test("promotes a deferred child once the parent is closed", async () => {
+    const deferred = await prisma.job.findFirstOrThrow({ where: { environment, issueNumber: 45 } });
+    parentIssue = null;
+    const scanner = createScanService({
+      config: { ...config, APP_ENV: environment as "test" },
+      github,
+      queue: { enqueue: async (jobId) => { enqueuedJobs.push(jobId); } },
+      syncRepository: sync,
+    });
+    const scan = await scanner.run("MANUAL");
+
+    expect(scan.queuedCount).toBe(1);
+    expect(enqueuedJobs).toContain(deferred.id);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: deferred.id } }))
+      .toMatchObject({ status: "QUEUED", blockedByIssueNumber: null });
+    expect(await prisma.jobEvent.findFirst({ where: { scanRunId: scan.id, type: "JOB_QUEUED" } }))
       .not.toBeNull();
   });
 });

@@ -6,7 +6,7 @@ import { JobTable, PageError, PageHeader, PageSkeleton, SectionHeading } from "@
 import { type JobFilters, useJobs, useRepositories } from "@/hooks/api";
 
 const initialFilters: JobFilters = { page: 1, pageSize: 25 };
-const statuses = ["QUEUED", "RUNNING", "COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"];
+const statuses = ["QUEUED", "RUNNING", "COMPLETED", "FAILED", "BLOCKED", "DEFERRED", "DECOMPOSED", "CANCELLED", "STALE"];
 
 export default function JobsPage() {
   const [filters, setFilters] = useState<JobFilters>(initialFilters);

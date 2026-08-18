@@ -19,6 +19,7 @@ enum JobStatus {
   COMPLETED
   FAILED
   BLOCKED
+  DEFERRED
   DECOMPOSED
   CANCELLED
   STALE
@@ -84,6 +85,10 @@ model Job {
   issueTitle              String
   issueUrl                String
   issueBody               String        @db.Text
+  blockedByIssueNumber    Int?
+  blockedByIssueTitle     String?
+  blockedByIssueUrl       String?
+  blockedReason           String?       @db.Text
   environment             String
   status                   JobStatus     @default(QUEUED)
   activeIssueKey          String?       @unique

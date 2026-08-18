@@ -5,18 +5,19 @@ import { redactSecrets } from "../core/secrets.ts";
 import type { EventService } from "../events/service.ts";
 import { createJobWorktree as createTargetWorktree } from "../git/repositories.ts";
 import type { GitHubClient } from "../github/client.ts";
+import { dependencyStatus } from "../github/dependencies.ts";
 import { githubGitEnvironment } from "../github/git-auth.ts";
 import { replaceWorkerLabels } from "../github/labels.ts";
 import type { AgentProvider, AgentRole } from "../providers/index.ts";
 import { eventRepository } from "../repositories/events.ts";
-import { jobRepository } from "../repositories/jobs.ts";
+import { jobRepository, type BlockedByInput } from "../repositories/jobs.ts";
 import { reviewRepository } from "../repositories/reviews.ts";
 import { loadAgentInstructions, resultSchemaPath } from "../runtime/instructions.ts";
 import { finishScanIfComplete } from "../scans/finalize.ts";
 import { parseJobOutcome, parseReviewOutcome, type JobOutcome, type ReviewOutcome } from "./outcomes.ts";
 
 type RunnerGitHub = Pick<GitHubClient,
-  "getIssue" | "getPullRequest" | "getPullRequestDiff" | "setIssueLabels" | "addIssueComment">;
+  "getIssue" | "getParentIssue" | "getPullRequest" | "getPullRequestDiff" | "setIssueLabels" | "addIssueComment">;
 
 type CreateWorktree = typeof createTargetWorktree;
 type RunningJob = NonNullable<Awaited<ReturnType<typeof jobRepository.findRunning>>>;
@@ -66,6 +67,25 @@ export function createJobRunner({
 
     let reachedTerminalState = false;
     try {
+      const dependency = await unresolvedDependency(job);
+      if (dependency) {
+        reachedTerminalState = await jobRepository.deferRunning(job.id, dependency);
+        if (reachedTerminalState) {
+          await events.record({
+            type: "JOB_DEFERRED",
+            message: `Deferred ${job.repository.fullName}#${job.issueNumber} until prerequisite ${job.repository.fullName}#${dependency.blockedByIssueNumber} is implemented`,
+            jobId: job.id,
+            repositoryId: job.repositoryId,
+            scanRunId: job.scanRunId ?? undefined,
+            metadata: {
+              issueUrl: job.issueUrl,
+              blockedByIssueNumber: dependency.blockedByIssueNumber,
+              blockedByIssueUrl: dependency.blockedByIssueUrl,
+            },
+          });
+        }
+        return reachedTerminalState;
+      }
       if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
       const worktreePath = safeWorktreePath(config.DATA_DIR, job.id);
       await createWorktree({
@@ -182,6 +202,19 @@ export function createJobRunner({
       await finishScanIfComplete(job.scanRunId, job.environment, events);
     }
     return reachedTerminalState;
+
+    async function unresolvedDependency(currentJob: RunningJob): Promise<BlockedByInput | null> {
+      const parent = await github.getParentIssue(currentJob.repository.fullName, currentJob.issueNumber);
+      if (!parent) return null;
+      const status = dependencyStatus(parent);
+      if (status.satisfied) return null;
+      return {
+        blockedByIssueNumber: parent.number,
+        blockedByIssueTitle: parent.title,
+        blockedByIssueUrl: parent.url,
+        blockedReason: status.reason,
+      };
+    }
 
     async function executeRole(
       role: AgentRole,

@@ -92,6 +92,56 @@ describe("GitHub client", () => {
     expect(await client.getPullRequestDiff("acme/app", 9)).toStartWith("diff --git");
   });
 
+  test("returns the parent issue of a sub-issue and null when none exists", async () => {
+    const requests: Request[] = [];
+    const client = createGitHubClient({
+      token: "secret-token",
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        requests.push(request);
+        if (request.url.endsWith("/issues/8/parent")) return new Response("not found", { status: 404 });
+        return Response.json({
+          number: 5,
+          title: "Foundation first",
+          html_url: "https://github.com/acme/app/issues/5",
+          state: "open",
+          state_reason: null,
+        });
+      },
+    });
+
+    expect(await client.getParentIssue("acme/app", 7)).toEqual({
+      number: 5,
+      title: "Foundation first",
+      url: "https://github.com/acme/app/issues/5",
+      state: "open",
+      stateReason: null,
+    });
+    expect(await client.getParentIssue("acme/app", 8)).toBeNull();
+    expect(requests.map((request) => request.url)).toEqual([
+      "https://api.github.com/repos/acme/app/issues/7/parent",
+      "https://api.github.com/repos/acme/app/issues/8/parent",
+    ]);
+  });
+
+  test("treats a gone parent endpoint as no dependency", async () => {
+    const client = createGitHubClient({
+      token: "secret-token",
+      fetch: async () => new Response("gone", { status: 410 }),
+    });
+
+    expect(await client.getParentIssue("acme/app", 7)).toBeNull();
+  });
+
+  test("propagates unexpected parent lookups for operator visibility", async () => {
+    const client = createGitHubClient({
+      token: "secret-token",
+      fetch: async () => new Response("rate limited", { status: 403 }),
+    });
+
+    await expect(client.getParentIssue("acme/app", 7)).rejects.toThrow("GitHub API request failed (403)");
+  });
+
   test("creates missing agent labels and repairs existing descriptions", async () => {
     const requests: Request[] = [];
     const config = parseConfig({

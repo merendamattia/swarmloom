@@ -13,6 +13,7 @@ It includes:
 - one provider-independent global instruction set under `agent-runtime`;
 - shared frontend/backend skills installed globally in the image for Codex, OpenCode, and Claude Code;
 - an operational dashboard and centralized optional Telegram notifications;
+- native GitHub sub-issues as feature dependencies: a child stays deferred until its parent is resolved;
 - one production image; local Compose provisions Redis for BullMQ while production Redis and PostgreSQL
   remain external services.
 

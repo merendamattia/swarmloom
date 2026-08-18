@@ -20,6 +20,12 @@ configured equivalent). For every acquired issue it:
 9. stores lifecycle data and events in PostgreSQL, reconciles GitHub labels/comments, and sends
    selected Telegram notifications.
 
+A feature can depend on another by declaring it as a native GitHub sub-issue (a nested child issue).
+Discovery reads the sub-issue parent for every ready issue: an unresolved parent keeps the child out
+of execution and stores its job as `DEFERRED` instead of queuing it. The child is promoted on a later
+scan once the parent is resolved (closed for any reason other than `not planned` or `duplicate`),
+and a job claimed before its parent is reopened is deferred again instead of running.
+
 The API/scheduler, BullMQ worker, and dashboard are process roles of one TypeScript application.
 BullMQ owns delivery through the externally managed Redis/Valkey endpoint supplied by `REDIS_URL`;
 PostgreSQL owns business state, history, events, and runtime settings. There is no webhook dependency

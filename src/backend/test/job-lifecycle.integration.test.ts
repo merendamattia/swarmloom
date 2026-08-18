@@ -67,6 +67,34 @@ integration("PostgreSQL job lifecycle", () => {
     expect(await jobs.complete(cancelled!.id, { outcome: "wrong" }, 0)).toBe(false);
   });
 
+  test("defers a child, promotes it once, and re-defers it after a reopen", async () => {
+    const issueNumber = issuePrefix + 3;
+    const blocker = {
+      blockedByIssueNumber: 7,
+      blockedByIssueTitle: "Foundation first",
+      blockedByIssueUrl: "https://github.com/test/lifecycle/issues/7",
+      blockedReason: "Waiting for prerequisite issue #7 to be implemented",
+    };
+
+    const deferred = await jobs.tryCreateDeferred({ ...queuedJob(issueNumber), ...blocker });
+    expect(deferred).toMatchObject({ status: "DEFERRED", activeIssueKey: `${repositoryId}:${issueNumber}` });
+    expect(await jobs.tryCreateQueued(queuedJob(issueNumber))).toBeNull();
+    expect(await jobs.tryCreateDeferred({ ...queuedJob(issueNumber), ...blocker })).toBeNull();
+
+    const promoted = await jobs.promoteDeferred(`${repositoryId}:${issueNumber}`);
+    expect(promoted).toMatchObject({ status: "QUEUED", blockedByIssueNumber: null });
+    const claimed = await jobs.claim(promoted!.id, environment, "test-worker");
+    expect(claimed?.status).toBe("RUNNING");
+
+    expect(await jobs.deferRunning(claimed!.id, {
+      ...blocker,
+      blockedReason: "Prerequisite issue #7 was reopened",
+    })).toBe(true);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } }))
+      .toMatchObject({ status: "DEFERRED", blockedByIssueNumber: 7, workerId: null, activeIssueKey: `${repositoryId}:${issueNumber}` });
+    expect(await jobs.deferRunning(claimed!.id, blocker)).toBe(false);
+  });
+
   function queuedJob(issueNumber: number) {
     return {
       repositoryId,
