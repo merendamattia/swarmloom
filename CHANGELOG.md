@@ -1,3 +1,15 @@
+# [1.1.0](https://github.com/merendamattia/swarmloom/compare/v1.0.0...v1.1.0) (2026-08-18)
+
+
+### Bug Fixes
+
+* **provider:** defer login until startup ([0a64607](https://github.com/merendamattia/swarmloom/commit/0a64607be4d120406951de48542c2eb8aa82945f))
+
+
+### Features
+
+* **telegram:** notify lifecycle events ([b27ac82](https://github.com/merendamattia/swarmloom/commit/b27ac8242b2e4c3aaeb3df60a6f3d1f4eb3ccdf2))
+
 # 1.0.0 (2026-08-18)
 
 
