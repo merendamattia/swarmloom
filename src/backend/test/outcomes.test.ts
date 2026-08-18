@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome } from "../src/runner/response.ts";
+import { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome, parseVisualEvidence } from "../src/runner/response.ts";
 
 describe("agent responses", () => {
   test("parses the four explicit job outcomes from the first marker line", () => {
@@ -30,5 +30,14 @@ describe("agent responses", () => {
       .toBe("https://github.com/a/b/pull/42");
     expect(parsePullRequestUrl("Outcome: blocked\nNo PR.")).toBeNull();
     expect(parsePullRequestUrl("Outcome: implemented\nNo pull request.")).toBeNull();
+  });
+
+  test("parses visual evidence from an implemented response", () => {
+    expect(parseVisualEvidence("Outcome: implemented\nVisual: /settings\nDone."))
+      .toEqual({ route: "/settings" });
+    expect(parseVisualEvidence("Outcome: implemented\nvisual:  /dashboard \nSetup: npm ci && npm run dev\nDone."))
+      .toEqual({ route: "/dashboard", setupNote: "npm ci && npm run dev" });
+    expect(parseVisualEvidence("Outcome: implemented\nPR: https://github.com/a/b/pull/1\nDone.")).toBeNull();
+    expect(parseVisualEvidence("Outcome: blocked\nNo frontend.")).toBeNull();
   });
 });

@@ -34,7 +34,17 @@ RUN --mount=type=cache,target=/root/.npm \
   && opencode --version
 ENV PATH="/opt/pre-commit/bin:$PATH"
 
-FROM runtime-tools AS dev
+FROM runtime-tools AS browser
+USER root
+# Playwright Chromium powers worker visual verification of implemented frontend
+# routes. Install browsers under a fixed path so the non-root runtime user finds
+# them, then smoke-test the launch so a broken browser fails the image build
+# instead of a later job.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN bunx playwright install --with-deps chromium \
+  && bunx playwright screenshot --viewport-size=1280,800 "data:text/html,<h1>ok</h1>" /tmp/playwright-smoke.png
+
+FROM browser AS dev
 # Local development target: node_modules, toolchain (codex/opencode/pre-commit),
 # generated Prisma client — no skills, no production frontend build. Source is
 # mounted at runtime by docker-compose.yaml.
@@ -50,7 +60,7 @@ WORKDIR /app
 EXPOSE 18420 18421
 CMD ["bun", "run", "dev"]
 
-FROM runtime-tools AS agent-skills
+FROM browser AS agent-skills
 USER bun
 ENV npm_config_cache=/tmp/npx-cache
 # bun.sh/docs is documentation, not an installable SKILL.md endpoint. Keep the

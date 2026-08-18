@@ -23,7 +23,14 @@ import {
   parseJobOutcome,
   parsePullRequestUrl,
   parseReviewOutcome,
+  parseVisualEvidence,
+  type VisualEvidence,
 } from "./response.ts";
+import {
+  captureScreenshot,
+  visualEvidenceComment,
+  type CaptureVisualEvidence,
+} from "./visual.ts";
 
 type RunnerGitHub = Pick<GitHubClient,
   "getIssue" | "getIssueContext" | "getPullRequest" | "getPullRequestDiff" |
@@ -46,6 +53,7 @@ type RunnerDependencies = {
   createReviewWorktree?: CreateReviewWorktree;
   removeWorktree?: RemoveWorktree;
   gcRepository?: GcRepository;
+  captureVisualEvidence?: CaptureVisualEvidence;
   heartbeatIntervalMs?: number;
 };
 
@@ -59,6 +67,7 @@ export function createJobRunner({
   createReviewWorktree = createTargetReviewWorktree,
   removeWorktree = removeTargetWorktree,
   gcRepository: gc = gcRepository,
+  captureVisualEvidence = captureScreenshot,
   heartbeatIntervalMs,
 }: RunnerDependencies) {
   async function run(jobId: string, workerId: string) {
@@ -167,6 +176,10 @@ export function createJobRunner({
 
       if (outcome === "implemented") {
         const { review, pullRequestUrl, pullRequest, response } = await reviewImplementation(job, implementation.response, worktreePath, signal);
+        const visual = parseVisualEvidence(implementation.response);
+        if (visual) {
+          await verifyVisualEvidence(job, pullRequest, visual, worktreePath, signal);
+        }
         reachedTerminalState = await jobRepository.finishRunning(job.id, "COMPLETED", {
           result: response,
           exitCode: implementation.exitCode,
@@ -407,6 +420,69 @@ export function createJobRunner({
         await reviewRepository.finish(reviewRow.id, "FAILED", { errorMessage: safeError(error) });
         throw error;
       }
+    }
+
+    async function verifyVisualEvidence(
+      currentJob: RunningJob,
+      pullRequest: { number: number; url: string },
+      visual: VisualEvidence,
+      workingDirectory: string,
+      abortSignal: AbortSignal,
+    ) {
+      try {
+        const captured = await captureVisualEvidence({
+          dataDir: config.DATA_DIR,
+          publicBaseUrl: config.ARTIFACT_PUBLIC_URL,
+          jobId: currentJob.id,
+          worktreePath: workingDirectory,
+          visual,
+          port: config.VISUAL_PORT,
+          timeoutMs: config.VISUAL_VERIFICATION_TIMEOUT_MS,
+          signal: abortSignal,
+        });
+        if ("error" in captured) {
+          await recordVisualIncomplete(currentJob, pullRequest, visual, captured.error);
+          return;
+        }
+        await github.addIssueComment(
+          currentJob.repository.fullName,
+          pullRequest.number,
+          visualEvidenceComment(visual.route, captured.imageUrl),
+        );
+        await events.record({
+          type: "VISUAL_VERIFICATION_ATTACHED",
+          message: `Attached screenshot of ${visual.route} to ${currentJob.repository.fullName}#${pullRequest.number}`,
+          jobId: currentJob.id,
+          repositoryId: currentJob.repositoryId,
+          scanRunId: currentJob.scanRunId ?? undefined,
+          metadata: {
+            issueUrl: currentJob.issueUrl,
+            pullRequestUrl: pullRequest.url,
+            pullRequestNumber: pullRequest.number,
+            route: visual.route,
+            imageUrl: captured.imageUrl,
+          },
+        });
+      } catch (error) {
+        await recordVisualIncomplete(currentJob, pullRequest, visual, safeError(error));
+      }
+    }
+
+    async function recordVisualIncomplete(
+      currentJob: RunningJob,
+      pullRequest: { number: number; url: string },
+      visual: VisualEvidence,
+      reason: string,
+    ) {
+      await events.record({
+        type: "VISUAL_VERIFICATION_INCOMPLETE",
+        level: "WARNING",
+        message: `Visual verification incomplete for ${currentJob.repository.fullName}#${pullRequest.number}: ${reason}`,
+        jobId: currentJob.id,
+        repositoryId: currentJob.repositoryId,
+        scanRunId: currentJob.scanRunId ?? undefined,
+        metadata: { issueUrl: currentJob.issueUrl, pullRequestUrl: pullRequest.url, route: visual.route },
+      });
     }
 
     async function reportFailure(

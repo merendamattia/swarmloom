@@ -370,6 +370,98 @@ integration("job runner", () => {
     expect(state.labels).not.toContain(config.ISSUE_COMPLETED_LABEL);
   });
 
+  test("attaches a screenshot and records it as evidence when visual evidence is provided", async () => {
+    const job = await claimed(issueBase + 11);
+    const implementationResponse = [
+      "Outcome: implemented",
+      `PR: https://github.com/acme/runner/pull/${job.issueNumber}`,
+      "Visual: /settings",
+      "Implemented the requested change.",
+    ].join("\n");
+    const provider = new FakeProvider([
+      success(implementationResponse, `implementation-visual-${job.issueNumber}`),
+      success("Review: pass\nLooks good.", `review-visual-${job.issueNumber}`),
+    ]);
+    const github = fakeGitHub(job.issueNumber, job.branchName);
+    const captures: Array<Record<string, unknown>> = [];
+    const runner = createJobRunner({
+      config,
+      provider,
+      github,
+      createWorktree: async (input) => input.worktreePath,
+      captureVisualEvidence: async (input) => {
+        captures.push({ route: input.visual.route, port: input.port, jobId: input.jobId });
+        return { fileName: "abc123.png", imageUrl: `https://worker.example.com/api/artifacts/${input.jobId}/abc123.png` };
+      },
+    });
+
+    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(stored.status).toBe("COMPLETED");
+    expect(captures).toEqual([{ route: "/settings", port: config.VISUAL_PORT, jobId: job.id }]);
+    expect(github.comments.some((comment) =>
+      comment.issue === job.issueNumber && comment.body.includes("![Implemented view at /settings]"))).toBe(true);
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "VISUAL_VERIFICATION_ATTACHED" } }))
+      .toMatchObject({ metadata: { route: "/settings" } });
+  });
+
+  test("records visual verification as incomplete and posts no screenshot when capture fails", async () => {
+    const job = await claimed(issueBase + 12);
+    const implementationResponse = [
+      "Outcome: implemented",
+      `PR: https://github.com/acme/runner/pull/${job.issueNumber}`,
+      "Visual: /dashboard",
+      "Setup: npm ci && npm run dev",
+      "Implemented the requested change.",
+    ].join("\n");
+    const provider = new FakeProvider([
+      success(implementationResponse, `implementation-visual-fail-${job.issueNumber}`),
+      success("Review: pass\nLooks good.", `review-visual-fail-${job.issueNumber}`),
+    ]);
+    const github = fakeGitHub(job.issueNumber, job.branchName);
+    const runner = createJobRunner({
+      config,
+      provider,
+      github,
+      createWorktree: async (input) => input.worktreePath,
+      captureVisualEvidence: async () => ({ error: "frontend could not start" }),
+    });
+
+    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(stored.status).toBe("COMPLETED");
+    expect(github.comments.some((comment) => comment.body.includes("Implemented view"))).toBe(false);
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "VISUAL_VERIFICATION_INCOMPLETE" } }))
+      .toMatchObject({ level: "WARNING" });
+  });
+
+  test("skips the browser entirely for backend-only implementations", async () => {
+    const job = await claimed(issueBase + 13);
+    const implementationResponse = [
+      "Outcome: implemented",
+      `PR: https://github.com/acme/runner/pull/${job.issueNumber}`,
+      "Implemented the requested change.",
+    ].join("\n");
+    const provider = new FakeProvider([
+      success(implementationResponse, `implementation-no-visual-${job.issueNumber}`),
+      success("Review: pass\nLooks good.", `review-no-visual-${job.issueNumber}`),
+    ]);
+    const github = fakeGitHub(job.issueNumber, job.branchName);
+    const runner = createJobRunner({
+      config,
+      provider,
+      github,
+      createWorktree: async (input) => input.worktreePath,
+      captureVisualEvidence: async () => { throw new Error("must not be called"); },
+    });
+
+    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "VISUAL_VERIFICATION_INCOMPLETE" } }))
+      .toBeNull();
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "VISUAL_VERIFICATION_ATTACHED" } }))
+      .toBeNull();
+  });
+
   async function claimed(issueNumber: number) {
     const queued = await jobs.tryCreateQueued({
       repositoryId,

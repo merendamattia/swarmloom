@@ -139,3 +139,16 @@ For a review session, begin with `Review: pass` or `Review: changes_requested` i
 `Outcome:`. Use `Outcome: implemented` (with the linked `PR:` line), `blocked`, `decomposed`, or
 `requires_decomposition`. If one coherent Pull Request cannot safely contain the work, write
 `requires_decomposition`; the coordinator handles any additional execution phase.
+
+## Visual evidence
+
+When an implementation changes the frontend, include a `Visual: <route>` line in the `implemented`
+response with the exact path of the implemented view (for example `Visual: /settings`). Add a
+`Setup: <command>` line only when the standard dev command is not sufficient: a concise shell command
+that installs dependencies and starts the dev server inside the worktree on the configured visual
+port (for example `Setup: npm ci && npm run dev -- --port 18423`). Omit the `Visual` line for
+backend-only changes and for repositories without a runnable frontend; never invent a route from
+filenames. The worker starts the frontend, waits until the route is ready, captures one deterministic
+viewport screenshot, and posts it as a Markdown visual-evidence comment on the pull request. The
+image is served from the worker's own artifact endpoint and is never committed into the target
+repository.

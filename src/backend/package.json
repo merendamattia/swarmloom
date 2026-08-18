@@ -10,7 +10,7 @@
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
     "worker": "bun src/worker.ts",
-    "build": "bun build src/index.ts src/worker.ts --target bun --outdir dist --external msgpackr-extract",
+    "build": "bun build src/index.ts src/worker.ts --target bun --outdir dist --external msgpackr-extract --external playwright",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "db:generate": "prisma generate",
@@ -24,6 +24,7 @@
     "croner": "^10.0.0",
     "hono": "^4.12.25",
     "ioredis": "^6.0.0",
+    "playwright": "^1.49.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {

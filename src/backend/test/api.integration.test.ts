@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { parseConfig } from "../src/core/config-schema.ts";
+import { artifactDirectory } from "../src/runner/visual.ts";
 
 const integration = process.env.RUN_INTEGRATION === "1" ? describe : describe.skip;
 
@@ -157,5 +160,24 @@ integration("operations API", () => {
     expect((await app.request("/api/scans/run", { method: "POST" })).status).toBe(202);
     expect(scanCalls).toBe(2);
     expect((await app.request("/api/notifications/test", { method: "POST" })).status).toBe(409);
+  });
+
+  test("serves only real artifact PNGs for jobs in the current environment", async () => {
+    const directory = artifactDirectory(config.DATA_DIR, jobId);
+    const fileName = "0123456789abcdef0123456789abcdef.png";
+    await mkdir(directory, { recursive: true });
+    await writeFile(resolve(directory, fileName), "png-bytes");
+    try {
+      const served = await app.request(`/api/artifacts/${jobId}/${fileName}`);
+      expect(served.status).toBe(200);
+      expect(served.headers.get("Content-Type")).toBe("image/png");
+      expect(await served.text()).toBe("png-bytes");
+
+      expect((await app.request(`/api/artifacts/${jobId}/not-hex.png`)).status).toBe(404);
+      expect((await app.request(`/api/artifacts/${jobId}/../missing.png`)).status).toBe(404);
+      expect((await app.request(`/api/artifacts/${"f".repeat(20)}/${fileName}`)).status).toBe(404);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

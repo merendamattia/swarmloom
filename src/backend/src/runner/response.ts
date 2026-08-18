@@ -1,9 +1,11 @@
 export type JobOutcome = "implemented" | "blocked" | "decomposed" | "requires_decomposition";
 export type ReviewOutcome = "pass" | "changes_requested";
 
+export type VisualEvidence = { route: string; setupNote?: string };
+
 const JOB_OUTCOMES = new Set<JobOutcome>(["implemented", "blocked", "decomposed", "requires_decomposition"]);
 
-function markerLine(text: string, field: "Outcome" | "Review" | "PR"): string | null {
+function markerLine(text: string, field: "Outcome" | "Review" | "PR" | "Visual" | "Setup"): string | null {
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (trimmed.toLowerCase().startsWith(`${field.toLowerCase()}:`)) {
@@ -32,4 +34,11 @@ export function parseReviewOutcome(text: string): ReviewOutcome {
 export function parsePullRequestUrl(text: string): string | null {
   const url = markerLine(text, "PR");
   return url && /\/pull\/\d+/.test(url) ? url : null;
+}
+
+export function parseVisualEvidence(text: string): VisualEvidence | null {
+  const route = markerLine(text, "Visual");
+  if (!route) return null;
+  const setupNote = markerLine(text, "Setup") ?? undefined;
+  return { route, setupNote };
 }
