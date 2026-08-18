@@ -55,7 +55,7 @@ against known credential values before persistence.
 | Codex CLI | Selected agent runtime | `codex_home` for account login cache |
 | OpenCode CLI | Selected agent runtime | `opencode_data` and `opencode_config` |
 | Shared agent skills | Build-time skills for Codex, OpenCode, and Claude Code | Image global skill directories |
-| `agent-runtime` | Canonical global instructions and result schemas | Host bind mount, read-only in containers |
+| `agent-runtime` | Canonical global instructions and result schemas | Production image; local read-only bind mount |
 
 The `worker_data` volume contains persistent clones under `/data/repositories` and worktrees under
 `/data/worktrees`. Worktrees are retained after terminal jobs for audit and recovery. They are not
@@ -150,7 +150,7 @@ validation.
 | `AGENT_TIMEOUT_MS` | `7200000` | Maximum provider session duration before abort |
 | `DATA_DIR` | `/data` in Compose | Clone/worktree root |
 | `AGENT_RUNTIME_DIR` | `/app/agent-runtime` | Canonical runtime path inside the container |
-| `AGENT_RUNTIME_HOST_PATH` | `./agent-runtime` | Host directory mounted read-only at `AGENT_RUNTIME_DIR` |
+| `AGENT_RUNTIME_HOST_PATH` | `./agent-runtime`, local Compose only | Host directory mounted read-only at `AGENT_RUNTIME_DIR` during development |
 | `AGENT_PROVIDER` | required; `codex` example | Exactly `codex` or `opencode` |
 | `CODEX_MODEL` | `gpt-5.6-luna` | Codex model stored on each queued job |
 | `CODEX_REASONING_EFFORT` | `max` | Codex reasoning setting; supports validated CLI values |
@@ -324,9 +324,10 @@ model/provider arguments out of canonical behavioral material.
 
 ## Updating agent runtime
 
-Both Compose files bind `AGENT_RUNTIME_HOST_PATH` read-only to `AGENT_RUNTIME_DIR`. Edit the host
-files directly; every new session reads them again, so no image rebuild or permanent copy into a
-target repository is needed. Existing sessions keep the prompt with which they started.
+Local Compose binds `AGENT_RUNTIME_HOST_PATH` read-only to `AGENT_RUNTIME_DIR`, so new development
+sessions read host edits immediately. Production uses the runtime copied into the application
+image, preventing a missing or stale host directory from hiding required files. Rebuild the image
+to deploy production runtime changes. Existing sessions keep the prompt with which they started.
 
 Validate edits before the next run:
 
@@ -667,8 +668,9 @@ The repository becomes `INVALID`, emits `REPOSITORY_INVALID`, and queues no issu
 ### Filesystem/volume permissions
 
 The image runs as user `bun`. Named volumes are initialized with the image's `/data` ownership. For
-bind mounts, make the selected host directory readable by the container and keep `agent-runtime`
-read-only. Do not solve a permission problem with world-writable secret/auth directories.
+local bind mounts, make the selected host directory readable by the container and keep
+`agent-runtime` read-only. Do not solve a permission problem with world-writable secret/auth
+directories.
 
 ### Provider mismatch after switching
 

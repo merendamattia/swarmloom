@@ -44,7 +44,6 @@ x-app-volumes: &app-volumes
   - codex_home:/data/codex-home
   - opencode_data:/data/opencode-data
   - opencode_config:/data/opencode-config
-  - ${AGENT_RUNTIME_HOST_PATH:-./agent-runtime}:/app/agent-runtime:ro
 
 services:
   backend:

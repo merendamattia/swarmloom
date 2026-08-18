@@ -23,5 +23,7 @@ jobs:
         run: docker compose --env-file .env.example config --quiet
       - name: Resolve production Compose
         run: docker compose --env-file .env.production.example -f docker-compose.production.yaml config --quiet
-      - name: Build application image
-        run: docker compose --env-file .env.example build backend
+      - name: Build production application image
+        run: docker compose --env-file .env.production.example -f docker-compose.production.yaml build backend
+      - name: Verify production agent runtime
+        run: docker compose --env-file .env.production.example -f docker-compose.production.yaml run --rm --no-deps backend sh -c 'test -f /app/agent-runtime/instructions/global-skills.md && test -f /app/agent-runtime/instructions/global.md'
