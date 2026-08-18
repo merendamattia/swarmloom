@@ -192,6 +192,128 @@ integration("job runner", () => {
     expect(stored.errorMessage).toContain("without writing the response");
   });
 
+  test("continues the existing pull request branch and keeps the review label until resolved", async () => {
+    const issueNumber = issueBase + 7;
+    const prHead = `agent/issue-${issueNumber}-existing`;
+    const state = {
+      labels: ["bug", config.ISSUE_REVIEW_REQUESTED_LABEL],
+      comments: [] as Array<{ issue: number; body: string }>,
+      createdIssues: [] as Array<{ title: string; body: string; labels: string[] }>,
+      reviewWorktrees: [] as string[],
+      async getIssue() {
+        return { number: issueNumber, title: `Issue ${issueNumber}`, body: "Body", url: `https://github.com/acme/runner/issues/${issueNumber}`, labels: [...state.labels] };
+      },
+      async getPullRequest(_fullName: string, number: number) {
+        return pullRequestShape(number, prHead, issueNumber);
+      },
+      async getPullRequestDiff() { return "diff --git a/src/app.ts b/src/app.ts"; },
+      async getIssueContext() {
+        return {
+          issue: await state.getIssue(),
+          issueComments: [],
+          pullRequests: [{
+            ...pullRequestShape(issueNumber, prHead, issueNumber),
+            diff: "diff --git a/src/app.ts b/src/app.ts",
+            reviews: [{ body: "Add a guard.", state: "CHANGES_REQUESTED", url: "https://github.com/acme/runner/pull/1#review-1", user: "reviewer", submittedAt: null }],
+            comments: [],
+          }],
+        };
+      },
+      async createIssue(_fullName: string, title: string, body: string, createdLabels: string[]) {
+        state.createdIssues.push({ title, body, labels: createdLabels });
+        return { number: issueNumber + 1000, url: `https://github.com/acme/runner/issues/${issueNumber + 1000}` };
+      },
+      async setIssueLabels(_fullName: string, _number: number, labels: string[]) { state.labels = labels; },
+      async addIssueComment(_fullName: string, issue: number, body: string) { state.comments.push({ issue, body }); },
+    };
+    const job = await claimed(issueNumber);
+    const implementationResponse = [
+      `Outcome: implemented`,
+      `PR: https://github.com/acme/runner/pull/${issueNumber}`,
+      "Addressed the requested review changes and pushed them to the existing branch.",
+    ].join("\n");
+    const provider = new FakeProvider([
+      success(implementationResponse, "follow-up-implementation"),
+      success("Review: pass\nThe requested changes are resolved.", "follow-up-review"),
+    ]);
+    const runner = createJobRunner({
+      config,
+      provider,
+      github: state,
+      createWorktree: async () => { throw new Error("fresh worktree must not be used for a review retry"); },
+      createReviewWorktree: async (input) => { state.reviewWorktrees.push(input.branchName); return "agent/review-local"; },
+    });
+
+    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(state.reviewWorktrees).toEqual([prHead]);
+    const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id }, include: { review: true } });
+    expect(stored.status).toBe("COMPLETED");
+    expect(stored.review?.status).toBe("PASSED");
+    expect(provider.calls[0]?.context).toContain(`Mode: review follow-up`);
+    expect(provider.calls[0]?.context).toContain(`Continue branch ${prHead}`);
+    expect(state.labels).toContain(config.ISSUE_COMPLETED_LABEL);
+    expect(state.labels).not.toContain(config.ISSUE_REVIEW_REQUESTED_LABEL);
+    expect(state.comments.some((comment) => comment.issue === issueNumber && comment.body.includes(`Review: pass`)))
+      .toBe(true);
+  });
+
+  test("re-applies the review-requested label on the existing branch when changes are still requested", async () => {
+    const issueNumber = issueBase + 8;
+    const prHead = `agent/issue-${issueNumber}-existing`;
+    const state = {
+      labels: ["bug", config.ISSUE_REVIEW_REQUESTED_LABEL],
+      comments: [] as Array<{ issue: number; body: string }>,
+      createdIssues: [] as Array<{ title: string; body: string; labels: string[] }>,
+      reviewWorktrees: [] as string[],
+      async getIssue() {
+        return { number: issueNumber, title: `Issue ${issueNumber}`, body: "Body", url: `https://github.com/acme/runner/issues/${issueNumber}`, labels: [...state.labels] };
+      },
+      async getPullRequest(_fullName: string, number: number) {
+        return pullRequestShape(number, prHead, issueNumber);
+      },
+      async getPullRequestDiff() { return "diff --git a/src/app.ts b/src/app.ts"; },
+      async getIssueContext() {
+        return {
+          issue: await state.getIssue(),
+          issueComments: [],
+          pullRequests: [{
+            ...pullRequestShape(issueNumber, prHead, issueNumber),
+            diff: "diff --git a/src/app.ts b/src/app.ts",
+            reviews: [{ body: "Not enough.", state: "CHANGES_REQUESTED", url: "https://github.com/acme/runner/pull/1#review-2", user: "reviewer", submittedAt: null }],
+            comments: [],
+          }],
+        };
+      },
+      async createIssue(_fullName: string, title: string, body: string, createdLabels: string[]) {
+        state.createdIssues.push({ title, body, labels: createdLabels });
+        return { number: issueNumber + 1000, url: `https://github.com/acme/runner/issues/${issueNumber + 1000}` };
+      },
+      async setIssueLabels(_fullName: string, _number: number, labels: string[]) { state.labels = labels; },
+      async addIssueComment(_fullName: string, issue: number, body: string) { state.comments.push({ issue, body }); },
+    };
+    const job = await claimed(issueNumber);
+    const implementationResponse = [
+      `Outcome: implemented`,
+      `PR: https://github.com/acme/runner/pull/${issueNumber}`,
+      "Pushed more changes to the existing branch.",
+    ].join("\n");
+    const provider = new FakeProvider([
+      success(implementationResponse, "follow-up-implementation-2"),
+      success("Review: changes_requested\nStill not enough.", "follow-up-review-2"),
+    ]);
+    const runner = createJobRunner({
+      config,
+      provider,
+      github: state,
+      createReviewWorktree: async (input) => { state.reviewWorktrees.push(input.branchName); return "agent/review-local"; },
+    });
+
+    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(state.reviewWorktrees).toEqual([prHead]);
+    expect(state.labels).toContain(config.ISSUE_REVIEW_REQUESTED_LABEL);
+    expect(state.labels).not.toContain(config.ISSUE_COMPLETED_LABEL);
+  });
+
   async function claimed(issueNumber: number) {
     const queued = await jobs.tryCreateQueued({
       repositoryId,
@@ -233,6 +355,20 @@ function success(finalOutput: string, sessionId: string): AgentResult {
   return { provider: "codex", sessionId, exitCode: 0, finalOutput, stderr: "" };
 }
 
+function pullRequestShape(number: number, head: string, issueNumber: number) {
+  return {
+    number,
+    title: `Pull request ${number}`,
+    url: `https://github.com/acme/runner/pull/${number}`,
+    base: "develop",
+    head,
+    body: `Closes #${issueNumber}`,
+    additions: 12,
+    deletions: 3,
+    changedFiles: 2,
+  };
+}
+
 function fakeGitHub(issueNumber: number, branchName: string) {
   const state = {
     labels: ["bug", "agent:working"],
@@ -242,17 +378,7 @@ function fakeGitHub(issueNumber: number, branchName: string) {
       return { number: issueNumber, title: "Issue", body: "Body", url: "https://github.com/acme/runner/issues/1", labels: [...state.labels] };
     },
     async getPullRequest(_fullName: string, number: number) {
-      return {
-        number,
-        title: `Pull request ${number}`,
-        url: `https://github.com/acme/runner/pull/${number}`,
-        base: "develop",
-        head: branchName,
-        body: `Closes #${issueNumber}`,
-        additions: 12,
-        deletions: 3,
-        changedFiles: 2,
-      };
+      return pullRequestShape(number, branchName, issueNumber);
     },
     async getPullRequestDiff() { return "diff --git a/src/app.ts b/src/app.ts"; },
     async getIssueContext() {

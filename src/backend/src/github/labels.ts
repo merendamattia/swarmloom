@@ -22,3 +22,8 @@ export function replaceWorkerLabels(labels: string[], config: Config, nextLabels
   const workerLabels = new Set(agentLabelDefinitions(config).map(({ name }) => name));
   return [...new Set([...labels.filter((value) => !workerLabels.has(value)), ...nextLabels])];
 }
+
+export function acquireIssueLabels(labels: string[], config: Config) {
+  const preserved = labels.filter((value) => value !== config.ISSUE_READY_LABEL);
+  return [...new Set([...preserved, config.ISSUE_WORKING_LABEL])];
+}

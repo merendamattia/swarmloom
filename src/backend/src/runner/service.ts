@@ -6,6 +6,7 @@ import { redactSecrets } from "../core/secrets.ts";
 import type { EventService } from "../events/service.ts";
 import {
   createJobWorktree as createTargetWorktree,
+  createReviewWorktree as createTargetReviewWorktree,
   gcRepository,
   removeJobWorktree as removeTargetWorktree,
 } from "../git/repositories.ts";
@@ -29,9 +30,11 @@ type RunnerGitHub = Pick<GitHubClient,
   "createIssue" | "setIssueLabels" | "addIssueComment">;
 
 type CreateWorktree = typeof createTargetWorktree;
+type CreateReviewWorktree = typeof createTargetReviewWorktree;
 type RemoveWorktree = typeof removeTargetWorktree;
 type GcRepository = typeof gcRepository;
 type RunningJob = NonNullable<Awaited<ReturnType<typeof jobRepository.findRunning>>>;
+type ReviewFollowUp = { branchName: string; pullRequestNumber?: number };
 
 type RunnerDependencies = {
   config: Config;
@@ -40,6 +43,7 @@ type RunnerDependencies = {
   github: RunnerGitHub;
   events?: EventService;
   createWorktree?: CreateWorktree;
+  createReviewWorktree?: CreateReviewWorktree;
   removeWorktree?: RemoveWorktree;
   gcRepository?: GcRepository;
   heartbeatIntervalMs?: number;
@@ -52,6 +56,7 @@ export function createJobRunner({
   github,
   events = { record: eventRepository.create },
   createWorktree = createTargetWorktree,
+  createReviewWorktree = createTargetReviewWorktree,
   removeWorktree = removeTargetWorktree,
   gcRepository: gc = gcRepository,
   heartbeatIntervalMs,
@@ -81,6 +86,7 @@ export function createJobRunner({
 
     let reachedTerminalState = false;
     let liveContext: GitHubIssueContext | undefined;
+    let followUp: ReviewFollowUp | undefined;
     let activePullRequest: { number: number; url: string } | undefined;
     let worktreePath: string | undefined;
     let worktreeCreated = false;
@@ -88,23 +94,36 @@ export function createJobRunner({
     try {
       if (!selectedProvider) throw new Error(`No provider configured for ${job.provider}`);
       liveContext = await github.getIssueContext(job.repository.fullName, job.issueNumber, job.issueUrl);
+      followUp =
+        liveContext.issue.labels.includes(config.ISSUE_REVIEW_REQUESTED_LABEL) && liveContext.pullRequests[0]
+          ? { branchName: liveContext.pullRequests[0].head, pullRequestNumber: liveContext.pullRequests[0].number }
+          : undefined;
       if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
       const localPath = job.repository.localPath;
       worktreePath = safeWorktreePath(config.DATA_DIR, job.id);
       const gitEnvironment = githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl);
-      await createWorktree({
-        repositoryPath: localPath,
-        worktreePath,
-        branchName: job.branchName,
-        baselineCommit: job.baselineCommit,
-        gitEnvironment,
-      });
+      if (followUp) {
+        await createReviewWorktree({
+          repositoryPath: localPath,
+          worktreePath,
+          branchName: followUp.branchName,
+          gitEnvironment,
+        });
+      } else {
+        await createWorktree({
+          repositoryPath: localPath,
+          worktreePath,
+          branchName: job.branchName,
+          baselineCommit: job.baselineCommit,
+          gitEnvironment,
+        });
+      }
       worktreeCreated = true;
       if (!await jobRepository.setWorktree(job.id, worktreePath)) return false;
       repositoryPath = localPath;
       await events.record({
         type: "JOB_STARTED",
-        message: `Started ${job.repository.fullName}#${job.issueNumber} · ${job.issueTitle}`,
+        message: `${followUp ? "Follow-up on" : "Started"} ${job.repository.fullName}#${job.issueNumber} · ${job.issueTitle}`,
         jobId: job.id,
         repositoryId: job.repositoryId,
         scanRunId: job.scanRunId ?? undefined,
@@ -114,7 +133,7 @@ export function createJobRunner({
       const implementation = await executeRole(
         "issue-worker",
         `Process ${job.repository.fullName}#${job.issueNumber}: ${job.issueTitle}`,
-        issueContext(job, config.ISSUE_REVIEW_REQUESTED_LABEL, liveContext),
+        issueContext(job, config.ISSUE_REVIEW_REQUESTED_LABEL, liveContext, followUp),
         worktreePath,
         signal,
         job,
@@ -128,7 +147,7 @@ export function createJobRunner({
         const decomposition = await executeRole(
           "decomposer",
           `Decompose ${job.repository.fullName}#${job.issueNumber} into coherent native sub-issues`,
-          `${issueContext(job, config.ISSUE_REVIEW_REQUESTED_LABEL, liveContext)}\nQueue-ready label for actionable children: ${config.ISSUE_READY_LABEL}`,
+          `${issueContext(job, config.ISSUE_REVIEW_REQUESTED_LABEL, liveContext, followUp)}\nQueue-ready label for actionable children: ${config.ISSUE_READY_LABEL}`,
           worktreePath,
           signal,
           job,
@@ -288,8 +307,9 @@ export function createJobRunner({
       const pullRequestNumber = Number(/\/pull\/(\d+)/.exec(pullRequestUrl)?.[1]);
       const pullRequest = await github.getPullRequest(currentJob.repository.fullName, pullRequestNumber);
       activePullRequest = { number: pullRequest.number, url: pullRequest.url };
-      if (pullRequest.base !== "develop" || pullRequest.head !== currentJob.branchName) {
-        throw new Error(`PR #${pullRequest.number} must use ${currentJob.branchName} -> develop`);
+      const expectedHead = followUp?.branchName ?? currentJob.branchName;
+      if (pullRequest.base !== "develop" || pullRequest.head !== expectedHead) {
+        throw new Error(`PR #${pullRequest.number} must use ${expectedHead} -> develop`);
       }
       if (!pullRequest.body.includes(`#${currentJob.issueNumber}`)
         && !pullRequest.body.includes(currentJob.issueUrl)) {
@@ -297,7 +317,9 @@ export function createJobRunner({
       }
       await events.record({
         type: "PR_OPENED",
-        message: `Opened PR #${pullRequest.number} for ${currentJob.repository.fullName}#${currentJob.issueNumber}`,
+        message: followUp
+          ? `Updated PR #${pullRequest.number} for ${currentJob.repository.fullName}#${currentJob.issueNumber}`
+          : `Opened PR #${pullRequest.number} for ${currentJob.repository.fullName}#${currentJob.issueNumber}`,
         jobId: currentJob.id,
         repositoryId: currentJob.repositoryId,
         scanRunId: currentJob.scanRunId ?? undefined,
@@ -323,7 +345,7 @@ export function createJobRunner({
         const result = await executeRole(
           "reviewer",
           `Independently review ${pullRequest.url}`,
-          `${issueContext(currentJob, config.ISSUE_REVIEW_REQUESTED_LABEL, liveContext)}\n\nPull Request: ${JSON.stringify(pullRequest)}\n\nDiff from develop:\n${diff}`,
+          `${issueContext(currentJob, config.ISSUE_REVIEW_REQUESTED_LABEL, liveContext, followUp)}\n\nPull Request: ${JSON.stringify(pullRequest)}\n\nDiff from develop:\n${diff}`,
           workingDirectory,
           abortSignal,
           currentJob,
@@ -499,14 +521,19 @@ function issueContext(job: {
   issueBody: string;
   baselineCommit: string;
   branchName: string;
-}, reviewRequestedLabel: string, liveContext?: GitHubIssueContext) {
+}, reviewRequestedLabel: string, liveContext?: GitHubIssueContext, followUp?: ReviewFollowUp) {
+  const mode = followUp
+    ? `Mode: review follow-up. Continue branch ${followUp.branchName}${followUp.pullRequestNumber ? ` in pull request #${followUp.pullRequestNumber}` : ""}. Fix the files to address the requested changes, verify locally, and push to ${followUp.branchName} so the already-open pull request updates. Do not create a new branch or a new pull request.`
+    : "Mode: fresh implementation. Create a new branch and open a pull request targeting develop.";
   return [
     `Issue: #${job.issueNumber} ${job.issueTitle}`,
     `URL: ${job.issueUrl}`,
-    `Baseline: origin/develop at ${job.baselineCommit}`,
-    `Assigned branch: ${job.branchName}`,
-    `Review retry label: ${reviewRequestedLabel}. If the issue carries it, inspect the linked Pull Request review comments and address the requested changes before opening the next PR.`,
+    `Baseline: ${followUp ? `origin/${followUp.branchName}` : `origin/develop at ${job.baselineCommit}`}`,
+    `Assigned branch: ${followUp?.branchName ?? job.branchName}`,
+    mode,
+    `Review retry label: ${reviewRequestedLabel}. If the issue currently carries it, this job addresses an existing review and must work on the already-open pull request.`,
     `Body:\n${job.issueBody}`,
+    liveContext && `Issue labels: ${liveContext.issue.labels.join(", ") || "none"}`,
     liveContext && `Live GitHub context fetched before execution:\n${redactSecrets(JSON.stringify(liveContext, null, 2))}`,
   ].filter((line): line is string => Boolean(line)).join("\n");
 }

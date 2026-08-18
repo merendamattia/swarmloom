@@ -69,6 +69,36 @@ export async function createJobWorktree(input: CreateWorktreeInput) {
   return input.worktreePath;
 }
 
+type CreateReviewWorktreeInput = {
+  repositoryPath: string;
+  worktreePath: string;
+  branchName: string;
+  gitEnvironment?: Record<string, string | undefined>;
+};
+
+export async function createReviewWorktree(input: CreateReviewWorktreeInput) {
+  if (existsSync(input.worktreePath)) throw new Error(`Worktree path already exists: ${input.worktreePath}`);
+  await mkdir(dirname(input.worktreePath), { recursive: true });
+  await runGit(["check-ref-format", "--branch", input.branchName], input.repositoryPath,
+    input.gitEnvironment);
+  await runGit([
+    "fetch",
+    "origin",
+    `${input.branchName}:refs/remotes/origin/${input.branchName}`,
+  ], input.repositoryPath, input.gitEnvironment);
+  const localBranch = `agent/review-${crypto.randomUUID().slice(0, 8)}`;
+  await runGit([
+    "worktree",
+    "add",
+    "-b",
+    localBranch,
+    "--track",
+    input.worktreePath,
+    `origin/${input.branchName}`,
+  ], input.repositoryPath, input.gitEnvironment);
+  return localBranch;
+}
+
 export async function removeJobWorktree(input: RemoveWorktreeInput) {
   if (!input.worktreePath) return;
   try {
