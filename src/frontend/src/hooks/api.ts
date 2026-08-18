@@ -15,6 +15,7 @@ export type Settings = InferResponseType<typeof api.settings.$get, 200>;
 export type SettingsPatch = {
   githubRepositories?: string;
   issueReadyLabel?: string;
+  issueReviewRequestedLabel?: string;
   issueWorkingLabel?: string;
   issueBlockedLabel?: string;
   issueCompletedLabel?: string;

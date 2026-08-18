@@ -1,4 +1,4 @@
-export type AgentRole = "issue-worker" | "decomposer" | "reviewer";
+export type AgentRole = "issue-worker" | "decomposer" | "reviewer" | "pull-request";
 
 export type AgentEventType =
   | "SESSION_STARTED"
@@ -25,7 +25,7 @@ export type AgentRequest = {
   artifacts?: Record<string, string>;
   model: string;
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-  outputSchemaPath?: string;
+  resultFilePath?: string;
   signal?: AbortSignal;
   onEvent?: (event: AgentEvent) => void | Promise<void>;
 };
@@ -59,5 +59,6 @@ export function buildAgentPrompt(request: AgentRequest) {
     `Task:\n${request.task}`,
     `Context:\n${request.context}`,
     artifacts && `Artifacts:\n${artifacts}`,
+    request.resultFilePath && `Result file: ${request.resultFilePath}`,
   ].filter(Boolean).join("\n\n");
 }

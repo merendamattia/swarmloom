@@ -6,6 +6,7 @@ import { parseConfig } from "./config-schema.ts";
 const runtimeSettingSchema = z.object({
   githubRepositories: z.string().min(1).optional(),
   issueReadyLabel: z.string().min(1).optional(),
+  issueReviewRequestedLabel: z.string().min(1).optional(),
   issueWorkingLabel: z.string().min(1).optional(),
   issueBlockedLabel: z.string().min(1).optional(),
   issueCompletedLabel: z.string().min(1).optional(),
@@ -29,6 +30,7 @@ const runtimeSettingSchema = z.object({
 const runtimeToEnvironment = {
   githubRepositories: "GITHUB_REPOSITORIES",
   issueReadyLabel: "ISSUE_READY_LABEL",
+  issueReviewRequestedLabel: "ISSUE_REVIEW_REQUESTED_LABEL",
   issueWorkingLabel: "ISSUE_WORKING_LABEL",
   issueBlockedLabel: "ISSUE_BLOCKED_LABEL",
   issueCompletedLabel: "ISSUE_COMPLETED_LABEL",
@@ -93,6 +95,7 @@ export function configEnvironment(config: Config) {
     GIT_AUTHOR_NAME: config.GIT_AUTHOR_NAME,
     GIT_AUTHOR_EMAIL: config.GIT_AUTHOR_EMAIL,
     ISSUE_READY_LABEL: config.ISSUE_READY_LABEL,
+    ISSUE_REVIEW_REQUESTED_LABEL: config.ISSUE_REVIEW_REQUESTED_LABEL,
     ISSUE_WORKING_LABEL: config.ISSUE_WORKING_LABEL,
     ISSUE_BLOCKED_LABEL: config.ISSUE_BLOCKED_LABEL,
     ISSUE_COMPLETED_LABEL: config.ISSUE_COMPLETED_LABEL,
@@ -123,6 +126,7 @@ export function runtimeSettingsView(config: Config) {
   return {
     githubRepositories: config.GITHUB_REPOSITORIES,
     issueReadyLabel: config.ISSUE_READY_LABEL,
+    issueReviewRequestedLabel: config.ISSUE_REVIEW_REQUESTED_LABEL,
     issueWorkingLabel: config.ISSUE_WORKING_LABEL,
     issueBlockedLabel: config.ISSUE_BLOCKED_LABEL,
     issueCompletedLabel: config.ISSUE_COMPLETED_LABEL,

@@ -9,6 +9,7 @@ export type AgentLabelDefinition = {
 export function agentLabelDefinitions(config: Config): AgentLabelDefinition[] {
   return [
     { name: config.ISSUE_READY_LABEL, color: "1f883d", description: "Issue is ready for automated implementation." },
+    { name: config.ISSUE_REVIEW_REQUESTED_LABEL, color: "fbca04", description: "A review requested changes and the worker should address them." },
     { name: config.ISSUE_WORKING_LABEL, color: "0969da", description: "Issue is currently being processed by the worker." },
     { name: config.ISSUE_BLOCKED_LABEL, color: "d4a72c", description: "Worker is blocked and needs additional information." },
     { name: config.ISSUE_COMPLETED_LABEL, color: "8250df", description: "Issue was implemented and reviewed by the worker." },

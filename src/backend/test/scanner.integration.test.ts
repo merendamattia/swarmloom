@@ -13,6 +13,7 @@ integration("repository scan", () => {
   const barrierEnvironment = `scan-barrier-${crypto.randomUUID()}`;
   const labels: Array<{ repository: string; issue: number; labels: string[] }> = [];
   const enqueuedJobs: string[] = [];
+  const scannedLabels: string[] = [];
   let issueNumber = 42;
   let labelFailure = false;
   let firstScanId = "";
@@ -29,13 +30,16 @@ integration("repository scan", () => {
   });
   const github = {
     getRepository: async (fullName: string) => ({ cloneUrl: `https://github.com/${fullName}.git` }),
-    listReadyIssues: async (fullName: string) => fullName === "acme/app" ? [{
-      number: issueNumber,
-      title: "Make the queue durable",
-      body: "Use PostgreSQL",
-      url: `https://github.com/acme/app/issues/${issueNumber}`,
-      labels: ["bug", "agent:ready"],
-    }] : [],
+    listReadyIssues: async (fullName: string, label: string) => {
+      scannedLabels.push(label);
+      return fullName === "acme/app" && label === config.ISSUE_READY_LABEL ? [{
+        number: issueNumber,
+        title: "Make the queue durable",
+        body: "Use PostgreSQL",
+        url: `https://github.com/acme/app/issues/${issueNumber}`,
+        labels: ["bug", "agent:ready"],
+      }] : [];
+    },
     setIssueLabels: async (repository: string, issue: number, nextLabels: string[]) => {
       if (labelFailure) throw new Error("GitHub labels unavailable");
       labels.push({ repository, issue, labels: nextLabels });
@@ -53,6 +57,13 @@ integration("repository scan", () => {
       changedFiles: 2,
     }),
     getPullRequestDiff: async () => "diff --git a/src/a.ts b/src/a.ts",
+    getIssueContext: async () => ({
+      issue: { number: issueNumber, title: "Issue", body: "", url: `https://github.com/acme/app/issues/${issueNumber}`, labels: ["agent:working"] },
+      issueComments: [],
+      pullRequests: [],
+    }),
+    getPullRequestChecks: async () => [],
+    createIssue: async () => ({ number: issueNumber + 1000, url: `https://github.com/acme/app/issues/${issueNumber + 1000}` }),
     addIssueComment: async () => {},
   };
   const sync = async ({ fullName }: { fullName: string }) => {
@@ -100,6 +111,7 @@ integration("repository scan", () => {
 
     expect(scan.status).toBe("RUNNING");
     expect(scan.queuedCount).toBe(1);
+    expect(scannedLabels).toEqual([config.ISSUE_READY_LABEL, config.ISSUE_REVIEW_REQUESTED_LABEL]);
     expect(labels).toEqual([{
       repository: "acme/app",
       issue: 42,
@@ -186,6 +198,7 @@ integration("repository scan", () => {
             commit: "abcdef1",
             pr: { number: 44, url: "https://github.com/acme/app/pull/44", base: "develop", head: activeBranch },
           });
+        if (request.resultFilePath) await Bun.write(request.resultFilePath, finalOutput);
         return { provider: "codex", sessionId: `session-${call}`, exitCode: 0, finalOutput, stderr: "" };
       },
     };

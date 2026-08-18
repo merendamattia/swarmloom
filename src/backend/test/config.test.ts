@@ -20,6 +20,7 @@ describe("configuration", () => {
     expect(config.CODEX_REASONING_EFFORT).toBe("max");
     expect(config.OPENCODE_MODEL).toBe("opencode-go/deepseek-v4-flash");
     expect(config.ISSUE_READY_LABEL).toBe("agent:ready");
+    expect(config.ISSUE_REVIEW_REQUESTED_LABEL).toBe("agent:review-requested");
     expect(config.ISSUE_HUMAN_REVIEW_LABEL).toBe("agent:human-review");
     expect(config.MAX_PARALLEL_JOBS).toBe(1);
     expect(config.SCHEDULE_CRON).toBe("*/30 * * * *");

@@ -100,6 +100,94 @@ describe("GitHub client", () => {
     expect(await client.getPullRequestDiff("acme/app", 9)).toStartWith("diff --git");
   });
 
+  test("loads the full issue and linked pull request context, checks, and diagnostic issue", async () => {
+    const requests: Request[] = [];
+    const client = createGitHubClient({
+      token: "secret-token",
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        requests.push(request);
+        if (request.url.includes("/issues/7/comments")) return Response.json([{
+          body: "Please also cover the empty case.",
+          html_url: "https://github.com/acme/app/issues/7#issuecomment-1",
+          user: { login: "reviewer" },
+          created_at: "2026-08-18T10:00:00Z",
+        }]);
+        if (request.url.includes("/pulls?")) return Response.json([{
+          number: 9,
+          html_url: "https://github.com/acme/app/pull/9",
+          title: "Fix queue",
+          base: { ref: "develop" },
+          head: { ref: "agent/issue-7" },
+          body: "Closes #7",
+          additions: 12,
+          deletions: 3,
+          changed_files: 2,
+        }]);
+        if (request.url.includes("/pulls/9/reviews")) return Response.json([{
+          body: "Add a regression test.",
+          state: "CHANGES_REQUESTED",
+          html_url: "https://github.com/acme/app/pull/9#pullrequestreview-1",
+          user: { login: "reviewer" },
+          submitted_at: "2026-08-18T10:01:00Z",
+        }]);
+        if (request.url.includes("/pulls/9/comments")) return Response.json([{
+          body: "This branch misses the empty case.",
+          path: "src/app.ts",
+          line: 12,
+          html_url: "https://github.com/acme/app/pull/9#discussion_r1",
+          user: { login: "reviewer" },
+          created_at: "2026-08-18T10:02:00Z",
+        }]);
+        if (request.url.includes("/check-runs")) return Response.json({ check_runs: [{
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          html_url: "https://github.com/acme/app/actions/runs/1",
+        }] });
+        if (request.url.includes("/commits/agent%2Fissue-7/status")) return Response.json({ state: "success", statuses: [] });
+        if (request.headers.get("accept") === "application/vnd.github.v3.diff") return new Response("diff --git a/src/app.ts b/src/app.ts");
+        if (request.url.endsWith("/pulls/9")) return Response.json({
+          number: 9,
+          html_url: "https://github.com/acme/app/pull/9",
+          title: "Fix queue",
+          base: { ref: "develop" },
+          head: { ref: "agent/issue-7" },
+          body: "Closes #7",
+          additions: 12,
+          deletions: 3,
+          changed_files: 2,
+        });
+        if (request.url.endsWith("/issues/7")) return Response.json(issue(7));
+        if (request.url.endsWith("/issues")) return Response.json({
+          number: 13,
+          html_url: "https://github.com/acme/app/issues/13",
+        }, { status: 201 });
+        throw new Error(`Unexpected request: ${request.url}`);
+      },
+    });
+
+    const context = await client.getIssueContext("acme/app", 7, "https://github.com/acme/app/issues/7");
+    expect(context.issueComments).toHaveLength(1);
+    expect(context.pullRequests).toHaveLength(1);
+    expect(context.pullRequests[0]).toMatchObject({
+      number: 9,
+      diff: "diff --git a/src/app.ts b/src/app.ts",
+      reviews: [{ state: "CHANGES_REQUESTED" }],
+      comments: [{ path: "src/app.ts", line: 12 }],
+    });
+    expect(await client.getPullRequestChecks("acme/app", "agent/issue-7")).toEqual([
+      { name: "CI", status: "completed", conclusion: "success", url: "https://github.com/acme/app/actions/runs/1" },
+      { name: "commit-status", status: "completed", conclusion: "success", url: null },
+    ]);
+    expect(await client.createIssue("acme/app", "[Swarmloom] CI failure", "Details", ["agent:ready"])).toEqual({
+      number: 13,
+      url: "https://github.com/acme/app/issues/13",
+    });
+    expect(requests.some((request) => request.url.includes("/pulls/9/reviews"))).toBe(true);
+    expect(requests.some((request) => request.url.includes("/pulls/9/comments"))).toBe(true);
+  });
+
   test("creates missing agent labels and repairs existing descriptions", async () => {
     const requests: Request[] = [];
     const config = parseConfig({
@@ -124,10 +212,12 @@ describe("GitHub client", () => {
 
     const creates = requests.filter((request) => request.method === "POST");
     const updates = requests.filter((request) => request.method === "PATCH");
-    expect(creates).toHaveLength(5);
+    expect(creates).toHaveLength(6);
     expect(updates).toHaveLength(1);
     expect(await Promise.all(creates.map((request) => request.clone().json())))
       .toContainEqual(expect.objectContaining({ name: config.ISSUE_HUMAN_REVIEW_LABEL }));
+    expect(await Promise.all(creates.map((request) => request.clone().json())))
+      .toContainEqual(expect.objectContaining({ name: config.ISSUE_REVIEW_REQUESTED_LABEL }));
     expect(await updates[0]?.json()).toMatchObject({ description: expect.any(String) });
   });
 

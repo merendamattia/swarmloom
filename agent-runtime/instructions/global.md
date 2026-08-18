@@ -104,7 +104,9 @@ Treat tokens, credentials, environment values, and private data as secrets. Do n
 files, provider auth stores, credential directories, or unrelated deployment configuration unless
 the task explicitly requires that exact file and it cannot be completed from safe examples/schema.
 
-The final response from the worker must be exactly one structured outcome matching the supplied JSON
-schema. If essential information is missing, return `blocked`. If one coherent Pull Request cannot
-safely contain the work, return `requires_decomposition`; the coordinator handles any additional
+The final structured outcome must be a single JSON document written to the path in the prompt's
+`Result file` section. That file is authoritative and the worker reads it after the run; it lives
+outside the worktree, so never commit it. The closing text message may only summarize the outcome.
+If essential information is missing, write a `blocked` outcome. If one coherent Pull Request cannot
+safely contain the work, write `requires_decomposition`; the coordinator handles any additional
 execution phase.

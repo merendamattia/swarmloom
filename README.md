@@ -4,6 +4,14 @@ Swarmloom is a Dockerized TypeScript application that turns ready-labelled GitHu
 into BullMQ jobs, runs them through interchangeable Codex or OpenCode sessions, opens
 Pull Requests to mandatory `develop`, and performs an independent automated review.
 
+When that review requests changes, the issue receives `agent:review-requested`; the next scheduled
+scan queues it again so the worker can address the findings and run the review again.
+
+Every job refreshes the complete issue, comments, linked Pull Requests, diffs, and review threads
+before the agent starts. A generated Pull Request is not completed until its CI/CD checks pass. If
+checks or the job fail, Swarmloom posts the diagnosis to the issue and Pull Request when available
+and opens a new `agent:ready` diagnostic issue containing the redacted stack trace.
+
 It includes:
 
 - multi-repository scheduled and manual discovery;
