@@ -78,7 +78,7 @@ export function createJobRunner({
       if (!await jobRepository.setWorktree(job.id, worktreePath)) return false;
       await events.record({
         type: "JOB_STARTED",
-        message: `Started ${job.repository.fullName}#${job.issueNumber}`,
+        message: `Started ${job.repository.fullName}#${job.issueNumber} · ${job.issueTitle}`,
         jobId: job.id,
         repositoryId: job.repositoryId,
         scanRunId: job.scanRunId ?? undefined,
@@ -117,7 +117,7 @@ export function createJobRunner({
       }
 
       if (outcome.outcome === "implemented") {
-        const { review, pullRequestUrl } = await reviewImplementation(job, outcome, worktreePath, signal);
+        const { review, pullRequestUrl, pullRequest } = await reviewImplementation(job, outcome, worktreePath, signal);
         reachedTerminalState = await jobRepository.finishRunning(job.id, "COMPLETED", {
           result: jsonValue({ ...outcome, pr: { ...outcome.pr, url: pullRequestUrl }, review }),
           exitCode: implementation.exitCode,
@@ -134,6 +134,12 @@ export function createJobRunner({
             metadata: {
               issueUrl: job.issueUrl,
               pullRequestUrl,
+              pullRequestNumber: pullRequest.number,
+              pullRequestTitle: pullRequest.title,
+              pullRequestBody: pullRequest.body,
+              filesChanged: pullRequest.changedFiles,
+              additions: pullRequest.additions,
+              deletions: pullRequest.deletions,
               provider: provider.name,
               model: job.model,
               review: review.verdict,
@@ -240,6 +246,11 @@ export function createJobRunner({
           issueUrl: currentJob.issueUrl,
           pullRequestUrl: pullRequest.url,
           pullRequestNumber: pullRequest.number,
+          pullRequestTitle: pullRequest.title,
+          pullRequestBody: pullRequest.body,
+          filesChanged: pullRequest.changedFiles,
+          additions: pullRequest.additions,
+          deletions: pullRequest.deletions,
         },
       });
       const diff = await github.getPullRequestDiff(currentJob.repository.fullName, outcome.pr.number);
@@ -272,7 +283,7 @@ export function createJobRunner({
         );
         await events.record({
           type: "REVIEW_COMPLETED",
-          message: `Review ${review.verdict} for ${currentJob.repository.fullName}#${outcome.pr.number}`,
+          message: `Review ${review.verdict} for ${currentJob.repository.fullName}#${outcome.pr.number}${review.findings.length ? ` · ${review.findings.length} finding${review.findings.length === 1 ? "" : "s"}` : ""}`,
           jobId: currentJob.id,
           repositoryId: currentJob.repositoryId,
           scanRunId: currentJob.scanRunId ?? undefined,
@@ -283,7 +294,7 @@ export function createJobRunner({
             findings: review.findings.length,
           },
         });
-        return { review, pullRequestUrl: pullRequest.url };
+        return { review, pullRequestUrl: pullRequest.url, pullRequest };
       } catch (error) {
         await reviewRepository.finish(reviewRow.id, "FAILED", { errorMessage: safeError(error) });
         throw error;

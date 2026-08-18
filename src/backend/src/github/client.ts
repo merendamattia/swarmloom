@@ -14,9 +14,13 @@ const labelSchema = z.object({ name: z.string(), color: z.string().optional(), d
 const pullRequestSchema = z.object({
   number: z.number().int().positive(),
   html_url: z.url(),
+  title: z.string(),
   base: z.object({ ref: z.string() }),
   head: z.object({ ref: z.string() }),
   body: z.string().nullable(),
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+  changed_files: z.number().int().nonnegative(),
 });
 
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -139,10 +143,14 @@ export function createGitHubClient(options: GitHubClientOptions) {
     );
     return {
       number: pullRequest.number,
+      title: pullRequest.title,
       url: pullRequest.html_url,
       base: pullRequest.base.ref,
       head: pullRequest.head.ref,
       body: pullRequest.body ?? "",
+      additions: pullRequest.additions,
+      deletions: pullRequest.deletions,
+      changedFiles: pullRequest.changed_files,
     };
   }
 
