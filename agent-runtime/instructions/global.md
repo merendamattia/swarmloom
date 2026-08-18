@@ -94,6 +94,11 @@ configuration, or new dependencies when the existing code or installed tools sol
 Write the smallest regression test for non-trivial behavior. Commit and push only the assigned
 branch when the task workflow requires it; never merge or force-push.
 
+Do not add the queue-ready label to a native sub-issue whose parent is unresolved. The worker
+defers any ready-labeled child until its parent is closed with reason `completed`; a reopened or
+non-completed parent keeps the child deferred, and the worker withdraws already-queued children
+when the parent stops being resolved.
+
 Before creating a commit, run `/usr/local/bin/verify-before-commit` from the assigned worktree when
 the container provides it, or run `pre-commit run --all-files` followed by the repository's test,
 lint, and typecheck commands. Use only the Conventional Commit types declared in

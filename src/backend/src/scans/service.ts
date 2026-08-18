@@ -1,7 +1,7 @@
 import type { Config } from "../core/config-schema.ts";
 import { redactSecrets } from "../core/secrets.ts";
 import type { EventService } from "../events/service.ts";
-import type { GitHubClient } from "../github/client.ts";
+import type { GitHubClient, ParentIssue } from "../github/client.ts";
 import { githubGitEnvironment } from "../github/git-auth.ts";
 import { agentLabelDefinitions, replaceWorkerLabels } from "../github/labels.ts";
 import { MissingDevelopBranchError, syncRepository as syncTargetRepository } from "../git/repositories.ts";
@@ -11,16 +11,17 @@ import { repositoryRepository } from "../repositories/repositories.ts";
 import { scanRunRepository } from "../repositories/scan-runs.ts";
 import { configuredAgent } from "../providers/index.ts";
 import type { JobQueue } from "../queue/service.ts";
+import { isParentResolved } from "./dependencies.ts";
 import { finishScanIfComplete } from "./finalize.ts";
 
 type SyncRepository = typeof syncTargetRepository;
 
 type ScanServiceDependencies = {
   config: Config;
-  github: Pick<GitHubClient, "getRepository" | "listReadyIssues" | "setIssueLabels"> &
+  github: Pick<GitHubClient, "getRepository" | "listReadyIssues" | "getParentIssue" | "setIssueLabels"> &
     Partial<Pick<GitHubClient, "ensureLabels">>;
   events?: EventService;
-  queue?: Pick<JobQueue, "enqueue">;
+  queue?: Pick<JobQueue, "enqueue" | "remove">;
   syncRepository?: SyncRepository;
 };
 
@@ -28,7 +29,7 @@ export function createScanService({
   config,
   github,
   events = { record: eventRepository.create },
-  queue = { enqueue: async () => {} },
+  queue = { enqueue: async () => {}, remove: async () => false },
   syncRepository = syncTargetRepository,
 }: ScanServiceDependencies) {
   async function run(source: "SCHEDULED" | "MANUAL") {
@@ -58,7 +59,21 @@ export function createScanService({
           await github.ensureLabels?.(fullName, agentLabelDefinitions(config));
           const issues = await github.listReadyIssues(fullName, config.ISSUE_READY_LABEL);
           for (const issue of issues) {
-            const job = await jobRepository.tryCreateQueued({
+            const branchName = `agent/issue-${issue.number}-${crypto.randomUUID().slice(0, 8)}`;
+            const parent = await github.getParentIssue(fullName, issue.number);
+            if (parent && !isParentResolved(parent)) {
+              await deferIssue(fullName, parent, issue, repository.id, scan.id, branchName, synced.baselineCommit, agent);
+              continue;
+            }
+            const promoted = await jobRepository.promoteBlocked(
+              repository.id,
+              issue.number,
+              config.APP_ENV,
+              scan.id,
+              branchName,
+              synced.baselineCommit,
+            );
+            const job = promoted ?? await jobRepository.tryCreateQueued({
               repositoryId: repository.id,
               scanRunId: scan.id,
               environment: config.APP_ENV,
@@ -66,7 +81,7 @@ export function createScanService({
               issueTitle: issue.title,
               issueUrl: issue.url,
               issueBody: issue.body,
-              branchName: `agent/issue-${issue.number}-${crypto.randomUUID().slice(0, 8)}`,
+              branchName,
               baselineCommit: synced.baselineCommit,
               provider: agent.provider,
               model: agent.model,
@@ -148,6 +163,49 @@ export function createScanService({
   }
 
   return { run };
+
+  async function deferIssue(
+    fullName: string,
+    parent: ParentIssue,
+    issue: { number: number; title: string; url: string; body: string },
+    repositoryId: string,
+    scanRunId: string,
+    branchName: string,
+    baselineCommit: string,
+    agent: ReturnType<typeof configuredAgent>,
+  ) {
+    const result = await jobRepository.deferForDependency({
+      repositoryId,
+      scanRunId,
+      environment: config.APP_ENV,
+      issueNumber: issue.number,
+      issueTitle: issue.title,
+      issueUrl: issue.url,
+      issueBody: issue.body,
+      branchName,
+      baselineCommit,
+      provider: agent.provider,
+      model: agent.model,
+      reasoningEffort: agent.reasoningEffort,
+      blockingIssueNumber: parent.number,
+      blockingIssueUrl: parent.url,
+    });
+    if (result.cancelledQueuedJobId) await queue.remove(result.cancelledQueuedJobId);
+    if (!result.job || !result.changed) return;
+    await events.record({
+      type: "JOB_DEFERRED",
+      message: `Deferred ${fullName}#${issue.number}: blocked by unresolved parent issue #${parent.number}`,
+      jobId: result.job.id,
+      repositoryId,
+      scanRunId,
+      metadata: {
+        issueUrl: issue.url,
+        blockingIssueNumber: parent.number,
+        blockingIssueUrl: parent.url,
+        withdrewQueued: Boolean(result.cancelledQueuedJobId),
+      },
+    });
+  }
 }
 
 function safeError(error: unknown) {

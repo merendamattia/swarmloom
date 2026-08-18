@@ -493,6 +493,24 @@ The reviewer returns structured `pass` or `changes_requested` findings with file
 severity, problem, and correction. The result is stored in `review` and posted as a PR comment.
 This is an automated review record, not an automatic merge or GitHub approval.
 
+## Issue dependencies
+
+A ready-labeled feature that is a native sub-issue of another issue is deferred until its
+prerequisite is resolved. Dependency state lives in GitHub; the worker reads the native parent
+relationship through the [get parent issue endpoint](https://docs.github.com/en/rest/issues/sub-issues#get-parent-issue).
+
+Release rule:
+
+- The child is released only when the parent is closed with `state_reason` `completed`.
+- An open parent, a parent closed as `not_planned`/`duplicate`, and a reopened parent all keep the
+  child deferred.
+
+Discovery records a deferred child as a durable `BLOCKED` job with the blocking parent issue
+number/URL and emits a `JOB_DEFERRED` event. The child keeps its `ready` label and is not enqueued.
+When the parent is completed, the next scan promotes that same row to `QUEUED` and enqueues it.
+If a parent is reopened after its child was queued, the worker re-checks the parent before claiming
+and withdraws the queued child back into the deferred `BLOCKED` state instead of executing it.
+
 ## Local development
 
 Requirements: Bun 1.3.14, Python 3.11+, Docker/Compose, Git, GitHub CLI, and the selected provider CLI.

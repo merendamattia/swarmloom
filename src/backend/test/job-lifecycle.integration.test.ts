@@ -67,6 +67,68 @@ integration("PostgreSQL job lifecycle", () => {
     expect(await jobs.complete(cancelled!.id, { outcome: "wrong" }, 0)).toBe(false);
   });
 
+  test("defers a child as one blocked row, promotes it when released, and withdraws queued work", async () => {
+    const issue = issuePrefix + 10;
+    const parent = issue - 1;
+    const dependencyBlock = {
+      repositoryId,
+      environment,
+      issueNumber: issue,
+      issueTitle: `Issue ${issue}`,
+      issueUrl: `https://github.com/test/lifecycle/issues/${issue}`,
+      issueBody: "Acceptance criteria",
+      branchName: `agent/issue-${issue}`,
+      baselineCommit: "a".repeat(40),
+      provider: "CODEX" as const,
+      model: "gpt-5.6-luna",
+      reasoningEffort: "max",
+      blockingIssueNumber: parent,
+      blockingIssueUrl: `https://github.com/test/lifecycle/issues/${parent}`,
+    };
+
+    const blocked = await jobs.deferForDependency({ ...dependencyBlock, scanRunId: null });
+    expect(blocked.job).toMatchObject({
+      status: "BLOCKED",
+      blockingIssueNumber: parent,
+      errorMessage: `Blocked by parent issue #${parent}: https://github.com/test/lifecycle/issues/${parent}`,
+    });
+    expect(blocked.changed).toBe(true);
+    expect(blocked.job!.activeIssueKey).toBe(`${repositoryId}:${issue}`);
+
+    const repeated = await jobs.deferForDependency({ ...dependencyBlock, scanRunId: null });
+    expect(repeated.changed).toBe(false);
+    expect(repeated.job!.id).toBe(blocked.job!.id);
+    expect(await prisma.job.count({ where: { repositoryId, issueNumber: issue } })).toBe(1);
+
+    const promoted = await jobs.promoteBlocked(
+      repositoryId,
+      issue,
+      environment,
+      null,
+      `agent/issue-${issue}-retry`,
+      "b".repeat(40),
+    );
+    expect(promoted).toMatchObject({
+      status: "QUEUED",
+      blockingIssueNumber: null,
+      blockingIssueUrl: null,
+      branchName: `agent/issue-${issue}-retry`,
+      baselineCommit: "b".repeat(40),
+    });
+    expect(promoted!.activeIssueKey).toBe(`${repositoryId}:${issue}`);
+
+    const withdrawn = await jobs.deferForDependency({ ...dependencyBlock, scanRunId: null });
+    expect(withdrawn.cancelledQueuedJobId).toBe(promoted!.queueJobId);
+    expect(withdrawn.changed).toBe(true);
+    expect(withdrawn.job).toMatchObject({ status: "BLOCKED", blockingIssueNumber: parent });
+    expect((await prisma.job.findUniqueOrThrow({ where: { id: promoted!.id } })).status).toBe("CANCELLED");
+
+    await prisma.job.update({
+      where: { id: withdrawn.job!.id },
+      data: { status: "CANCELLED", activeIssueKey: null, completedAt: new Date() },
+    });
+  });
+
   function queuedJob(issueNumber: number) {
     return {
       repositoryId,

@@ -13,10 +13,12 @@ integration("repository scan", () => {
   const barrierEnvironment = `scan-barrier-${crypto.randomUUID()}`;
   const labels: Array<{ repository: string; issue: number; labels: string[] }> = [];
   const enqueuedJobs: string[] = [];
+  const removedJobs: string[] = [];
   let issueNumber = 42;
   let labelFailure = false;
   let firstScanId = "";
   let activeBranch = "";
+  let parent: { number: number; state: "open" | "closed"; stateReason: string | null } | null = null;
   const config = parseConfig({
     DATABASE_URL: process.env.DATABASE_URL ?? "postgresql://unused:unused@localhost:5432/unused",
     REDIS_URL: process.env.REDIS_URL ?? "redis://localhost:18422",
@@ -40,6 +42,15 @@ integration("repository scan", () => {
       if (labelFailure) throw new Error("GitHub labels unavailable");
       labels.push({ repository, issue, labels: nextLabels });
     },
+    getParentIssue: async (_fullName: string, _issue: number) => parent
+      ? {
+        number: parent.number,
+        title: "Prerequisite",
+        url: `https://github.com/acme/app/issues/${parent.number}`,
+        state: parent.state,
+        stateReason: parent.stateReason,
+      }
+      : null,
     getIssue: async () => ({ number: issueNumber, title: "Issue", body: "", url: "https://github.com/acme/app/issues/1", labels: ["agent:working"] }),
     getPullRequest: async (_repository: string, number: number) => ({
       number,
@@ -88,7 +99,10 @@ integration("repository scan", () => {
     const scanner = createScanService({
       config: { ...config, APP_ENV: environment as "test" },
       github,
-      queue: { enqueue: async (jobId) => { enqueuedJobs.push(jobId); } },
+      queue: {
+        enqueue: async (jobId) => { enqueuedJobs.push(jobId); },
+        remove: async (jobId) => { removedJobs.push(jobId); return true; },
+      },
       syncRepository: sync,
     });
     const scan = await scanner.run("MANUAL");
@@ -200,5 +214,95 @@ integration("repository scan", () => {
       .toMatchObject({ status: "COMPLETED", successCount: 1, reviewsCount: 1 });
     expect(await prisma.jobEvent.findFirst({ where: { scanRunId: scan.id, type: "SCAN_COMPLETED" } }))
       .not.toBeNull();
+  });
+
+  test("defers a ready child while its parent is unresolved", async () => {
+    issueNumber = 45;
+    parent = { number: 44, state: "open", stateReason: null };
+    const scanner = createScanService({ config: { ...config, APP_ENV: environment as "test" }, github, syncRepository: sync });
+    const scan = await scanner.run("MANUAL");
+
+    expect(scan).toMatchObject({ status: "COMPLETED", queuedCount: 0, blockedCount: 1 });
+    const job = await prisma.job.findFirstOrThrow({ where: { environment, issueNumber: 45 } });
+    expect(job).toMatchObject({
+      status: "BLOCKED",
+      blockingIssueNumber: 44,
+      blockingIssueUrl: "https://github.com/acme/app/issues/44",
+    });
+    expect(job.activeIssueKey).toBe(`${job.repositoryId}:45`);
+    expect(job.errorMessage).toContain("Blocked by parent issue #44");
+    expect(enqueuedJobs).not.toContain(job.id);
+    expect(await prisma.jobEvent.findFirst({ where: { scanRunId: scan.id, type: "JOB_DEFERRED" } }))
+      .toMatchObject({ metadata: { blockingIssueNumber: 44 } });
+  });
+
+  test("promotes the deferred child once the parent is completed", async () => {
+    const deferred = await prisma.job.findFirstOrThrow({ where: { environment, issueNumber: 45 } });
+    parent = { number: 44, state: "closed", stateReason: "completed" };
+    const scanner = createScanService({
+      config: { ...config, APP_ENV: environment as "test" },
+      github,
+      queue: {
+        enqueue: async (jobId) => { enqueuedJobs.push(jobId); },
+        remove: async () => true,
+      },
+      syncRepository: sync,
+    });
+    const scan = await scanner.run("MANUAL");
+
+    expect(scan).toMatchObject({ queuedCount: 1, status: "RUNNING" });
+    const job = await prisma.job.findUniqueOrThrow({ where: { id: deferred.id } });
+    expect(job).toMatchObject({
+      status: "QUEUED",
+      blockingIssueNumber: null,
+      blockingIssueUrl: null,
+      scanRunId: scan.id,
+    });
+    expect(enqueuedJobs).toContain(job.id);
+
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { status: "CANCELLED", activeIssueKey: null, completedAt: new Date() },
+    });
+    const { scanRunRepository } = await import("../src/repositories/scan-runs.ts");
+    expect((await scanRunRepository.finishJobs(scan.id, environment))?.status).toBe("COMPLETED");
+  });
+
+  test("withdraws a queued child when its parent is reopened before execution", async () => {
+    issueNumber = 46;
+    parent = null;
+    const scanner = createScanService({ config: { ...config, APP_ENV: environment as "test" }, github, syncRepository: sync });
+    const scan = await scanner.run("MANUAL");
+    const queued = await prisma.job.findFirstOrThrow({ where: { environment, issueNumber: 46, status: "QUEUED" } });
+
+    parent = { number: 44, state: "open", stateReason: null };
+    const { createEventService } = await import("../src/events/service.ts");
+    const { createDependencyGuard } = await import("../src/scans/dependencies.ts");
+    const guard = createDependencyGuard(
+      github,
+      createEventService(),
+      { remove: async (jobId) => { removedJobs.push(jobId); return true; } },
+    );
+    expect(await guard({ jobId: queued.id })).toBe(false);
+
+    const withdrawn = await prisma.job.findUniqueOrThrow({ where: { id: queued.id } });
+    expect(withdrawn.status).toBe("CANCELLED");
+    expect(removedJobs).toContain(withdrawn.queueJobId);
+    const deferred = await prisma.job.findFirstOrThrow({ where: { environment, issueNumber: 46, status: "BLOCKED" } });
+    expect(deferred).toMatchObject({
+      blockingIssueNumber: 44,
+      blockingIssueUrl: "https://github.com/acme/app/issues/44",
+    });
+    expect(await prisma.jobEvent.findFirst({
+      where: { jobId: deferred.id, type: "JOB_DEFERRED" },
+    })).toMatchObject({ metadata: { withdrewQueued: true } });
+
+    await prisma.job.update({
+      where: { id: deferred.id },
+      data: { status: "CANCELLED", activeIssueKey: null, completedAt: new Date() },
+    });
+    const { scanRunRepository } = await import("../src/repositories/scan-runs.ts");
+    expect((await scanRunRepository.finishJobs(scan.id, environment))?.status).toBe("COMPLETED");
+    parent = null;
   });
 });

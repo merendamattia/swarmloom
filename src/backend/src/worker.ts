@@ -6,6 +6,7 @@ import { createSettingsService } from "./core/settings-service.ts";
 import { validateStartup } from "./core/startup.ts";
 import { createAgentProvider } from "./providers/index.ts";
 import { createJobRunner } from "./runner/service.ts";
+import { createDependencyGuard } from "./scans/dependencies.ts";
 import { startWorkerLoops } from "./worker/service.ts";
 import { createJobQueue } from "./queue/service.ts";
 import { recoverStaleJobs } from "./worker/recovery.ts";
@@ -27,7 +28,15 @@ const providers = {
   opencode: createAgentProvider("opencode"),
 };
 const runner = createJobRunner({ config, providers, github, events });
-const worker = startWorkerLoops(config, queue, runner, settings, () => recoverStaleJobs(config, github, events));
+const dependencyGuard = createDependencyGuard(github, events, queue);
+const worker = startWorkerLoops(
+  config,
+  queue,
+  runner,
+  settings,
+  () => recoverStaleJobs(config, github, events),
+  dependencyGuard,
+);
 logger.info("Worker started", {
   environment: config.APP_ENV,
   provider: config.AGENT_PROVIDER,

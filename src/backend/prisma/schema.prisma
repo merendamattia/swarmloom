@@ -97,6 +97,8 @@ model Job {
   baselineCommit          String
   pullRequestNumber       Int?
   pullRequestUrl          String?
+  blockingIssueNumber     Int?
+  blockingIssueUrl        String?
   provider                AgentProvider
   model                   String
   reasoningEffort         String?

@@ -124,6 +124,7 @@ export default function JobPage() {
               <div className="fact"><dt>Started</dt><dd>{dateTime(data.startedAt)}</dd></div>
               <div className="fact"><dt>Completed</dt><dd>{dateTime(data.completedAt)}</dd></div>
               <div className="fact"><dt>Heartbeat</dt><dd>{dateTime(data.heartbeatAt)}</dd></div>
+              {data.blockingIssueNumber ? <div className="fact"><dt>Blocking parent</dt><dd>{data.blockingIssueUrl ? <a href={data.blockingIssueUrl} target="_blank" rel="noreferrer">{data.repository.fullName} #{data.blockingIssueNumber}<ExternalLink size={13} aria-hidden="true" /></a> : `#${data.blockingIssueNumber}`}</dd></div> : null}
             </dl>
           </section>
         </aside>

@@ -19,6 +19,14 @@ const pullRequestSchema = z.object({
   body: z.string().nullable(),
 });
 
+const parentIssueSchema = z.object({
+  number: z.number().int().positive(),
+  title: z.string(),
+  html_url: z.url(),
+  state: z.enum(["open", "closed"]),
+  state_reason: z.string().nullable(),
+});
+
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 type GitHubClientOptions = {
@@ -31,7 +39,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
   const apiUrl = (options.apiUrl ?? "https://api.github.com").replace(/\/$/, "");
   const fetch = options.fetch ?? globalThis.fetch;
 
-  async function request(path: string, init: RequestInit = {}, text = false) {
+  async function request(path: string, init: RequestInit = {}, requestOptions: { text?: boolean; notFoundNull?: boolean } = {}) {
     const response = await fetch(`${apiUrl}${path}`, {
       ...init,
       headers: {
@@ -43,11 +51,12 @@ export function createGitHubClient(options: GitHubClientOptions) {
       },
     });
     if (!response.ok) {
+      if (requestOptions.notFoundNull && (response.status === 404 || response.status === 410)) return null;
       const body = await response.text();
       throw new Error(`GitHub API request failed (${response.status}): ${body.slice(0, 500).split(options.token).join("[REDACTED]")}`);
     }
     if (response.status === 204) return null;
-    return text ? response.text() : response.json();
+    return requestOptions.text ? response.text() : response.json();
   }
 
   async function getRepository(fullName: string) {
@@ -133,6 +142,23 @@ export function createGitHubClient(options: GitHubClientOptions) {
     };
   }
 
+  async function getParentIssue(fullName: string, issueNumber: number) {
+    const parent = await request(
+      `/repos/${fullName}/issues/${issueNumber}/parent`,
+      {},
+      { notFoundNull: true },
+    );
+    if (parent === null) return null;
+    const parsed = parentIssueSchema.parse(parent);
+    return {
+      number: parsed.number,
+      title: parsed.title,
+      url: parsed.html_url,
+      state: parsed.state,
+      stateReason: parsed.state_reason,
+    };
+  }
+
   async function getPullRequest(fullName: string, pullRequestNumber: number) {
     const pullRequest = pullRequestSchema.parse(
       await request(`/repos/${fullName}/pulls/${pullRequestNumber}`),
@@ -149,7 +175,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
   async function getPullRequestDiff(fullName: string, pullRequestNumber: number) {
     return await request(`/repos/${fullName}/pulls/${pullRequestNumber}`, {
       headers: { Accept: "application/vnd.github.v3.diff" },
-    }, true) as string;
+    }, { text: true }) as string;
   }
 
   async function setIssueLabels(fullName: string, issueNumber: number, labels: string[]) {
@@ -171,12 +197,21 @@ export function createGitHubClient(options: GitHubClientOptions) {
     ensureLabels,
     listReadyIssues,
     getIssue,
+    getParentIssue,
     getPullRequest,
     getPullRequestDiff,
     setIssueLabels,
     addIssueComment,
   };
 }
+
+export type ParentIssue = {
+  number: number;
+  title: string;
+  url: string;
+  state: "open" | "closed";
+  stateReason: string | null;
+};
 
 function isUnprocessableEntity(error: unknown) {
   return error instanceof Error && error.message.includes("GitHub API request failed (422)");

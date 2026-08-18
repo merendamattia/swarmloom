@@ -92,6 +92,39 @@ describe("GitHub client", () => {
     expect(await client.getPullRequestDiff("acme/app", 9)).toStartWith("diff --git");
   });
 
+  test("reads the parent issue and tolerates an issue without one", async () => {
+    const requests: Request[] = [];
+    const client = createGitHubClient({
+      token: "secret-token",
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        requests.push(request);
+        if (request.url.endsWith("/issues/7/parent")) {
+          return Response.json({
+            number: 3,
+            title: "Prerequisite",
+            html_url: "https://github.com/acme/app/issues/3",
+            state: "open",
+            state_reason: null,
+          });
+        }
+        if (request.url.endsWith("/issues/8/parent")) return new Response("No parent issue found", { status: 404 });
+        return new Response("Sub-issues unavailable", { status: 410 });
+      },
+    });
+
+    expect(await client.getParentIssue("acme/app", 7)).toEqual({
+      number: 3,
+      title: "Prerequisite",
+      url: "https://github.com/acme/app/issues/3",
+      state: "open",
+      stateReason: null,
+    });
+    expect(requests[0].url).toContain("/repos/acme/app/issues/7/parent");
+    expect(await client.getParentIssue("acme/app", 8)).toBeNull();
+    expect(await client.getParentIssue("acme/app", 9)).toBeNull();
+  });
+
   test("creates missing agent labels and repairs existing descriptions", async () => {
     const requests: Request[] = [];
     const config = parseConfig({

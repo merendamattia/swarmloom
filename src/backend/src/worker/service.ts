@@ -3,10 +3,11 @@ import type { SettingsService } from "../core/settings-service.ts";
 import { logger } from "../core/logger.ts";
 import { heartbeatRepository } from "../repositories/heartbeats.ts";
 import { jobRepository } from "../repositories/jobs.ts";
-import type { JobQueue } from "../queue/service.ts";
+import type { JobQueue, QueuePayload } from "../queue/service.ts";
 
 type Runner = { run(jobId: string, workerId: string): Promise<boolean> };
 type RecoverStaleJobs = () => Promise<number>;
+type DependencyGuard = (payload: QueuePayload) => Promise<boolean>;
 
 export function startWorkerLoops(
   config: Config,
@@ -14,11 +15,13 @@ export function startWorkerLoops(
   runner: Runner,
   settings: SettingsService,
   recoverStale?: RecoverStaleJobs,
+  dependencyGuard?: DependencyGuard,
 ) {
   const worker = queue.createWorker(async (payload) => {
     if (payload.environment !== config.APP_ENV) return;
     await settings.reload();
     worker.concurrency = config.MAX_PARALLEL_JOBS;
+    if (dependencyGuard && !(await dependencyGuard(payload))) return;
     const claimed = await jobRepository.claim(payload.jobId, config.APP_ENV, config.WORKER_ID);
     if (claimed) await runner.run(claimed.id, config.WORKER_ID);
   }, config.MAX_PARALLEL_JOBS);
