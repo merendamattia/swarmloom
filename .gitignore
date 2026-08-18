@@ -1,0 +1,13 @@
+.agent-work/
+.env
+.env.*
+!.env.example
+!.env.production.example
+node_modules/
+.next/
+dist/
+coverage/
+*.tsbuildinfo
+/data/
+*.log
+.DS_Store

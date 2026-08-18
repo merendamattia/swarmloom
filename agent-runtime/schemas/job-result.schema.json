@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "outcome": {
+      "type": "string",
+      "enum": ["implemented", "requires_decomposition", "decomposed", "blocked"]
+    },
+    "summary": { "type": "string" },
+    "tests": { "type": ["array", "null"], "items": { "type": "string" } },
+    "commit": { "type": ["string", "null"] },
+    "pr": {
+      "type": ["object", "null"],
+      "properties": {
+        "number": { "type": "integer" },
+        "url": { "type": "string" },
+        "base": { "type": "string", "enum": ["develop"] },
+        "head": { "type": "string" }
+      },
+      "required": ["number", "url", "base", "head"],
+      "additionalProperties": false
+    },
+    "reason": { "type": ["string", "null"] },
+    "childIssues": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "properties": {
+          "number": { "type": "integer" },
+          "url": { "type": "string" },
+          "ready": { "type": "boolean" }
+        },
+        "required": ["number", "url", "ready"],
+        "additionalProperties": false
+      }
+    },
+    "question": { "type": ["string", "null"] }
+  },
+  "required": ["outcome", "summary", "tests", "commit", "pr", "reason", "childIssues", "question"],
+  "additionalProperties": false
+}

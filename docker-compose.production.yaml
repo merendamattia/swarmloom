@@ -1,0 +1,98 @@
+x-app-environment: &app-environment
+  APP_ENV: production
+  NODE_ENV: production
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+  REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+  SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:?SETTINGS_ENCRYPTION_KEY is required}
+  GITHUB_TOKEN: ${GITHUB_TOKEN:?GITHUB_TOKEN is required}
+  GH_TOKEN: ${GITHUB_TOKEN:?GITHUB_TOKEN is required}
+  GITHUB_REPOSITORIES: ${GITHUB_REPOSITORIES:?GITHUB_REPOSITORIES is required}
+  GITHUB_API_URL: ${GITHUB_API_URL:-https://api.github.com}
+  GIT_AUTHOR_NAME: ${GIT_AUTHOR_NAME:-github-agent-worker}
+  GIT_AUTHOR_EMAIL: ${GIT_AUTHOR_EMAIL:-github-agent-worker@users.noreply.github.com}
+  ISSUE_READY_LABEL: ${ISSUE_READY_LABEL:-agent:ready}
+  ISSUE_WORKING_LABEL: ${ISSUE_WORKING_LABEL:-agent:working}
+  ISSUE_BLOCKED_LABEL: ${ISSUE_BLOCKED_LABEL:-agent:blocked}
+  ISSUE_COMPLETED_LABEL: ${ISSUE_COMPLETED_LABEL:-agent:done}
+  ISSUE_DECOMPOSED_LABEL: ${ISSUE_DECOMPOSED_LABEL:-agent:decomposed}
+  ISSUE_HUMAN_REVIEW_LABEL: ${ISSUE_HUMAN_REVIEW_LABEL:-agent:human-review}
+  SCHEDULE_CRON: ${SCHEDULE_CRON:-*/30 * * * *}
+  SCHEDULE_TIMEZONE: ${SCHEDULE_TIMEZONE:-UTC}
+  MAX_PARALLEL_JOBS: ${MAX_PARALLEL_JOBS:-1}
+  DATA_DIR: /data
+  AGENT_RUNTIME_DIR: /app/agent-runtime
+  AGENT_PROVIDER: ${AGENT_PROVIDER:-codex}
+  OPENCODE_MODEL: ${OPENCODE_MODEL:-opencode-go/deepseek-v4-flash}
+  CODEX_MODEL: ${CODEX_MODEL:-gpt-5.6-luna}
+  CODEX_REASONING_EFFORT: ${CODEX_REASONING_EFFORT:-max}
+  TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-false}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+  FRONTEND_URL: ${FRONTEND_URL:?FRONTEND_URL is required}
+  WORKER_ID: ${WORKER_ID:-production-worker-1}
+  HEARTBEAT_INTERVAL_MS: ${HEARTBEAT_INTERVAL_MS:-10000}
+  STALE_JOB_THRESHOLD_MS: ${STALE_JOB_THRESHOLD_MS:-60000}
+  AGENT_TIMEOUT_MS: ${AGENT_TIMEOUT_MS:-7200000}
+  CODEX_HOME: /data/codex-home
+  XDG_DATA_HOME: /data/opencode-data
+  XDG_CONFIG_HOME: /data/opencode-config
+  OPENCODE_CONFIG_DIR: /data/opencode-config
+  OPENCODE_PERMISSION: '{"*":"allow"}'
+
+x-app-volumes: &app-volumes
+  - worker_data:/data
+  - codex_home:/data/codex-home
+  - opencode_data:/data/opencode-data
+  - opencode_config:/data/opencode-config
+  - ${AGENT_RUNTIME_HOST_PATH:-./agent-runtime}:/app/agent-runtime:ro
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL is required}
+        CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.147.0}
+        OPENCODE_CLI_VERSION: ${OPENCODE_CLI_VERSION:-1.18.18}
+    image: github-agent-worker:production
+    restart: unless-stopped
+    environment:
+      <<: *app-environment
+      PORT: 18421
+    command: ["sh", "-c", "bun run db:deploy && bun run --filter github-agent-worker-backend start"]
+    ports: ["127.0.0.1:${BACKEND_PORT:-18421}:18421"]
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://localhost:18421/api/health');process.exit(r.ok?0:1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    volumes: *app-volumes
+
+  worker:
+    image: github-agent-worker:production
+    restart: unless-stopped
+    environment: *app-environment
+    command: ["bun", "run", "--filter", "github-agent-worker-backend", "worker"]
+    depends_on:
+      backend: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    volumes: *app-volumes
+
+  frontend:
+    image: github-agent-worker:production
+    restart: unless-stopped
+    environment: {NODE_ENV: production, PORT: 18420}
+    command: ["bun", "run", "--filter", "github-agent-worker-frontend", "start"]
+    ports: ["127.0.0.1:${FRONTEND_PORT:-18420}:18420"]
+    depends_on: {backend: {condition: service_healthy}}
+
+volumes:
+  worker_data:
+  codex_home:
+  opencode_data:
+  opencode_config:

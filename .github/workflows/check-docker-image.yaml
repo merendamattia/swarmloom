@@ -1,0 +1,27 @@
+name: Check Docker image building
+on:
+  pull_request:
+    branches: [develop]
+  push:
+    branches: [develop]
+
+jobs:
+  docker-test:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://github_agent_worker:test@postgres:5432/github_agent_worker
+      POSTGRES_PASSWORD: test
+      REDIS_URL: redis://redis:6379
+      SETTINGS_ENCRYPTION_KEY: test-settings-encryption-key-0123456789
+      GITHUB_TOKEN: test-token
+      GITHUB_REPOSITORIES: owner/repository
+      PUBLIC_API_URL: https://worker.example.com
+      FRONTEND_URL: https://worker.example.com
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve local Compose
+        run: docker compose --env-file .env.example config --quiet
+      - name: Resolve production Compose
+        run: docker compose --env-file .env.production.example -f docker-compose.production.yaml config --quiet
+      - name: Build application image
+        run: docker compose --env-file .env.example build backend

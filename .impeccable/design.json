@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-17T00:00:00.000Z",
+  "title": "Design System: GitHub Agent Worker",
+  "extensions": {
+    "colorMeta": {
+      "canvas": { "role": "neutral", "displayName": "Morning Paper", "canonical": "oklch(97.8% 0.006 78)", "tonalRamp": ["oklch(18% 0.012 78)", "oklch(30% 0.012 78)", "oklch(42% 0.011 78)", "oklch(54% 0.01 78)", "oklch(66% 0.009 78)", "oklch(78% 0.008 78)", "oklch(88% 0.007 78)", "oklch(97.8% 0.006 78)"] },
+      "ink": { "role": "neutral", "displayName": "Ledger Ink", "canonical": "oklch(23% 0.018 258)", "tonalRamp": ["oklch(15% 0.016 258)", "oklch(23% 0.018 258)", "oklch(35% 0.017 258)", "oklch(47% 0.016 258)", "oklch(60% 0.014 258)", "oklch(72% 0.012 258)", "oklch(84% 0.009 258)", "oklch(95% 0.005 258)"] },
+      "accent": { "role": "primary", "displayName": "Ink Indigo", "canonical": "oklch(48% 0.115 264)", "tonalRamp": ["oklch(18% 0.055 264)", "oklch(28% 0.075 264)", "oklch(38% 0.1 264)", "oklch(48% 0.115 264)", "oklch(60% 0.1 264)", "oklch(72% 0.075 264)", "oklch(84% 0.05 264)", "oklch(95% 0.018 264)"] },
+      "success": { "role": "success", "displayName": "Verified Green", "canonical": "oklch(43% 0.105 151)", "tonalRamp": ["oklch(18% 0.045 151)", "oklch(28% 0.07 151)", "oklch(36% 0.09 151)", "oklch(43% 0.105 151)", "oklch(56% 0.09 151)", "oklch(70% 0.07 151)", "oklch(83% 0.05 151)", "oklch(95% 0.025 151)"] },
+      "danger": { "role": "error", "displayName": "Exception Red", "canonical": "oklch(49% 0.16 28)", "tonalRamp": ["oklch(18% 0.06 28)", "oklch(28% 0.1 28)", "oklch(38% 0.14 28)", "oklch(49% 0.16 28)", "oklch(61% 0.13 28)", "oklch(73% 0.09 28)", "oklch(85% 0.055 28)", "oklch(95% 0.025 28)"] }
+    },
+    "typographyMeta": {
+      "heading": { "displayName": "Heading", "purpose": "Page and section hierarchy." },
+      "body": { "displayName": "Body", "purpose": "Operational prose and controls." },
+      "data": { "displayName": "Data", "purpose": "Identifiers, commits, and event output." }
+    },
+    "shadows": [
+      { "name": "sticky-separation", "value": "0 1px 0 oklch(87% 0.012 78)", "purpose": "Separates the sticky header from scrolling content." }
+    ],
+    "motion": [
+      { "name": "state", "value": "140ms ease-out", "purpose": "Color and border feedback only." }
+    ],
+    "breakpoints": [
+      { "name": "compact", "value": "640px" },
+      { "name": "split", "value": "880px" },
+      { "name": "wide", "value": "1120px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Runs the single primary operation in a view.",
+      "html": "<button class=\"ds-button-primary\">Run now</button>",
+      "css": ".ds-button-primary{min-height:44px;padding:10px 16px;border:1px solid var(--accent);border-radius:6px;background:var(--accent);color:var(--surface);font:600 .8125rem/1.3 system-ui;transition:background 140ms ease-out}.ds-button-primary:hover{background:var(--accent-hover)}.ds-button-primary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.ds-button-primary:active{transform:translateY(1px)}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Supports recovery and utility actions without competing with Run now.",
+      "html": "<button class=\"ds-button-secondary\">Retry job</button>",
+      "css": ".ds-button-secondary{min-height:44px;padding:10px 16px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--ink);font:600 .8125rem/1.3 system-ui;transition:border-color 140ms ease-out,background 140ms ease-out}.ds-button-secondary:hover{border-color:var(--ink-muted);background:var(--surface-subtle)}.ds-button-secondary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.ds-button-secondary:active{transform:translateY(1px)}"
+    },
+    {
+      "name": "Navigation",
+      "kind": "nav",
+      "description": "Compact top-level product navigation with a ruled active state.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-link ds-nav-active\" href=\"#\">Overview</a><a class=\"ds-nav-link\" href=\"#\">Jobs</a><a class=\"ds-nav-link\" href=\"#\">Repositories</a></nav>",
+      "css": ".ds-nav{display:flex;gap:4px;padding:4px}.ds-nav-link{min-height:44px;display:inline-flex;align-items:center;padding:0 12px;border-radius:6px;color:var(--ink-muted);font:600 .8125rem/1.3 system-ui;text-decoration:none}.ds-nav-link:hover{background:var(--surface-subtle);color:var(--ink)}.ds-nav-link:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.ds-nav-active{background:var(--accent-soft);color:var(--accent)}"
+    },
+    {
+      "name": "Status Pill",
+      "kind": "chip",
+      "refersTo": "status-pill",
+      "description": "A text-and-glyph lifecycle marker that never relies on color alone.",
+      "html": "<span class=\"ds-status\"><span aria-hidden=\"true\" class=\"ds-status-dot\"></span>Running</span>",
+      "css": ".ds-status{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border:1px solid var(--border);border-radius:999px;background:var(--surface-subtle);color:var(--ink);font:600 .75rem/1.3 system-ui;letter-spacing:.04em;text-transform:uppercase}.ds-status-dot{width:7px;height:7px;border-radius:50%;background:var(--accent)}"
+    },
+    {
+      "name": "Operational Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "A single bordered operational thought; panels are never nested.",
+      "html": "<section class=\"ds-panel\"><p class=\"ds-panel-label\">System health</p><h3 class=\"ds-panel-title\">Operating normally</h3><p class=\"ds-panel-copy\">No intervention is required.</p></section>",
+      "css": ".ds-panel{padding:24px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--ink)}.ds-panel-label{margin:0 0 8px;color:var(--ink-muted);font:600 .75rem/1.3 system-ui;letter-spacing:.08em;text-transform:uppercase}.ds-panel-title{margin:0;font:650 1.25rem/1.25 system-ui;letter-spacing:-.015em}.ds-panel-copy{margin:8px 0 0;color:var(--ink-muted);font:400 1rem/1.5 system-ui}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Morning Ledger",
+    "overview": "GitHub Agent Worker should feel like opening a clean operational ledger at the start of the day: quiet, current, and immediately decisive. The overview leads with a single health judgment and the few exceptions that require action. History and evidence become denser only after the operator drills in. The direction combines familiar operational patterns with a warm paper-like canvas, restrained ink-indigo accent, compact rules, and plain factual language.",
+    "keyCharacteristics": ["Warm, daylight-friendly surfaces with crisp rules instead of floating card walls.", "Exception-first hierarchy: health, affected object, evidence, then recovery action.", "Compact data density with generous page-level breathing room.", "Text, icon, and shape always accompany status color.", "Familiar controls, durable confirmation, and no decorative operational theater."],
+    "rules": [
+      { "name": "The Rare Accent Rule", "body": "Keep accent color below roughly ten percent of the visual weight so it continues to identify the next action.", "section": "colors" },
+      { "name": "The Explained State Rule", "body": "Never rely on color alone. Every semantic color appears with a label and, when useful, a distinct icon or dot shape.", "section": "colors" },
+      { "name": "The Quiet Hierarchy Rule", "body": "Create hierarchy with weight, position, and whitespace before adding font sizes. Uppercase is limited to short eyebrows and status labels with deliberate tracking.", "section": "typography" },
+      { "name": "The Durable Surface Rule", "body": "If content belongs to the same operational thought, group it with alignment and rules rather than adding another container.", "section": "elevation" }
+    ],
+    "dos": ["Do place the current health judgment and required intervention above activity totals.", "Do use 4px-based spacing and reserve 32–48px gaps for page-level hierarchy.", "Do let tables and timelines carry operational density after the overview.", "Do state what happened, why it matters, and the next available action in errors.", "Do preserve keyboard navigation, 200% zoom, 44px targets, and reduced-motion behavior.", "Do show stale, unavailable, empty, and invalid-repository states as first-class content."],
+    "donts": ["Don't build a dark DevOps cockpit, terminal aesthetic, KPI wall, or neon status system.", "Don't use charts when a count, list, or timestamp answers the operational question faster.", "Don't nest cards or give every statistic its own bordered container.", "Don't imply success before the API confirms the durable PostgreSQL state.", "Don't hide actions behind hover, encode state with color alone, or allow technical output to force horizontal page scrolling."]
+  }
+}
