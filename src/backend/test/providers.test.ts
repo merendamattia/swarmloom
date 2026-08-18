@@ -4,6 +4,7 @@ import {
   buildOpenCodeCommand, normalizeOpenCodeEvent, openCodeEnvironment, OpenCodeProvider,
 } from "../src/providers/opencode.ts";
 import { redactSecrets } from "../src/core/secrets.ts";
+import { ProviderProcessError, runJsonlProcess } from "../src/providers/process.ts";
 import { buildAgentPrompt, type AgentEvent, type AgentRequest } from "../src/providers/types.ts";
 
 const request: AgentRequest = {
@@ -153,4 +154,47 @@ test("injects the result file contract into the shared prompt", () => {
   const prompt = buildAgentPrompt({ ...request, resultFilePath: "/data/outcomes/job-issue-worker.json" });
   expect(prompt).toContain("Result file: /data/outcomes/job-issue-worker.json");
   expect(prompt).toContain("Role: issue-worker");
+});
+
+test("preserves exit code and sanitized stderr when the provider emits invalid JSONL", async () => {
+  const original = Bun.spawn;
+  const stdout = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const encoder = new TextEncoder();
+      controller.enqueue(encoder.encode('{"valid":true}\nnot-json\n'));
+      controller.close();
+    },
+  });
+  const stderr = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const encoder = new TextEncoder();
+      controller.enqueue(encoder.encode("secret-token leaked in stderr"));
+      controller.close();
+    },
+  });
+  const fake = mock((_args: unknown) => ({
+    stdin: { write() {}, end() {} },
+    stdout,
+    stderr,
+    exited: Promise.resolve(3),
+    kill() {},
+  }));
+  // @ts-expect-error test-only substitution of the spawn implementation
+  Bun.spawn = fake;
+  const previous = process.env.GITHUB_TOKEN;
+  process.env.GITHUB_TOKEN = "secret-token";
+  try {
+    const parsed: string[] = [];
+    await expect(runJsonlProcess(["provider", "run"], "", undefined, async (value) => {
+      parsed.push((value as { valid: boolean }).valid ? "ok" : "bad");
+    }, { GITHUB_TOKEN: "secret-token" })).rejects.toMatchObject({
+      name: "ProviderProcessError",
+      exitCode: 3,
+      stderr: "[REDACTED] leaked in stderr",
+    });
+    expect(parsed).toEqual(["ok"]);
+  } finally {
+    process.env.GITHUB_TOKEN = previous;
+    Bun.spawn = original;
+  }
 });

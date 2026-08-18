@@ -60,18 +60,20 @@ const reviewOutcomeSchema = z.object({
 
 function json(text: string) {
   const candidate = text.trim();
+  let lastError: unknown;
   try {
     return JSON.parse(candidate);
-  } catch {
+  } catch (error) {
+    lastError = error;
     const embedded = extractJsonDocument(candidate);
     if (embedded !== undefined) {
       try {
         return JSON.parse(embedded);
-      } catch {
-        // fall through to the dedicated error below
+      } catch (error) {
+        lastError = error;
       }
     }
-    throw new Error("Agent result is not valid JSON");
+    throw new Error("Agent result is not valid JSON", { cause: lastError });
   }
 }
 
@@ -120,13 +122,13 @@ function extractJsonAt(text: string, start: number): string | undefined {
 
 export function parseJobOutcome(text: string) {
   const parsed = jobOutcomeSchema.safeParse(stripNullPlaceholders(json(text)));
-  if (!parsed.success) throw new Error("Agent returned an invalid job outcome");
+  if (!parsed.success) throw new Error("Agent returned an invalid job outcome", { cause: parsed.error });
   return parsed.data;
 }
 
 export function parseReviewOutcome(text: string) {
   const parsed = reviewOutcomeSchema.safeParse(json(text));
-  if (!parsed.success) throw new Error("Agent returned an invalid review outcome");
+  if (!parsed.success) throw new Error("Agent returned an invalid review outcome", { cause: parsed.error });
   return parsed.data;
 }
 

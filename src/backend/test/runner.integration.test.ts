@@ -144,8 +144,51 @@ integration("job runner", () => {
     expect(failedStored.status).toBe("FAILED");
     expect(failedStored.activeIssueKey).toBeNull();
     expect(failedStored.errorMessage).toContain("provider failed");
+    expect(failedStored.diagnostics).toMatchObject({
+      stage: "implementation",
+      role: "issue-worker",
+      provider: "codex",
+      model: "gpt-5.6-luna",
+      sessionId: "failed",
+      exitCode: 2,
+      stderr: "provider failed",
+    });
     expect(failedGitHub.createdIssues[0]?.labels).toEqual([config.ISSUE_READY_LABEL]);
     expect(failedGitHub.createdIssues[0]?.body).toContain("Stack trace:");
+  });
+
+  test("persists parser diagnostics with the final provider output and event timeline", async () => {
+    const job = await claimed(issueBase + 8);
+    const provider = new FakeProvider([{
+      provider: "codex",
+      sessionId: "parser-session",
+      exitCode: 0,
+      finalOutput: "The agent chat went somewhere and left trailing prose without a JSON document.",
+      stderr: "",
+    }]);
+    const runner = createJobRunner({
+      config,
+      provider,
+      github: fakeGitHub(job.issueNumber, job.branchName),
+      createWorktree: async (input) => input.worktreePath,
+    });
+
+    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(stored.status).toBe("FAILED");
+    expect(stored.errorMessage).toBe("Agent result is not valid JSON");
+    expect((stored.diagnostics as { causeChain: string[] }).causeChain[0])
+      .toBe("Agent result is not valid JSON");
+    expect(stored.diagnostics).toMatchObject({
+      stage: "parser",
+      role: "issue-worker",
+      provider: "codex",
+      model: "gpt-5.6-luna",
+      sessionId: "parser-session",
+      exitCode: 0,
+      finalOutput: "The agent chat went somewhere and left trailing prose without a JSON document.",
+      events: [{ type: "SESSION_STARTED" }],
+    });
   });
 
   test("aborts an active provider when cancellation makes its heartbeat fail", async () => {

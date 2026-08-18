@@ -60,6 +60,7 @@ type FinishInput = {
   result?: Prisma.InputJsonValue;
   exitCode?: number;
   errorMessage?: string;
+  diagnostics?: Prisma.InputJsonValue;
   pullRequestNumber?: number;
   pullRequestUrl?: string;
 };
@@ -80,6 +81,7 @@ async function finishRunning(
       result: input.result,
       exitCode: input.exitCode,
       errorMessage: input.errorMessage,
+      diagnostics: input.diagnostics,
       pullRequestNumber: input.pullRequestNumber,
       pullRequestUrl: input.pullRequestUrl,
       completedAt,
