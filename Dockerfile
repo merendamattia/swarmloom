@@ -30,7 +30,16 @@ RUN timeout 300 npm install --global --no-audit --no-fund --fetch-retries=2 --fe
   && opencode --version
 ENV PATH="/opt/pre-commit/bin:$PATH"
 
-FROM runtime-tools AS agent-skills
+FROM runtime-tools AS browser
+USER root
+# Playwright Chromium powers worker visual verification of implemented frontend routes.
+# Install browsers under a fixed path so the non-root runtime user finds them, then
+# smoke-test the launch so a broken browser fails the image build instead of a later job.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN bunx playwright install --with-deps chromium \
+  && bunx playwright screenshot --viewport-size=1280,800 "data:text/html,<h1>ok</h1>" /tmp/playwright-smoke.png
+
+FROM browser AS agent-skills
 USER bun
 # bun.sh/docs is documentation, not an installable SKILL.md endpoint. Keep the
 # official documentation reference as a build-only global skill instead.

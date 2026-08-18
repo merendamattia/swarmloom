@@ -16,6 +16,12 @@ import { loadAgentInstructions, resultSchemaPath } from "../runtime/instructions
 import { finishScanIfComplete } from "../scans/finalize.ts";
 import { parseJobOutcome, parseReviewOutcome, type JobOutcome, type ReviewOutcome } from "./outcomes.ts";
 import { PullRequestChecksError, pullRequestCheckState } from "./pull-request.ts";
+import {
+  captureScreenshot,
+  visualEvidenceComment,
+  type CaptureVisualEvidence,
+  type VisualOutcome,
+} from "./visual.ts";
 
 type RunnerGitHub = Pick<GitHubClient,
   "getIssue" | "getIssueContext" | "getPullRequest" | "getPullRequestDiff" | "getPullRequestChecks" |
@@ -31,6 +37,7 @@ type RunnerDependencies = {
   github: RunnerGitHub;
   events?: EventService;
   createWorktree?: CreateWorktree;
+  captureVisualEvidence?: CaptureVisualEvidence;
   heartbeatIntervalMs?: number;
 };
 
@@ -41,6 +48,7 @@ export function createJobRunner({
   github,
   events = { record: eventRepository.create },
   createWorktree = createTargetWorktree,
+  captureVisualEvidence = captureScreenshot,
   heartbeatIntervalMs,
 }: RunnerDependencies) {
   async function run(jobId: string, workerId: string) {
@@ -124,8 +132,16 @@ export function createJobRunner({
 
       if (outcome.outcome === "implemented") {
         const { review, pullRequestUrl, pullRequest } = await reviewImplementation(job, outcome, worktreePath, signal);
+        const visual = outcome.visual
+          ? await verifyVisualEvidence(job, outcome, worktreePath, signal)
+          : undefined;
         reachedTerminalState = await jobRepository.finishRunning(job.id, "COMPLETED", {
-          result: jsonValue({ ...outcome, pr: { ...outcome.pr, url: pullRequestUrl }, review }),
+          result: jsonValue({
+            ...outcome,
+            pr: { ...outcome.pr, url: pullRequestUrl },
+            review,
+            ...(visual ? { visual } : {}),
+          }),
           exitCode: implementation.exitCode,
           pullRequestNumber: outcome.pr.number,
           pullRequestUrl,
@@ -348,6 +364,72 @@ export function createJobRunner({
       } catch (error) {
         await reviewRepository.finish(reviewRow.id, "FAILED", { errorMessage: safeError(error) });
         throw error;
+      }
+    }
+
+    async function verifyVisualEvidence(
+      currentJob: RunningJob,
+      outcome: Extract<JobOutcome, { outcome: "implemented" }>,
+      workingDirectory: string,
+      abortSignal: AbortSignal,
+    ): Promise<VisualOutcome> {
+      const visual = outcome.visual!;
+      const base = { route: visual.route };
+      try {
+        const captured = await captureVisualEvidence({
+          dataDir: config.DATA_DIR,
+          publicBaseUrl: config.ARTIFACT_PUBLIC_URL,
+          jobId: currentJob.id,
+          worktreePath: workingDirectory,
+          visual,
+          port: config.VISUAL_PORT,
+          timeoutMs: config.VISUAL_VERIFICATION_TIMEOUT_MS,
+          signal: abortSignal,
+        });
+        if ("error" in captured) {
+          await events.record({
+            type: "VISUAL_VERIFICATION_INCOMPLETE",
+            level: "WARNING",
+            message: `Visual verification incomplete for ${currentJob.repository.fullName}#${outcome.pr.number}: ${captured.error}`,
+            jobId: currentJob.id,
+            repositoryId: currentJob.repositoryId,
+            scanRunId: currentJob.scanRunId ?? undefined,
+            metadata: { issueUrl: currentJob.issueUrl, pullRequestUrl: outcome.pr.url, route: visual.route },
+          });
+          return { ...base, status: "incomplete", reason: captured.error };
+        }
+        await github.addIssueComment(
+          currentJob.repository.fullName,
+          outcome.pr.number,
+          visualEvidenceComment(visual.route, captured.imageUrl),
+        );
+        await events.record({
+          type: "VISUAL_VERIFICATION_ATTACHED",
+          message: `Attached screenshot of ${visual.route} to ${currentJob.repository.fullName}#${outcome.pr.number}`,
+          jobId: currentJob.id,
+          repositoryId: currentJob.repositoryId,
+          scanRunId: currentJob.scanRunId ?? undefined,
+          metadata: {
+            issueUrl: currentJob.issueUrl,
+            pullRequestUrl: outcome.pr.url,
+            pullRequestNumber: outcome.pr.number,
+            route: visual.route,
+            imageUrl: captured.imageUrl,
+          },
+        });
+        return { ...base, status: "attached", imageUrl: captured.imageUrl };
+      } catch (error) {
+        const reason = safeError(error);
+        await events.record({
+          type: "VISUAL_VERIFICATION_INCOMPLETE",
+          level: "WARNING",
+          message: `Visual verification incomplete for ${currentJob.repository.fullName}#${outcome.pr.number}: ${reason}`,
+          jobId: currentJob.id,
+          repositoryId: currentJob.repositoryId,
+          scanRunId: currentJob.scanRunId ?? undefined,
+          metadata: { issueUrl: currentJob.issueUrl, pullRequestUrl: outcome.pr.url, route: visual.route },
+        });
+        return { ...base, status: "incomplete", reason };
       }
     }
 

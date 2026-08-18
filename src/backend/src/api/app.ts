@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { requestId } from "hono/request-id";
 import { secureHeaders } from "hono/secure-headers";
+import { resolve, sep } from "node:path";
 import { z } from "zod";
 import type { Config } from "../core/config-schema.ts";
 import type { SettingsService } from "../core/settings-service.ts";
@@ -15,6 +16,7 @@ import type { EventService } from "../events/service.ts";
 import type { GitHubClient } from "../github/client.ts";
 import { replaceWorkerLabels } from "../github/labels.ts";
 import { jobRepository } from "../repositories/jobs.ts";
+import { artifactDirectory } from "../runner/visual.ts";
 import { finishScanIfComplete } from "../scans/finalize.ts";
 import type { JobQueue } from "../queue/service.ts";
 
@@ -199,6 +201,23 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       return job
         ? context.json({ ...job, pullRequestUrl: canonicalPullRequestUrl(job.repository, job.pullRequestNumber) })
         : context.json({ error: "Not found" }, 404);
+    })
+    .get("/artifacts/:jobId/:fileName", async (context) => {
+      const fileName = context.req.param("fileName");
+      if (!/^[0-9a-f]{32}\.png$/.test(fileName)) return context.json({ error: "Not found" }, 404);
+      const job = await prisma.job.findFirst({
+        where: { id: context.req.param("jobId"), environment: config.APP_ENV },
+        select: { id: true },
+      });
+      if (!job) return context.json({ error: "Not found" }, 404);
+      const directory = artifactDirectory(config.DATA_DIR, job.id);
+      const path = resolve(directory, fileName);
+      if (!path.startsWith(`${directory}${sep}`) || !await Bun.file(path).exists()) {
+        return context.json({ error: "Not found" }, 404);
+      }
+      return new Response(Bun.file(path).stream(), {
+        headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=31536000, immutable" },
+      });
     })
     .get("/repositories", async (context) => context.json(await prisma.repository.findMany({
       orderBy: { fullName: "asc" },

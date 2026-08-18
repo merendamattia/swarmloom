@@ -110,3 +110,14 @@ outside the worktree, so never commit it. The closing text message may only summ
 If essential information is missing, write a `blocked` outcome. If one coherent Pull Request cannot
 safely contain the work, write `requires_decomposition`; the coordinator handles any additional
 execution phase.
+
+## Visual evidence
+
+When an implementation changes the frontend, include the `visual` object in the `implemented`
+outcome with the exact route of the implemented view and, only when the standard dev command is not
+sufficient, a concise `setupNote` shell command that installs dependencies and starts the dev server
+inside the worktree on the configured visual port. Provide `visual: null` for backend-only changes
+and for repositories without a runnable frontend; never invent a route from filenames. The worker
+starts the frontend, waits until the route is ready, captures one deterministic viewport screenshot,
+and posts it as a Markdown visual-evidence comment on the pull request. The image is served from the
+worker's own artifact endpoint and is never committed into the target repository.

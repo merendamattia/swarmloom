@@ -11,11 +11,18 @@ test("accepts the four explicit job outcomes", () => {
       .toBe("decomposed");
     expect(parseJobOutcome('{"outcome":"implemented","summary":"Done","tests":["bun test"],"commit":"abcdef1","pr":{"number":4,"url":"https://github.com/a/b/pull/4","base":"develop","head":"agent/issue-1"}}').outcome)
       .toBe("implemented");
+    const withVisual = parseJobOutcome('{"outcome":"implemented","summary":"Done","tests":["bun test"],"commit":"abcdef1","pr":{"number":4,"url":"https://github.com/a/b/pull/4","base":"develop","head":"agent/issue-1"},"visual":{"route":"/settings","setupNote":"npm ci && npm run dev -- --port 18423"}}');
+    expect(withVisual.outcome).toBe("implemented");
+    if (withVisual.outcome === "implemented") {
+      expect(withVisual.visual).toEqual({ route: "/settings", setupNote: "npm ci && npm run dev -- --port 18423" });
+    }
   });
 
   test("rejects prose and a PR with the wrong base", () => {
     expect(() => parseJobOutcome("Done")).toThrow("valid JSON");
     expect(() => parseJobOutcome('{"outcome":"implemented","summary":"Done","tests":[],"commit":"abcdef1","pr":{"number":4,"url":"https://github.com/a/b/pull/4","base":"main","head":"x"}}'))
+      .toThrow("invalid job outcome");
+    expect(() => parseJobOutcome('{"outcome":"implemented","summary":"Done","tests":[],"commit":"abcdef1","pr":{"number":4,"url":"https://github.com/a/b/pull/4","base":"develop","head":"x"},"visual":{"setupNote":"npm run dev"}}'))
       .toThrow("invalid job outcome");
   });
 

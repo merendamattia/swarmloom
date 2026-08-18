@@ -20,6 +20,22 @@
       "required": ["number", "url", "base", "head"],
       "additionalProperties": false
     },
+    "visual": {
+      "type": ["object", "null"],
+      "description": "Required visual evidence when the implementation changes the frontend; null for backend-only changes. The worker starts the frontend with setupNote and screenshots the route after it becomes ready.",
+      "properties": {
+        "route": {
+          "type": "string",
+          "description": "Path of the implemented view to screenshot, e.g. \"/settings\". Do not infer it from filenames."
+        },
+        "setupNote": {
+          "type": "string",
+          "description": "Shell command that installs dependencies and starts the frontend dev server inside the worktree on the configured visual port, e.g. \"npm ci && npm run dev -- --port 18423\". Provide it whenever the standard dev command is not sufficient."
+        }
+      },
+      "required": ["route"],
+      "additionalProperties": false
+    },
     "reason": { "type": ["string", "null"] },
     "childIssues": {
       "type": ["array", "null"],
@@ -36,6 +52,6 @@
     },
     "question": { "type": ["string", "null"] }
   },
-  "required": ["outcome", "summary", "tests", "commit", "pr", "reason", "childIssues", "question"],
+  "required": ["outcome", "summary", "tests", "commit", "pr", "visual", "reason", "childIssues", "question"],
   "additionalProperties": false
 }
