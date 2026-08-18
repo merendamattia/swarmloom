@@ -189,15 +189,9 @@ integration("repository scan", () => {
       execute: async (request) => {
         call += 1;
         const finalOutput = request.role === "reviewer"
-          ? '{"verdict":"pass","summary":"Ready","findings":[]}'
-          : JSON.stringify({
-            outcome: "implemented",
-            summary: "Implemented",
-            tests: ["bun test"],
-            commit: "abcdef1",
-            pr: { number: 44, url: "https://github.com/acme/app/pull/44", base: "develop", head: activeBranch },
-          });
-        if (request.resultFilePath) await Bun.write(request.resultFilePath, finalOutput);
+          ? "Review: pass\nThe change is ready."
+          : `Outcome: implemented\nPR: https://github.com/acme/app/pull/44\nImplemented the requested change.`;
+        if (request.responseFilePath) await Bun.write(request.responseFilePath, finalOutput);
         return { provider: "codex", sessionId: `session-${call}`, exitCode: 0, finalOutput, stderr: "" };
       },
     };

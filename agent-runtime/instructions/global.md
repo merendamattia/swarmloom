@@ -2,8 +2,8 @@
 
 This is the only behavioral instruction file for the worker. The backend loads it into every
 provider request, so Codex and OpenCode receive the same instructions. The task, context, and
-result schema supplied with each request add the current execution details; do not look for other
-runtime agent or skill files.
+response file path supplied with each request add the current execution details; do not look for
+other runtime agent or skill files.
 
 Work only inside the assigned worktree and current job branch. The checked-out repository is the
 source of truth: inspect the current code, instructions, tests, and conventions before editing.
@@ -117,9 +117,20 @@ Treat tokens, credentials, environment values, and private data as secrets. Do n
 files, provider auth stores, credential directories, or unrelated deployment configuration unless
 the task explicitly requires that exact file and it cannot be completed from safe examples/schema.
 
-The final structured outcome must be a single JSON document written to the path in the prompt's
-`Result file` section. That file is authoritative and the worker reads it after the run; it lives
-outside the worktree, so never commit it. The closing text message may only summarize the outcome.
-If essential information is missing, write a `blocked` outcome. If one coherent Pull Request cannot
-safely contain the work, write `requires_decomposition`; the coordinator handles any additional
-execution phase.
+The final response must be a plain text file written to the path in the prompt's `Response file`
+section. That file is authoritative and the worker reads it after the run; it lives outside the
+worktree, so never commit it. The worker posts its content verbatim as the GitHub comment and stores
+it in the platform, so write the complete, self-contained response exactly as it should be read.
+
+The response file must begin with a single outcome line followed by the free-form response:
+
+```
+Outcome: implemented
+PR: https://github.com/<owner>/<repo>/pull/<number>
+# free-form response below; this full content is posted as the comment
+```
+
+For a review session, begin with `Review: pass` or `Review: changes_requested` instead of
+`Outcome:`. Use `Outcome: implemented` (with the linked `PR:` line), `blocked`, `decomposed`, or
+`requires_decomposition`. If one coherent Pull Request cannot safely contain the work, write
+`requires_decomposition`; the coordinator handles any additional execution phase.

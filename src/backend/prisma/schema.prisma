@@ -128,8 +128,7 @@ model Review {
   model           String
   reasoningEffort String?
   sessionId       String?
-  verdict         Json?         @db.JsonB
-  findings        Json?         @db.JsonB
+  response        String?       @db.Text
   exitCode        Int?
   errorMessage    String?       @db.Text
   startedAt       DateTime?

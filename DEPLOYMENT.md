@@ -19,7 +19,7 @@ Swarmloom scans configured repositories for open issues carrying `agent:ready` o
 7. verifies that an implementation PR points from the assigned branch to `develop` and links the
    original issue;
 8. waits for all Pull Request check runs and commit statuses to complete before reviewing it;
-9. starts a separate, fresh review session and records `pass` or `changes_requested` findings;
+9. starts a separate, fresh review session and records the reviewer's plain text response;
 10. on a failed check or failed job, starts the Pull Request diagnostic agent when possible, posts
     the redacted error and stack trace to the issue and Pull Request, and opens a new
     `agent:ready` diagnostic issue;
@@ -61,7 +61,7 @@ against known credential values before persistence.
 | Codex CLI | Selected agent runtime | `codex_home` for account login cache |
 | OpenCode CLI | Selected agent runtime | `opencode_data` and `opencode_config` |
 | Shared agent skills | Build-time skills for Codex, OpenCode, and Claude Code | Image global skill directories |
-| `agent-runtime` | Canonical global instructions and result schemas | Production image; local read-only bind mount |
+| `agent-runtime` | Canonical global instructions and skills | Production image; local read-only bind mount |
 
 The `worker_data` volume contains persistent clones under `/data/repositories` and worktrees under
 `/data/worktrees`. Worktrees are retained after terminal jobs for audit and recovery. They are not
@@ -324,15 +324,20 @@ create a new attempt/history row from a newly fetched baseline.
 ```text
 agent-runtime/
 ├── instructions/{global-skills,global}.md
-├── schemas/{job-result,decomposition-result,review-result}.schema.json
 └── providers/{codex,opencode}/README.md
 ```
 
-The runner loads the same global instructions, active skill policies, and relevant JSON schema for
-every fresh Codex or OpenCode invocation. The task and execution phase provide the specific
-context; there are no role-specific agent or skill prompt files. Runtime-specific CLI flags, sandbox/permissions,
+The runner loads the same global instructions and active skill policies for every fresh Codex or
+OpenCode invocation. The task and execution phase provide the specific context; there are no
+role-specific agent or skill prompt files. Runtime-specific CLI flags, sandbox/permissions,
 models, auth paths, and JSONL normalization remain in the TypeScript adapters. Keep secrets and
 model/provider arguments out of canonical behavioral material.
+
+Each session writes its response to a temporary plain text file outside the worktree. The runner
+reads that file verbatim, posts it as the GitHub comment, stores it in the platform, and deletes
+the temporary file. The worker drives the flow from one minimal outcome line and the optional PR
+line at the top of the response (`Outcome: implemented|blocked|decomposed|requires_decomposition`
+and `PR: <url>`, or `Review: pass|changes_requested` for review sessions).
 
 ## Updating agent runtime
 
@@ -344,7 +349,6 @@ to deploy production runtime changes. Existing sessions keep the prompt with whi
 Validate edits before the next run:
 
 ```bash
-jq empty agent-runtime/schemas/*.json
 bun test src/backend/test/runtime-instructions.test.ts src/backend/test/outcomes.test.ts
 ```
 
@@ -362,7 +366,7 @@ CODEX_HOME=/data/codex-home
 ```
 
 Each invocation is a new `codex exec --json` process using `workspace-write`, automatic approval
-review, the configured model/reasoning, the assigned worktree, and the job/review JSON schema. The
+review, the configured model/reasoning, the assigned worktree, and the response file path. The
 adapter does not resume an earlier thread. Auth persists in `codex_home`; the canonical runtime is
 not stored there.
 
@@ -499,10 +503,10 @@ unavailable, it links both directions and states the limitation. Artificial file
 is forbidden.
 
 After an implementation, the runner retrieves PR metadata and the full diff from `develop`, then
-starts a fresh provider session in the review phase with issue, acceptance criteria/body, PR, diff,
-and reported tests.
-The reviewer returns structured `pass` or `changes_requested` findings with file, optional line,
-severity, problem, and correction. The result is stored in `review` and posted as a PR comment.
+starts a fresh provider session in the review phase with issue, acceptance criteria/body, PR, and
+diff.
+The reviewer writes a plain text response starting with `Review: pass` or `Review: changes_requested`.
+The response is stored verbatim in `review` and posted as a PR comment.
 This is an automated review record, not an automatic merge or GitHub approval.
 
 ## Local development

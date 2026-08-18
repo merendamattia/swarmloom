@@ -5,9 +5,6 @@ import {
   dateTime,
   duration,
   inlineMarkdown,
-  normalizeAgentOutput,
-  normalizeJobResult,
-  normalizeReview,
   shortCommit,
   statusLabel,
 } from "./format.ts";
@@ -33,46 +30,6 @@ test("uses the verified PR URL in redacted agent output", () => {
     '"url":"https://github.com/[REDACTED]/test-vari/pull/5"',
     "https://github.com/acme/test-vari/pull/5",
   )).toBe('"url":"https://github.com/acme/test-vari/pull/5"');
-});
-
-test("normalizes Codex JSON output for the timeline", () => {
-  expect(normalizeAgentOutput(JSON.stringify({
-    outcome: "implemented",
-    summary: "README updated.",
-    tests: null,
-    commit: null,
-    pr: null,
-    reason: null,
-    childIssues: null,
-    question: null,
-  }))).toEqual({ outcome: "implemented", summary: "README updated." });
-});
-
-test("normalizes the implemented result for structured rendering", () => {
-  expect(normalizeJobResult({
-    outcome: "implemented",
-    summary: "Implemented the requested change.",
-    tests: ["bun test", "bun run build"],
-    commit: "1234567890abcdef",
-    pr: { number: 42, url: "https://github.com/acme/app/pull/42", base: "develop", head: "agent/42" },
-  })).toEqual({
-    outcome: "implemented",
-    summary: "Implemented the requested change.",
-    tests: ["bun test", "bun run build"],
-    commit: "1234567890abcdef",
-    pr: { number: 42, url: "https://github.com/acme/app/pull/42", base: "develop", head: "agent/42" },
-  });
-});
-
-test("normalizes review verdict and findings without exposing JSON", () => {
-  expect(normalizeReview(
-    { verdict: "changes_requested", summary: "One issue needs attention." },
-    [{ file: "src/app.ts", line: 12, severity: "high", problem: "It can fail.", correction: "Handle the error." }],
-  )).toEqual({
-    verdict: "changes_requested",
-    summary: "One issue needs attention.",
-    findings: [{ file: "src/app.ts", line: 12, severity: "high", problem: "It can fail.", correction: "Handle the error." }],
-  });
 });
 
 test("renders the small Markdown subset used in provider summaries", () => {

@@ -1,5 +1,4 @@
 import { resolve } from "node:path";
-import type { AgentRole } from "../providers/types.ts";
 
 async function requiredFile(path: string) {
   const file = Bun.file(path);
@@ -13,11 +12,4 @@ export async function loadAgentInstructions(runtimeDirectory: string) {
     requiredFile(resolve(root, "instructions/global-skills.md")),
     requiredFile(resolve(root, "instructions/global.md")),
   ])).join("\n\n---\n\n");
-}
-
-export function resultSchemaPath(runtimeDirectory: string, role: AgentRole) {
-  const schema = role === "reviewer"
-    ? "review-result.schema.json"
-    : role === "decomposer" ? "decomposition-result.schema.json" : "job-result.schema.json";
-  return resolve(runtimeDirectory, "schemas", schema);
 }
