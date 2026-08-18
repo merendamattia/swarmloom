@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
 import { GitCommandError, runGit } from "./run-git.ts";
 
@@ -68,6 +68,31 @@ export async function createJobWorktree(input: CreateWorktreeInput) {
   ], input.repositoryPath, input.gitEnvironment);
   return input.worktreePath;
 }
+
+export async function removeJobWorktree(input: RemoveWorktreeInput) {
+  if (!input.worktreePath) return;
+  try {
+    if (input.repositoryPath) {
+      await runGit(["worktree", "remove", "--force", input.worktreePath], input.repositoryPath,
+        input.gitEnvironment);
+    }
+  } catch {
+    // fall through to direct removal
+  }
+  await rm(input.worktreePath, { recursive: true, force: true });
+}
+
+export async function gcRepository(input: { repositoryPath: string; gitEnvironment?: Record<string, string | undefined> }) {
+  if (!existsSync(resolve(input.repositoryPath, ".git"))) return;
+  await runGit(["gc", "--auto", "--prune=now"], input.repositoryPath, input.gitEnvironment);
+  await runGit(["worktree", "prune"], input.repositoryPath, input.gitEnvironment);
+}
+
+type RemoveWorktreeInput = {
+  worktreePath: string;
+  repositoryPath?: string;
+  gitEnvironment?: Record<string, string | undefined>;
+};
 
 export function repositoryPath(dataDir: string, fullName: string) {
   const [owner, name, extra] = fullName.split("/");

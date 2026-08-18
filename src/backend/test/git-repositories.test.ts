@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { exists, mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createJobWorktree,
+  gcRepository,
   MissingDevelopBranchError,
+  removeJobWorktree,
   syncRepository,
 } from "../src/git/repositories.ts";
 import { runGit } from "../src/git/run-git.ts";
@@ -43,6 +45,39 @@ describe("target repository preparation", () => {
     });
     expect(await runGit(["rev-parse", "HEAD"], worktreePath)).toBe(latest);
     expect(await runGit(["branch", "--show-current"], worktreePath)).toBe("agent/issue-42-test");
+  });
+
+  test("removes a job worktree from disk after the job ends", async () => {
+    const fixture = await createRemote("develop");
+    const dataDir = join(fixture.root, "worker-data");
+    const synced = await syncRepository({
+      dataDir,
+      fullName: "acme/example",
+      cloneUrl: fixture.remote,
+    });
+    const worktreePath = join(dataDir, "worktrees", "job-1");
+    await createJobWorktree({
+      repositoryPath: synced.localPath,
+      worktreePath,
+      branchName: "agent/issue-42-cleanup",
+      baselineCommit: synced.baselineCommit,
+    });
+    expect(await exists(worktreePath)).toBe(true);
+
+    await removeJobWorktree({ worktreePath, repositoryPath: synced.localPath });
+    expect(await exists(worktreePath)).toBe(false);
+  });
+
+  test("gc compacts the local clone and prunes removed worktrees without failing on a clean repo", async () => {
+    const fixture = await createRemote("develop");
+    const dataDir = join(fixture.root, "worker-data");
+    const synced = await syncRepository({
+      dataDir,
+      fullName: "acme/example",
+      cloneUrl: fixture.remote,
+    });
+    await gcRepository({ repositoryPath: synced.localPath });
+    expect(await exists(join(synced.localPath, ".git"))).toBe(true);
   });
 
   test("rejects a repository without origin/develop instead of falling back to main", async () => {
