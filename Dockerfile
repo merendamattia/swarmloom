@@ -6,7 +6,13 @@ COPY src/backend/package.json src/backend/package.json
 COPY src/frontend/package.json src/frontend/package.json
 COPY AGENTS.md .pre-commit-config.yaml git-conventional-commits.yaml requirements.txt ./
 COPY scripts scripts
-RUN --mount=type=cache,target=/root/.bun/install/cache bun install --frozen-lockfile
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+  for attempt in 1 2 3; do \
+    bun install --frozen-lockfile && exit 0; \
+    echo "bun install failed on attempt $attempt/3" >&2; \
+    sleep 5; \
+  done; \
+  bun install --frozen-lockfile
 
 FROM dependencies AS runtime-tools
 ARG CODEX_CLI_VERSION=0.147.0
