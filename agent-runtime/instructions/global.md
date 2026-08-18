@@ -108,3 +108,14 @@ The final response from the worker must be exactly one structured outcome matchi
 schema. If essential information is missing, return `blocked`. If one coherent Pull Request cannot
 safely contain the work, return `requires_decomposition`; the coordinator handles any additional
 execution phase.
+
+## Visual evidence
+
+When an implementation changes the frontend, include the `visual` object in the `implemented`
+outcome with the exact route of the implemented view and, only when the standard dev command is not
+sufficient, a concise `setupNote` shell command that installs dependencies and starts the dev server
+inside the worktree on the configured visual port. Provide `visual: null` for backend-only changes;
+never invent a route from filenames. The worker starts the frontend, waits until the route is ready,
+captures one deterministic viewport screenshot, and posts it as a Markdown comment on the pull
+request. The image is served from the worker's own artifact endpoint and is never committed into the
+target repository.

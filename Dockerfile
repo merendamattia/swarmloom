@@ -24,6 +24,15 @@ RUN timeout 300 npm install --global --no-audit --no-fund --fetch-retries=2 --fe
   && opencode --version
 ENV PATH="/opt/pre-commit/bin:$PATH"
 
+FROM runtime-tools AS browser
+USER root
+# Playwright Chromium powers worker visual verification of implemented frontend routes.
+# The playwright package is already installed at /app by the dependencies stage; here we
+# fetch the Chromium browser binary and the system libraries it needs, then verify the
+# launch so a broken browser fails the image build instead of a later job.
+RUN bunx --cwd /app playwright install --with-deps chromium \
+  && bunx --cwd /app playwright screenshot --viewport-size=1280,800 "data:text/html,<h1>ok</h1>" /tmp/playwright-smoke.png
+
 FROM runtime-tools AS agent-skills
 USER bun
 # bun.sh/docs is documentation, not an installable SKILL.md endpoint. Keep the
@@ -63,7 +72,7 @@ RUN npx --yes skills@latest add https://github.com/vercel-labs/skills --skill fi
   && npx --yes skills@latest add ramziddin/solid-skills \
       --global --agent codex opencode claude-code --copy --yes
 
-FROM agent-skills AS build
+FROM browser AS build
 USER root
 ARG NEXT_PUBLIC_API_URL=http://localhost:18421
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL

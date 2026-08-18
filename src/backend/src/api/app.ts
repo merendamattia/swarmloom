@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { requestId } from "hono/request-id";
 import { secureHeaders } from "hono/secure-headers";
+import { resolve } from "node:path";
 import { z } from "zod";
 import type { Config } from "../core/config-schema.ts";
 import type { SettingsService } from "../core/settings-service.ts";
@@ -17,6 +18,7 @@ import { replaceWorkerLabels } from "../github/labels.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import { finishScanIfComplete } from "../scans/finalize.ts";
 import type { JobQueue } from "../queue/service.ts";
+import { artifactDirectory } from "../runner/visual.ts";
 
 type Scanner = { run(source: "SCHEDULED" | "MANUAL"): Promise<{ id: string; status: string }> };
 type ApiGitHub = Pick<GitHubClient, "getIssue" | "setIssueLabels" | "addIssueComment">;
@@ -199,6 +201,19 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       return job
         ? context.json({ ...job, pullRequestUrl: canonicalPullRequestUrl(job.repository, job.pullRequestNumber) })
         : context.json({ error: "Not found" }, 404);
+    })
+    .get("/artifacts/:jobId/:fileName", async (context) => {
+      const job = await prisma.job.findFirst({
+        where: { id: context.req.param("jobId"), environment: config.APP_ENV },
+        select: { id: true },
+      });
+      if (!job) return context.json({ error: "Not found" }, 404);
+      const directory = artifactDirectory(config.DATA_DIR, job.id);
+      const file = Bun.file(resolve(directory, context.req.param("fileName")));
+      if (!await file.exists()) return context.json({ error: "Not found" }, 404);
+      return new Response(file.stream(), {
+        headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=31536000, immutable" },
+      });
     })
     .get("/repositories", async (context) => context.json(await prisma.repository.findMany({
       orderBy: { fullName: "asc" },

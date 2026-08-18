@@ -17,7 +17,10 @@ configured equivalent). For every acquired issue it:
 7. verifies that an implementation PR points from the assigned branch to `develop` and links the
    original issue;
 8. starts a separate, fresh review session and records `pass` or `changes_requested` findings;
-9. stores lifecycle data and events in PostgreSQL, reconciles GitHub labels/comments, and sends
+9. for a frontend-changing implementation, starts the target repository's frontend in the worktree,
+   waits for the reported route to become ready, captures one Playwright/Chromium viewport
+   screenshot, and posts it as a Markdown visual-evidence comment on the pull request;
+10. stores lifecycle data and events in PostgreSQL, reconciles GitHub labels/comments, and sends
    selected Telegram notifications.
 
 The API/scheduler, BullMQ worker, and dashboard are process roles of one TypeScript application.
@@ -164,6 +167,9 @@ validation.
 | `TELEGRAM_BOT_TOKEN` | optional bootstrap value | Bot token; Settings encrypts and stores it in PostgreSQL |
 | `TELEGRAM_CHAT_ID` | optional bootstrap value | Private/group/channel destination ID; Settings stores it encrypted |
 | `FRONTEND_URL` | required in production | Exact browser origin allowed by API CORS |
+| `ARTIFACT_PUBLIC_URL` | required in production | Public base used to build the screenshot URL in PR comments; set to the same origin as `PUBLIC_API_URL`/`FRONTEND_URL` |
+| `VISUAL_PORT` | `18423` | Loopback port on which the worker starts a target repository's frontend for screenshot capture |
+| `VISUAL_VERIFICATION_TIMEOUT_MS` | `180000` | Maximum time to wait for the visual route to become ready before the screenshot is recorded incomplete |
 | `PUBLIC_API_URL` | required at image build | API origin embedded into the browser bundle |
 | `FRONTEND_PORT` | `18420` | Loopback dashboard host port |
 | `BACKEND_PORT` | `18421` | Loopback API host port |
@@ -492,6 +498,25 @@ and reported tests.
 The reviewer returns structured `pass` or `changes_requested` findings with file, optional line,
 severity, problem, and correction. The result is stored in `review` and posted as a PR comment.
 This is an automated review record, not an automatic merge or GitHub approval.
+
+## Visual verification
+
+When an `implemented` result includes the `visual` route, the worker starts the target
+repository's frontend inside the retained worktree on `VISUAL_PORT`, waits until the route returns a
+ready status, and captures one deterministic 1280×800 Playwright/Chromium screenshot. The image is
+written to `DATA_DIR/artifacts/<job-id>/<random>.png` and served by the API under
+`/api/artifacts/<job-id>/<file>.png`; the worker posts exactly one Markdown comment with the image
+and a direct artifact link to the pull request. If the frontend cannot start or the screenshot cannot
+be published, the job records visual verification as `incomplete` with a factual reason and never
+claims a screenshot was attached. Backend-only changes and repositories without a runnable frontend
+skip the browser entirely. Screenshots are never committed into the target repository.
+
+The image URL must be reachable by the authorized reviewer. In production set `ARTIFACT_PUBLIC_URL`
+to the same public origin as the dashboard/API (for example `https://worker.example.com`) so the
+artifact endpoint resolves for the PR viewer. The image filename is a random hex value, so the URL is
+unguessable; the API still checks the job belongs to the current environment before serving the file.
+The worker image installs Chromium at build time and verifies it can launch, so a broken browser
+fails the image build rather than a later job.
 
 ## Local development
 

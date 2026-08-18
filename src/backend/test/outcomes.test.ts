@@ -11,6 +11,11 @@ test("accepts the four explicit job outcomes", () => {
       .toBe("decomposed");
     expect(parseJobOutcome('{"outcome":"implemented","summary":"Done","tests":["bun test"],"commit":"abcdef1","pr":{"number":4,"url":"https://github.com/a/b/pull/4","base":"develop","head":"agent/issue-1"}}').outcome)
       .toBe("implemented");
+    const withVisual = parseJobOutcome('{"outcome":"implemented","summary":"Done","tests":["bun test"],"commit":"abcdef1","pr":{"number":4,"url":"https://github.com/a/b/pull/4","base":"develop","head":"agent/issue-1"},"visual":{"route":"/settings","setupNote":"npm ci && npm run dev"}}');
+    expect(withVisual.outcome).toBe("implemented");
+    if (withVisual.outcome === "implemented") {
+      expect(withVisual.visual).toEqual({ route: "/settings", setupNote: "npm ci && npm run dev" });
+    }
   });
 
   test("rejects prose and a PR with the wrong base", () => {

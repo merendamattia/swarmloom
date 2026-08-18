@@ -11,6 +11,10 @@ const implemented = z.object({
     base: z.literal("develop"),
     head: z.string().min(1),
   }).strict(),
+  visual: z.object({
+    route: z.string().min(1),
+    setupNote: z.string().min(1).optional(),
+  }).strict().optional(),
 }).strict();
 
 const blocked = z.object({
