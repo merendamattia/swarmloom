@@ -18,23 +18,45 @@ FROM dependencies AS runtime-tools
 ARG CODEX_CLI_VERSION=0.147.0
 ARG OPENCODE_CLI_VERSION=1.18.18
 USER root
-RUN apt-get update \
+RUN --mount=type=cache,target=/var/cache/apt \
+  apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl gh git nodejs npm python3 python3-venv \
   && rm -rf /var/lib/apt/lists/*
-RUN python3 -m venv /opt/pre-commit \
+RUN --mount=type=cache,target=/root/.cache/pip \
+  python3 -m venv /opt/pre-commit \
   && /opt/pre-commit/bin/pip install --no-cache-dir -r requirements.txt
-RUN timeout 300 npm install --global --no-audit --no-fund --fetch-retries=2 --fetch-timeout=60000 \
+ENV npm_config_cache=/root/.npm
+RUN --mount=type=cache,target=/root/.npm \
+  timeout 300 npm install --global --no-audit --no-fund --fetch-retries=2 --fetch-timeout=60000 \
       "@openai/codex@${CODEX_CLI_VERSION}" "opencode-ai@${OPENCODE_CLI_VERSION}" \
   && node --version \
   && codex --version \
   && opencode --version
 ENV PATH="/opt/pre-commit/bin:$PATH"
 
+FROM runtime-tools AS dev
+# Local development target: node_modules, toolchain (codex/opencode/pre-commit),
+# generated Prisma client — no skills, no production frontend build. Source is
+# mounted at runtime by docker-compose.yaml.
+USER root
+COPY src/backend/prisma src/backend/prisma
+COPY src/backend/prisma.config.ts src/backend/prisma.config.ts
+RUN bun run db:generate \
+  && mkdir -p /data/codex-home /data/opencode-data /data/opencode-config \
+  && ln -s /app/scripts/verify-before-commit.sh /usr/local/bin/verify-before-commit \
+  && chown -R bun:bun /data /app
+USER bun
+WORKDIR /app
+EXPOSE 18420 18421
+CMD ["bun", "run", "dev"]
+
 FROM runtime-tools AS agent-skills
 USER bun
+ENV npm_config_cache=/tmp/npx-cache
 # bun.sh/docs is documentation, not an installable SKILL.md endpoint. Keep the
 # official documentation reference as a build-only global skill instead.
-RUN npx --yes skills@latest add https://github.com/vercel-labs/skills --skill find-skills \
+RUN --mount=type=cache,target=/tmp/npx-cache,uid=1000,gid=1000 \
+  npx --yes skills@latest add https://github.com/vercel-labs/skills --skill find-skills \
       --global --agent codex opencode claude-code --copy --yes \
   && npx --yes skills@latest add https://github.com/anthropics/skills --skill frontend-design \
       --global --agent codex opencode claude-code --copy --yes \
