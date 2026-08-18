@@ -6,7 +6,7 @@ export type QueuePayload = { jobId: string; environment: string };
 export type QueueProcessor = (payload: QueuePayload) => Promise<void>;
 
 export function queueName(environment: string) {
-  return `github-agent-worker-${environment}-jobs`;
+  return `swarmloom-${environment}-jobs`;
 }
 
 export function queuePayload(jobId: string, environment: string): QueuePayload {
@@ -15,7 +15,7 @@ export function queuePayload(jobId: string, environment: string): QueuePayload {
 
 export function createJobQueue(config: Pick<Config, "APP_ENV" | "REDIS_URL">) {
   const name = queueName(config.APP_ENV);
-  const prefix = "github-agent-worker";
+  const prefix = "swarmloom";
   const connection = new IORedis(config.REDIS_URL, { maxRetriesPerRequest: null });
   const queue = new Queue<QueuePayload>(name, { connection, prefix });
   const workers: Array<Worker<QueuePayload>> = [];

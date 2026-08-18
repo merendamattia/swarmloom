@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { parseConfig } from "../src/core/config-schema.ts";
 
 const required = {
-  DATABASE_URL: "postgresql://worker:worker@localhost:17432/github_agent_worker",
+  DATABASE_URL: "postgresql://worker:worker@localhost:17432/swarmloom",
   REDIS_URL: "redis://localhost:18422",
   SETTINGS_ENCRYPTION_KEY: "test-settings-encryption-key-0123456789",
   GITHUB_TOKEN: "test-token",

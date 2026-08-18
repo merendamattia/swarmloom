@@ -1,15 +1,15 @@
 x-app-environment: &app-environment
   APP_ENV: ${APP_ENV:-local}
   NODE_ENV: development
-  DATABASE_URL: postgresql://${POSTGRES_USER:-github_agent_worker}:${POSTGRES_PASSWORD:-github_agent_worker}@postgres:5432/${POSTGRES_DB:-github_agent_worker}
+  DATABASE_URL: postgresql://${POSTGRES_USER:-swarmloom}:${POSTGRES_PASSWORD:-swarmloom}@postgres:5432/${POSTGRES_DB:-swarmloom}
   REDIS_URL: ${REDIS_URL:-redis://redis:6379}
   SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:?SETTINGS_ENCRYPTION_KEY is required}
   GITHUB_TOKEN: ${GITHUB_TOKEN:-local-development-token}
   GH_TOKEN: ${GITHUB_TOKEN:-local-development-token}
   GITHUB_REPOSITORIES: ${GITHUB_REPOSITORIES:-owner/repository}
   GITHUB_API_URL: ${GITHUB_API_URL:-https://api.github.com}
-  GIT_AUTHOR_NAME: ${GIT_AUTHOR_NAME:-github-agent-worker}
-  GIT_AUTHOR_EMAIL: ${GIT_AUTHOR_EMAIL:-github-agent-worker@users.noreply.github.com}
+  GIT_AUTHOR_NAME: ${GIT_AUTHOR_NAME:-swarmloom}
+  GIT_AUTHOR_EMAIL: ${GIT_AUTHOR_EMAIL:-swarmloom@users.noreply.github.com}
   ISSUE_READY_LABEL: ${ISSUE_READY_LABEL:-agent:ready}
   ISSUE_WORKING_LABEL: ${ISSUE_WORKING_LABEL:-agent:working}
   ISSUE_BLOCKED_LABEL: ${ISSUE_BLOCKED_LABEL:-agent:blocked}
@@ -43,13 +43,13 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-github_agent_worker}
-      POSTGRES_USER: ${POSTGRES_USER:-github_agent_worker}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-github_agent_worker}
+      POSTGRES_DB: ${POSTGRES_DB:-swarmloom}
+      POSTGRES_USER: ${POSTGRES_USER:-swarmloom}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-swarmloom}
     volumes: ["postgres_data:/var/lib/postgresql/data"]
     ports: ["127.0.0.1:${POSTGRES_PORT:-17432}:5432"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-github_agent_worker} -d ${POSTGRES_DB:-github_agent_worker}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-swarmloom} -d ${POSTGRES_DB:-swarmloom}"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -67,7 +67,7 @@ services:
 
   backend:
     build: {context: ., dockerfile: Dockerfile}
-    image: github-agent-worker:local
+    image: swarmloom:local
     environment:
       <<: *app-environment
       PORT: 18421
@@ -91,7 +91,7 @@ services:
       - ${AGENT_RUNTIME_HOST_PATH:-./agent-runtime}:/app/agent-runtime:ro
 
   worker:
-    image: github-agent-worker:local
+    image: swarmloom:local
     environment: *app-environment
     command: ["bun", "run", "dev:worker"]
     extra_hosts: ["host.docker.internal:host-gateway"]
@@ -110,7 +110,7 @@ services:
       - ${AGENT_RUNTIME_HOST_PATH:-./agent-runtime}:/app/agent-runtime:ro
 
   frontend:
-    image: github-agent-worker:local
+    image: swarmloom:local
     environment:
       NODE_ENV: development
       NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:18421}

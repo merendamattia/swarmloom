@@ -1,7 +1,7 @@
 name: Check Docker image building
 on:
   pull_request:
-    branches: [develop]
+    branches: [develop, main]
   push:
     branches: [develop]
 
@@ -9,7 +9,7 @@ jobs:
   docker-test:
     runs-on: ubuntu-latest
     env:
-      DATABASE_URL: postgresql://github_agent_worker:test@postgres:5432/github_agent_worker
+      DATABASE_URL: postgresql://swarmloom:test@postgres:5432/swarmloom
       POSTGRES_PASSWORD: test
       REDIS_URL: redis://redis:6379
       SETTINGS_ENCRYPTION_KEY: test-settings-encryption-key-0123456789

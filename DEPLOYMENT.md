@@ -1,11 +1,11 @@
-# GitHub Agent Worker — deployment and operations
+# Swarmloom — deployment and operations
 
 This is the operator guide for the implementation in this repository. Commands use Docker Compose
 v2 and the production file `docker-compose.production.yaml`. Run them from the repository root.
 
 ## What the application does
 
-GitHub Agent Worker scans configured repositories for open issues carrying `agent:ready` (or the
+Swarmloom scans configured repositories for open issues carrying `agent:ready` (or the
 configured equivalent). For every acquired issue it:
 
 1. fetches the current `origin/develop`;
@@ -133,7 +133,7 @@ validation.
 | `GITHUB_TOKEN` | required | Fine-grained token; also exposed to agent sessions as `GH_TOKEN` |
 | `GITHUB_REPOSITORIES` | required | Comma/whitespace-separated `owner/repository` values |
 | `GITHUB_API_URL` | `https://api.github.com` | REST API base, useful for GitHub Enterprise |
-| `GIT_AUTHOR_NAME` | `github-agent-worker` | Commit author/committer name for agent sessions |
+| `GIT_AUTHOR_NAME` | `swarmloom` | Commit author/committer name for agent sessions |
 | `GIT_AUTHOR_EMAIL` | noreply default | Commit author/committer email |
 | `ISSUE_READY_LABEL` | `agent:ready` | Queue label |
 | `ISSUE_WORKING_LABEL` | `agent:working` | Acquired/running label |
@@ -503,8 +503,8 @@ pip install -r requirements.txt
 pre-commit install
 pre-commit install --hook-type commit-msg
 docker compose up -d postgres redis
-DATABASE_URL=postgresql://github_agent_worker:github_agent_worker@localhost:17432/github_agent_worker bun run db:generate
-DATABASE_URL=postgresql://github_agent_worker:github_agent_worker@localhost:17432/github_agent_worker bun run db:deploy
+DATABASE_URL=postgresql://swarmloom:swarmloom@localhost:17432/swarmloom bun run db:generate
+DATABASE_URL=postgresql://swarmloom:swarmloom@localhost:17432/swarmloom bun run db:deploy
 ```
 
 Put the real development GitHub token in the ignored `.env`, complete the selected provider login,
@@ -517,7 +517,7 @@ bun run dev
 Run deterministic unit tests without credentials:
 
 ```bash
-bun --filter github-agent-worker-backend test
+bun --filter swarmloom-backend test
 bun run typecheck
 bun run lint
 bun run build
@@ -527,10 +527,10 @@ Run PostgreSQL integration tests against the local Compose database:
 
 ```bash
 APP_ENV=test NODE_ENV=test RUN_INTEGRATION=1 \
-  DATABASE_URL=postgresql://github_agent_worker:github_agent_worker@localhost:17432/github_agent_worker \
+  DATABASE_URL=postgresql://swarmloom:swarmloom@localhost:17432/swarmloom \
   REDIS_URL=redis://localhost:18422 SETTINGS_ENCRYPTION_KEY=test-settings-encryption-key-0123456789 \
 GITHUB_TOKEN=test-token GITHUB_REPOSITORIES=acme/app,acme/main-only AGENT_PROVIDER=codex \
-bun --filter github-agent-worker-backend test
+bun --filter swarmloom-backend test
 ```
 
 The integration suite uses fake GitHub/provider dependencies and local temporary Git repositories;

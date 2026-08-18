@@ -1,5 +1,5 @@
 import { hc } from "hono/client";
-import type { AppType } from "github-agent-worker-backend/api";
+import type { AppType } from "swarmloom-backend/api";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:18421";
 export const api = hc<AppType>(API_URL).api;

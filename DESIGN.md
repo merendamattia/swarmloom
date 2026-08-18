@@ -1,5 +1,5 @@
 ---
-name: GitHub Agent Worker
+name: Swarmloom
 description: A calm morning ledger for autonomous GitHub work, exceptions, and durable evidence.
 colors:
   canvas: "oklch(97.8% 0.006 78)"
@@ -86,7 +86,7 @@ components:
 
 **Creative North Star: "The Morning Ledger"**
 
-GitHub Agent Worker should feel like opening a clean operational ledger at the start of the day:
+Swarmloom should feel like opening a clean operational ledger at the start of the day:
 quiet, current, and immediately decisive. The overview leads with a single health judgment and the
 few exceptions that require action. History and evidence become denser only after the operator
 drills in.

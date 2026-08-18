@@ -1,4 +1,4 @@
-# GitHub Agent Worker — global instructions
+# Swarmloom — global instructions
 
 This is the only behavioral instruction file for the worker. The backend loads it into every
 provider request, so Codex and OpenCode receive the same instructions. The task, context, and

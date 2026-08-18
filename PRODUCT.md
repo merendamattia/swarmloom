@@ -6,7 +6,7 @@ product
 
 ## Users
 
-GitHub Agent Worker is operated by one technically proficient person responsible for an autonomous
+Swarmloom is operated by one technically proficient person responsible for an autonomous
 worker running on a VPS. They check the interface briefly during normal operation and investigate
 only when a job, repository, provider, or notification path needs attention.
 

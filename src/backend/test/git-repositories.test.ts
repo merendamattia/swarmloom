@@ -56,7 +56,7 @@ describe("target repository preparation", () => {
   });
 
   async function createRemote(branch: "develop" | "main") {
-    const root = await mkdtemp(join(tmpdir(), "github-agent-worker-git-"));
+    const root = await mkdtemp(join(tmpdir(), "swarmloom-git-"));
     temporaryDirectories.push(root);
     const remote = join(root, "remote.git");
     const seed = join(root, "seed");

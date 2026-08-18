@@ -61,7 +61,7 @@ describe("OpenCode provider", () => {
   test("builds a fresh JSON command without putting the prompt in argv", () => {
     expect(buildOpenCodeCommand(request)).toEqual([
       "opencode", "run", "--format", "json", "--model", "test-model",
-      "--dir", "/work/repository", "--title", "GitHub Agent Worker: issue-worker",
+      "--dir", "/work/repository", "--title", "Swarmloom: issue-worker",
     ]);
     const key = ["VENDOR", "API", "KEY"].join("_");
     const environment = openCodeEnvironment({ [key]: "secret" });
