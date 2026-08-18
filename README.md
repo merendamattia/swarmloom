@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="src/frontend/public/brand/logo.png" alt="Swarmloom" width="720">
+</p>
+
 # Swarmloom
 
 Swarmloom is a Dockerized TypeScript application that turns ready-labelled GitHub issues
