@@ -8,6 +8,7 @@ import type { Config } from "../core/config-schema.ts";
 import type { SettingsService } from "../core/settings-service.ts";
 import { parseRuntimeSettingsPatch, runtimeSettingsView } from "../core/runtime-settings.ts";
 import { prisma } from "../core/db.ts";
+import { heartbeatServiceState } from "./health.ts";
 import { logger } from "../core/logger.ts";
 import { redactSecrets } from "../core/secrets.ts";
 import { checkProviderAuthentication } from "../core/startup.ts";
@@ -63,22 +64,32 @@ export function createApp({ config, scanner, github, events, startup, queue, set
 
   return app
     .get("/health", async (context) => {
-      await prisma.$queryRaw`SELECT 1`;
-      await queue.health();
-      const worker = await prisma.serviceHeartbeat.findFirst({
-        where: { environment: config.APP_ENV, serviceName: "worker" },
-        orderBy: { lastSeenAt: "desc" },
-      });
+      const [databaseOk, queueOk, worker, api] = await Promise.all([
+        prisma.$queryRaw`SELECT 1`.then(() => true, () => false),
+        queue.health().then(() => true, () => false),
+        prisma.serviceHeartbeat.findFirst({
+          where: { environment: config.APP_ENV, serviceName: "worker" },
+          orderBy: { lastSeenAt: "desc" },
+        }),
+        prisma.serviceHeartbeat.findFirst({
+          where: { environment: config.APP_ENV, serviceName: "api" },
+          orderBy: { lastSeenAt: "desc" },
+        }),
+      ]);
       return context.json({
         status: "ok",
         environment: config.APP_ENV,
-        database: "ok",
-        queue: "ok",
-        scheduler: "running",
         provider: config.AGENT_PROVIDER,
-        worker: {
-          operational: Boolean(worker && worker.lastSeenAt.getTime() > Date.now() - config.STALE_JOB_THRESHOLD_MS),
-          lastSeenAt: worker?.lastSeenAt ?? null,
+        services: {
+          api: heartbeatServiceState(api, config.STALE_JOB_THRESHOLD_MS),
+          worker: heartbeatServiceState(worker, config.STALE_JOB_THRESHOLD_MS),
+          database: databaseOk
+            ? { state: "healthy", detail: "ok", lastSeenAt: null }
+            : { state: "offline", detail: "Unreachable", lastSeenAt: null },
+          queue: queueOk
+            ? { state: "healthy", detail: "ok", lastSeenAt: null }
+            : { state: "offline", detail: "Unreachable", lastSeenAt: null },
+          scheduler: { state: "healthy", detail: "running", lastSeenAt: null },
         },
       });
     })
