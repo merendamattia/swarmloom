@@ -83,7 +83,7 @@ export function createScanService({
               queuedCount += 1;
               await events.record({
                 type: "JOB_QUEUED",
-                message: `Queued ${fullName}#${issue.number}`,
+                message: `Queued ${fullName}#${issue.number} · ${issue.title}`,
                 jobId: job.id,
                 repositoryId: repository.id,
                 scanRunId: scan.id,
