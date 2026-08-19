@@ -41,19 +41,36 @@ async function markError(id: string, errorMessage: string) {
   });
 }
 
-async function remove(id: string) {
-  const repository = await prisma.repository.findUnique({ where: { id }, select: { fullName: true } });
-  if (!repository) return null;
+type RemoveConfiguration = { environment: string; value: string | null };
+
+async function remove(id: string, fullName: string, configuration?: RemoveConfiguration) {
   const activeJobs = await prisma.job.count({
     where: { repositoryId: id, status: { in: ["QUEUED", "RUNNING"] } },
   });
   if (activeJobs > 0) return { blocked: true, activeJobs };
+  const settingsWrite = configuration
+    ? configuration.value === null
+      ? prisma.runtimeSetting.deleteMany({
+          where: { environment: configuration.environment, key: "GITHUB_REPOSITORIES" },
+        })
+      : prisma.runtimeSetting.upsert({
+          where: { environment_key: { environment: configuration.environment, key: "GITHUB_REPOSITORIES" } },
+          create: {
+            environment: configuration.environment,
+            key: "GITHUB_REPOSITORIES",
+            value: configuration.value,
+            secret: false,
+          },
+          update: { value: configuration.value },
+        })
+    : null;
   await prisma.$transaction([
     prisma.jobEvent.deleteMany({ where: { repositoryId: id } }),
     prisma.job.deleteMany({ where: { repositoryId: id } }),
     prisma.repository.delete({ where: { id } }),
+    ...(settingsWrite ? [settingsWrite] : []),
   ]);
-  return { removed: true, fullName: repository.fullName };
+  return { removed: true, fullName };
 }
 
 export const repositoryRepository = { upsertConfigured, markReady, markInvalid, markError, remove };

@@ -217,17 +217,17 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       const existing = await prisma.repository.findUnique({ where: { id }, select: { fullName: true } });
       if (!existing) return context.json({ error: "Not found" }, 404);
       const remaining = config.githubRepositories.filter((name) => name !== existing.fullName);
-      if (remaining.length === 0 && config.githubRepositories.length > 0) {
-        return context.json({ error: "Cannot remove the last configured repository" }, 409);
-      }
-      const result = await repositoryRepository.remove(id);
+      const configured = remaining.length !== config.githubRepositories.length;
+      const result = await repositoryRepository.remove(id, existing.fullName, configured
+        ? { environment: config.APP_ENV, value: remaining.length > 0 ? remaining.join(",") : null }
+        : undefined);
       if (result?.blocked) {
         return context.json({
           error: `Cannot remove the repository while ${result.activeJobs} active job${result.activeJobs === 1 ? "" : "s"} ${result.activeJobs === 1 ? "is" : "are"} queued or running. Cancel or finish them first.`,
         }, 409);
       }
-      if (remaining.length !== config.githubRepositories.length) {
-        await settings.update({ githubRepositories: remaining.join(",") });
+      if (configured) {
+        await settings.reload();
         scheduler.restart();
       }
       await events.record({

@@ -9,6 +9,7 @@ integration("operations API", () => {
   let repositoryId = "";
   let jobId = "";
   let scanCalls = 0;
+  let restartCalls = 0;
   const unique = crypto.randomUUID();
   const apiJobId = crypto.randomUUID();
   const labels = ["bug", "agent:working"];
@@ -78,7 +79,7 @@ integration("operations API", () => {
       },
       queue: { health: async () => "PONG", remove: async () => true },
       settings: createSettingsService(config),
-      scheduler: { restart: () => {} },
+      scheduler: { restart: () => { restartCalls += 1; } },
     });
   });
 
@@ -237,5 +238,53 @@ integration("operations API", () => {
 
     const missing = await app.request(`/api/repositories/${crypto.randomUUID()}`, { method: "DELETE" });
     expect(missing.status).toBe(404);
+  });
+
+  test("drops a removed repository from the persisted configuration and restarts the scheduler", async () => {
+    const configured = await prisma.repository.create({
+      data: { fullName: `acme/configured-${unique}`, cloneUrl: `https://github.com/acme/configured-${unique}.git` },
+    });
+    const patched = await app.request("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ githubRepositories: `acme/api-test,acme/configured-${unique}` }),
+    });
+    expect(patched.status).toBe(200);
+    expect(config.githubRepositories).toContain(`acme/configured-${unique}`);
+
+    const restartsBefore = restartCalls;
+    const removed = await app.request(`/api/repositories/${configured.id}`, { method: "DELETE" });
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toEqual({ status: "removed" });
+
+    expect(config.githubRepositories).toEqual(["acme/api-test"]);
+    expect(await prisma.runtimeSetting.findUnique({
+      where: { environment_key: { environment: "test", key: "GITHUB_REPOSITORIES" } },
+    })).toMatchObject({ value: "acme/api-test" });
+    expect(restartCalls).toBeGreaterThan(restartsBefore);
+    expect(await prisma.repository.findUnique({ where: { id: configured.id } })).toBeNull();
+  });
+
+  test("allows removing the last configured repository and clears the persisted setting", async () => {
+    const last = await prisma.repository.create({
+      data: { fullName: `acme/last-${unique}`, cloneUrl: `https://github.com/acme/last-${unique}.git` },
+    });
+    const patched = await app.request("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ githubRepositories: `acme/last-${unique}` }),
+    });
+    expect(patched.status).toBe(200);
+    expect(config.githubRepositories).toEqual([`acme/last-${unique}`]);
+
+    const restartsBefore = restartCalls;
+    const removed = await app.request(`/api/repositories/${last.id}`, { method: "DELETE" });
+    expect(removed.status).toBe(200);
+
+    expect(config.githubRepositories).toEqual(["acme/api-test"]);
+    expect(await prisma.runtimeSetting.findUnique({
+      where: { environment_key: { environment: "test", key: "GITHUB_REPOSITORIES" } },
+    })).toBeNull();
+    expect(restartCalls).toBe(restartsBefore + 1);
   });
 });
