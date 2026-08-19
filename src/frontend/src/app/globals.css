@@ -229,6 +229,7 @@ h3 { font-size: 1rem; line-height: 1.35; font-weight: 650; }
 .repository-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-lg); }
 .repository-head > div { display: grid; min-width: 0; gap: var(--space-xs); }
 .repository-head h2 { overflow-wrap: anywhere; }
+.repository-head > .repository-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-sm); }
 .repository-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-lg); }
 .repository-jobs { display: grid; gap: var(--space-sm); }
 .repository-job { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-md); border-top: 1px solid var(--border); padding: var(--space-md) 0; }

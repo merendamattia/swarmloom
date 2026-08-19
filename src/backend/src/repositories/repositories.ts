@@ -41,4 +41,19 @@ async function markError(id: string, errorMessage: string) {
   });
 }
 
-export const repositoryRepository = { upsertConfigured, markReady, markInvalid, markError };
+async function remove(id: string) {
+  const repository = await prisma.repository.findUnique({ where: { id }, select: { fullName: true } });
+  if (!repository) return null;
+  const activeJobs = await prisma.job.count({
+    where: { repositoryId: id, status: { in: ["QUEUED", "RUNNING"] } },
+  });
+  if (activeJobs > 0) return { blocked: true, activeJobs };
+  await prisma.$transaction([
+    prisma.jobEvent.deleteMany({ where: { repositoryId: id } }),
+    prisma.job.deleteMany({ where: { repositoryId: id } }),
+    prisma.repository.delete({ where: { id } }),
+  ]);
+  return { removed: true, fullName: repository.fullName };
+}
+
+export const repositoryRepository = { upsertConfigured, markReady, markInvalid, markError, remove };
