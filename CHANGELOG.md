@@ -1,3 +1,18 @@
+# [1.6.0](https://github.com/merendamattia/swarmloom/compare/v1.5.0...v1.6.0) (2026-08-19)
+
+
+### Bug Fixes
+
+* **repo:** allow removing the last repository and persist configuration atomically ([d8496e0](https://github.com/merendamattia/swarmloom/commit/d8496e057722f8eb7a285f6ed10f52d616208872)), closes [#4](https://github.com/merendamattia/swarmloom/issues/4)
+* **runner:** retry a role when it exits cleanly without a response file ([104fbf3](https://github.com/merendamattia/swarmloom/commit/104fbf308df6f263b1a4803ca3f7f9576b56328d))
+* **runner:** retry a role when it exits cleanly without a response file ([e55d70e](https://github.com/merendamattia/swarmloom/commit/e55d70ef471f9309777d0ee1aac418b5a4a288c5))
+
+
+### Features
+
+* **overview:** add complete operational summary to the dashboard banner ([6f90f4b](https://github.com/merendamattia/swarmloom/commit/6f90f4bbeb51896fd2f7968fa8673d7db154a6b9))
+* **repo:** remove obsolete repositories from the database ([75a911f](https://github.com/merendamattia/swarmloom/commit/75a911f81ab9fa1862be0573d59eafcc781d0285)), closes [#4](https://github.com/merendamattia/swarmloom/issues/4)
+
 # [1.5.0](https://github.com/merendamattia/swarmloom/compare/v1.4.1...v1.5.0) (2026-08-18)
 
 
