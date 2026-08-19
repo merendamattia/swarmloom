@@ -158,35 +158,41 @@ integration("job runner", () => {
 
   test("persists parser diagnostics with the final provider output and event timeline", async () => {
     const job = await claimed(issueBase + 11);
-    const provider = new FakeProvider([
-      success("Implemented the change and ran the checks.", "parser-first"),
-      success("Still no outcome marker.", "parser-second"),
-    ]);
-    const runner = createJobRunner({
-      config,
-      provider,
-      github: fakeGitHub(job.issueNumber, job.branchName),
-      createWorktree: async (input) => input.worktreePath,
-    });
+    const previousToken = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = "diagnostics-secret-token";
+    try {
+      const provider = new FakeProvider([
+        success("Implemented the change and ran the checks.", "parser-first"),
+        success("Still no outcome marker: diagnostics-secret-token present.", "parser-second"),
+      ]);
+      const runner = createJobRunner({
+        config,
+        provider,
+        github: fakeGitHub(job.issueNumber, job.branchName),
+        createWorktree: async (input) => input.worktreePath,
+      });
 
-    expect(await runner.run(job.id, "runner-worker")).toBe(true);
-    const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
-    expect(stored.status).toBe("FAILED");
-    expect(stored.errorMessage).toContain("Agent response must start with");
-    expect(stored.diagnostics).toMatchObject({
-      stage: "parser",
-      role: "issue-worker",
-      provider: "codex",
-      model: "gpt-5.6-luna",
-      sessionId: "parser-second",
-      exitCode: 0,
-      finalOutput: "Still no outcome marker.",
-      causeChain: [
-        expect.stringContaining("Agent response must start with"),
-        "Still no outcome marker.",
-      ],
-      events: [{ type: "SESSION_STARTED" }],
-    });
+      expect(await runner.run(job.id, "runner-worker")).toBe(true);
+      const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+      expect(stored.status).toBe("FAILED");
+      expect(stored.errorMessage).toContain("Agent response must start with");
+      expect(stored.diagnostics).toMatchObject({
+        stage: "parser",
+        role: "issue-worker",
+        provider: "codex",
+        model: "gpt-5.6-luna",
+        sessionId: "parser-second",
+        exitCode: 0,
+        finalOutput: "Still no outcome marker: [REDACTED] present.",
+        causeChain: [
+          expect.stringContaining("Agent response must start with"),
+          "Still no outcome marker: [REDACTED] present.",
+        ],
+        events: [{ type: "SESSION_STARTED" }],
+      });
+    } finally {
+      process.env.GITHUB_TOKEN = previousToken;
+    }
   });
 
   test("aborts an active provider when cancellation makes its heartbeat fail", async () => {

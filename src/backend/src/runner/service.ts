@@ -652,8 +652,11 @@ function failure(
     error: safeError(message),
     causeChain: causeChain(extra.cause ?? error),
     stderr: extra.stderr ?? (result.stderr || undefined),
-    finalOutput: extra.finalOutput
-      ?? (result.response.trim() ? tail(result.response, 20_000) : result.finalOutput.trim() ? tail(result.finalOutput, 20_000) : undefined),
+    finalOutput: (() => {
+      const raw = extra.finalOutput
+        ?? (result.response.trim() ? result.response : result.finalOutput.trim() ? result.finalOutput : undefined);
+      return raw ? tail(redactSecrets(raw), 20_000) : undefined;
+    })(),
     events: result.events,
   });
 }
