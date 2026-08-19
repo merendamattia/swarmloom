@@ -85,6 +85,7 @@ services:
       retries: 20
     volumes:
       - ./src/backend:/app/src/backend
+      - ./CHANGELOG.md:/app/CHANGELOG.md:ro
       - worker_data:/data
       - codex_home:/data/codex-home
       - opencode_data:/data/opencode-data
@@ -104,6 +105,7 @@ services:
       retries: 5
     volumes:
       - ./src/backend:/app/src/backend
+      - ./CHANGELOG.md:/app/CHANGELOG.md:ro
       - worker_data:/data
       - codex_home:/data/codex-home
       - opencode_data:/data/opencode-data
