@@ -34,6 +34,22 @@ describe("canonical agent runtime", () => {
     expect(instructions).toContain("mergeable");
   });
 
+  test("requires running every ci.yaml command before committing", async () => {
+    const instructions = await loadAgentInstructions(runtime);
+    for (const cmd of [
+      "pre-commit run --all-files",
+      "bun run db:generate",
+      "bun run db:deploy",
+      "bun run typecheck",
+      "bun run lint",
+      "bun run test",
+      "bun run build",
+    ]) expect(instructions).toContain(cmd);
+    expect(instructions).toContain("Do not skip any of them");
+    expect(instructions).toContain("RUN_INTEGRATION=1");
+    expect(instructions).toContain("CHANGELOG.md");
+  });
+
   test("tells agents to finish simple requests directly", async () => {
     const instructions = await loadAgentInstructions(runtime);
     expect(instructions).toContain("do not install tools or dependencies just to validate a simple request");

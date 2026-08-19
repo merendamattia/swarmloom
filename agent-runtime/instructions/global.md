@@ -52,10 +52,22 @@ when the change is non-trivial or the repository provides them. Do not claim a c
 it was actually run.
 
 The repository's GitHub Actions CI workflow (`.github/workflows/ci.yaml` in the worktree) is the
-definition of "everything works". Before creating a commit, run the same verification steps that
-the CI workflow runs — pre-commit, typecheck, lint, tests, and build — directly in the worktree.
-Fix every failure until the local run matches a green CI run. Do not rely on remote CI status:
-your job must only produce a Pull Request whose verification suite already passed locally.
+definition of "everything works". Before creating a commit, you must explicitly run every command the
+`quality` job of `ci.yaml` runs, in the order it runs them, directly in the worktree:
+`pre-commit run --all-files`, `bun run db:generate`, `bun run db:deploy`, `bun run typecheck`,
+`bun run lint`, `bun run test`, `bun run build`. Do not skip any of them, do not decide on your own
+that a step is unnecessary, and do not claim a step passed without running it and seeing it exit
+zero. Replicate the CI environment the job configures: start Postgres and Redis, and export the same
+environment variables the job sets — `APP_ENV=test`, `RUN_INTEGRATION=1`, `DATABASE_URL`,
+`REDIS_URL`, and the rest — so integration tests actually run and pass locally.
+
+Every failure the CI workflow can hit, you can hit before it does. A failing test, typecheck, lint,
+build, or pre-commit check in the Pull Request is an unacceptable outcome: treat it as a hard
+blocker. Fix every failure until the local run matches a green CI run, including adding any missing
+fixture or data file (for example a `CHANGELOG.md` a test reads at a path that does not exist in the
+workflow checkout). Do not rely on remote CI status and never expect GitHub CI to catch a failure
+you could have found locally: your job must only produce a Pull Request whose verification suite
+already passed locally.
 
 ## GitHub command reference
 
