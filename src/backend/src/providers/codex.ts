@@ -1,3 +1,6 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { redactSecrets } from "../core/secrets.ts";
 import { runJsonlProcess } from "./process.ts";
 import {
@@ -6,6 +9,27 @@ import {
   type AgentRequest,
   type NormalizedProviderEvent,
 } from "./types.ts";
+
+const CODEX_GIT_PUSH_RULES = `prefix_rule(
+    pattern = ["git", "push", ["origin", "-u", "--set-upstream"]],
+    decision = "allow",
+    justification = "Swarmloom worker pushes the assigned feature branch to the origin remote to update the automated pull request.",
+    match = [
+        "git push origin agent/issue-11",
+        "git push -u origin agent/issue-11",
+        "git push --set-upstream origin agent/issue-11",
+    ],
+    not_match = [
+        "git push upstream agent/issue-11",
+        "git fetch origin",
+    ],
+)
+`;
+
+export async function provisionExecPolicy(codexHome: string) {
+  await mkdir(join(codexHome, "rules"), { recursive: true });
+  await writeFile(join(codexHome, "rules", "default.rules"), CODEX_GIT_PUSH_RULES);
+}
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -73,6 +97,8 @@ export class CodexProvider implements AgentProvider {
   readonly name = "codex" as const;
 
   async execute(request: AgentRequest) {
+    const codexHome = process.env.CODEX_HOME ?? join(homedir(), ".codex");
+    await provisionExecPolicy(codexHome);
     let sessionId: string | null = null;
     let sessionError: string | undefined;
     const output: string[] = [];

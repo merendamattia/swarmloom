@@ -1,5 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
-import { buildCodexCommand, normalizeCodexEvent } from "../src/providers/codex.ts";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildCodexCommand, normalizeCodexEvent, provisionExecPolicy } from "../src/providers/codex.ts";
 import {
   buildOpenCodeCommand, normalizeOpenCodeEvent, openCodeEnvironment, OpenCodeProvider,
 } from "../src/providers/opencode.ts";
@@ -22,6 +25,15 @@ describe("Codex provider", () => {
       "--approve-for-me", "--config",
       'model_reasoning_effort="max"', "--cd", "/work/repository", "-",
     ]);
+  });
+
+  test("provisions the git-push exec policy into the codex home", async () => {
+    const home = await mkdtemp(join(tmpdir(), "codex-home-"));
+    await provisionExecPolicy(home);
+    const rules = await readFile(join(home, "rules", "default.rules"), "utf8");
+    expect(rules).toContain('pattern = ["git", "push"');
+    expect(rules).toContain('decision = "allow"');
+    expect(rules).toContain("origin");
   });
 
   test("normalizes session, output, tool and completion events", () => {
