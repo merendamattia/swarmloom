@@ -1,3 +1,12 @@
+## [1.6.1](https://github.com/merendamattia/swarmloom/compare/v1.6.0...v1.6.1) (2026-08-19)
+
+
+### Bug Fixes
+
+* **codex:** allow git push to origin under approe-for-me ([f7633dc](https://github.com/merendamattia/swarmloom/commit/f7633dcb32ac026aa818627f01de6b5e9a6bc30b))
+* **global.md, runtime-instructions.test.ts:** enhance instructions on handling Pull Request conflicts and update tests ([cc4b938](https://github.com/merendamattia/swarmloom/commit/cc4b93896146dd8ef6699fd246df4f1257304ede))
+* **global.md:** clarify push restrictions for main and develop branches ([f03e15f](https://github.com/merendamattia/swarmloom/commit/f03e15fb98a90d76902427d300fe4bdfe4c2161b))
+
 # [1.6.0](https://github.com/merendamattia/swarmloom/compare/v1.5.0...v1.6.0) (2026-08-19)
 
 
