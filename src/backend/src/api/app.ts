@@ -8,6 +8,7 @@ import type { Config } from "../core/config-schema.ts";
 import type { SettingsService } from "../core/settings-service.ts";
 import { parseRuntimeSettingsPatch, runtimeSettingsView } from "../core/runtime-settings.ts";
 import { prisma } from "../core/db.ts";
+import { buildHealthServices } from "./health.ts";
 import { logger } from "../core/logger.ts";
 import { redactSecrets } from "../core/secrets.ts";
 import { checkProviderAuthentication } from "../core/startup.ts";
@@ -15,6 +16,7 @@ import type { EventService } from "../events/service.ts";
 import type { GitHubClient } from "../github/client.ts";
 import { replaceWorkerLabels } from "../github/labels.ts";
 import { jobRepository } from "../repositories/jobs.ts";
+import { repositoryRepository } from "../repositories/repositories.ts";
 import { finishScanIfComplete } from "../scans/finalize.ts";
 import type { JobQueue } from "../queue/service.ts";
 
@@ -47,7 +49,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
   app.use("*", requestId(), secureHeaders(), cors({
     origin: config.FRONTEND_URL,
     allowHeaders: ["Content-Type"],
-    allowMethods: ["GET", "POST", "PATCH", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
   }));
   app.onError((error, context) => {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
@@ -63,23 +65,29 @@ export function createApp({ config, scanner, github, events, startup, queue, set
 
   return app
     .get("/health", async (context) => {
-      await prisma.$queryRaw`SELECT 1`;
-      await queue.health();
-      const worker = await prisma.serviceHeartbeat.findFirst({
-        where: { environment: config.APP_ENV, serviceName: "worker" },
-        orderBy: { lastSeenAt: "desc" },
-      });
+      const [databaseOk, queueOk, worker, api] = await Promise.all([
+        prisma.$queryRaw`SELECT 1`.then(() => true, () => false),
+        queue.health().then(() => true, () => false),
+        prisma.serviceHeartbeat.findFirst({
+          where: { environment: config.APP_ENV, serviceName: "worker" },
+          orderBy: { lastSeenAt: "desc" },
+        }).catch(() => null),
+        prisma.serviceHeartbeat.findFirst({
+          where: { environment: config.APP_ENV, serviceName: "api" },
+          orderBy: { lastSeenAt: "desc" },
+        }).catch(() => null),
+      ]);
       return context.json({
         status: "ok",
         environment: config.APP_ENV,
-        database: "ok",
-        queue: "ok",
-        scheduler: "running",
         provider: config.AGENT_PROVIDER,
-        worker: {
-          operational: Boolean(worker && worker.lastSeenAt.getTime() > Date.now() - config.STALE_JOB_THRESHOLD_MS),
-          lastSeenAt: worker?.lastSeenAt ?? null,
-        },
+        services: buildHealthServices({
+          api,
+          worker,
+          databaseOk,
+          queueOk,
+          staleThresholdMs: config.STALE_JOB_THRESHOLD_MS,
+        }),
       });
     })
     .get("/status", async (context) => {
@@ -211,6 +219,31 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         },
       },
     })))
+    .delete("/repositories/:id", async (context) => {
+      const id = context.req.param("id");
+      const existing = await prisma.repository.findUnique({ where: { id }, select: { fullName: true } });
+      if (!existing) return context.json({ error: "Not found" }, 404);
+      const remaining = config.githubRepositories.filter((name) => name !== existing.fullName);
+      const configured = remaining.length !== config.githubRepositories.length;
+      const result = await repositoryRepository.remove(id, existing.fullName, configured
+        ? { environment: config.APP_ENV, value: remaining.length > 0 ? remaining.join(",") : null }
+        : undefined);
+      if (result?.blocked) {
+        return context.json({
+          error: `Cannot remove the repository while ${result.activeJobs} active job${result.activeJobs === 1 ? "" : "s"} ${result.activeJobs === 1 ? "is" : "are"} queued or running. Cancel or finish them first.`,
+        }, 409);
+      }
+      if (configured) {
+        await settings.reload();
+        scheduler.restart();
+      }
+      await events.record({
+        type: "REPOSITORY_REMOVED",
+        message: `Removed ${existing.fullName} from configured repositories`,
+        metadata: { repositoryId: id },
+      });
+      return context.json({ status: "removed" });
+    })
     .post("/jobs/:id/cancel", async (context) => {
       const job = await prisma.job.findFirst({
         where: { id: context.req.param("id"), environment: config.APP_ENV }, include: { repository: true },

@@ -25,6 +25,15 @@ describe("canonical agent runtime", () => {
     expect(instructions).toContain("gh pr view");
   });
 
+  test("forbids pushing to main or develop and resolves pull request conflicts", async () => {
+    const instructions = await loadAgentInstructions(runtime);
+    expect(instructions).toContain("never push to `main` or `develop`");
+    expect(instructions).toContain("Push only the current fix branch");
+    expect(instructions).toContain("conflicting files");
+    expect(instructions).toContain("resolve");
+    expect(instructions).toContain("mergeable");
+  });
+
   test("tells agents to finish simple requests directly", async () => {
     const instructions = await loadAgentInstructions(runtime);
     expect(instructions).toContain("do not install tools or dependencies just to validate a simple request");

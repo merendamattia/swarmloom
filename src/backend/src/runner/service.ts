@@ -271,11 +271,14 @@ export function createJobRunner({
         const result = await executeRole(role, task, attempt === 0 ? context : `${context}${guidance}`, workingDirectory, abortSignal, currentJob);
         if (result.exitCode !== 0) return result;
         try {
-          parse(result.response);
-          return result;
+          const response = await readResponseFile(result.responseFilePath);
+          parse(response);
+          return { ...result, response };
         } catch (error) {
           if (attempt >= 1) throw error;
           guidance = `\n\nYour previous response was not accepted: ${error instanceof Error ? error.message : String(error)}`;
+        } finally {
+          await removeResponseFile(result.responseFilePath);
         }
       }
     }
@@ -290,35 +293,28 @@ export function createJobRunner({
     ) {
       const responseFilePath = responseFilePathFor(config.DATA_DIR, currentJob.id, role);
       await mkdir(dirname(responseFilePath), { recursive: true });
-      try {
-        const result = await provider.execute({
-          role,
-          workingDirectory,
-          task,
-          context,
-          instructions: await loadAgentInstructions(config.AGENT_RUNTIME_DIR),
-          model: currentJob.model,
-          reasoningEffort: currentJob.reasoningEffort as Config["CODEX_REASONING_EFFORT"] | undefined,
-          responseFilePath,
-          signal: abortSignal,
-          onEvent: async (agentEvent) => {
-            await events.record({
-              type: agentEvent.type === "AGENT_OUTPUT" ? "AGENT_OUTPUT" : `AGENT_${agentEvent.type}`,
-              message: (agentEvent.message || agentEvent.type).slice(0, 8_000),
-              jobId: currentJob.id,
-              repositoryId: currentJob.repositoryId,
-              scanRunId: currentJob.scanRunId ?? undefined,
-              metadata: agentEvent.metadata as Prisma.InputJsonValue | undefined,
-            });
-          },
-        });
-        if (result.exitCode !== 0) {
-          return { ...result, responseFilePath, response: "" };
-        }
-        return { ...result, responseFilePath, response: await readResponseFile(responseFilePath) };
-      } finally {
-        await removeResponseFile(responseFilePath);
-      }
+      const result = await provider.execute({
+        role,
+        workingDirectory,
+        task,
+        context,
+        instructions: await loadAgentInstructions(config.AGENT_RUNTIME_DIR),
+        model: currentJob.model,
+        reasoningEffort: currentJob.reasoningEffort as Config["CODEX_REASONING_EFFORT"] | undefined,
+        responseFilePath,
+        signal: abortSignal,
+        onEvent: async (agentEvent) => {
+          await events.record({
+            type: agentEvent.type === "AGENT_OUTPUT" ? "AGENT_OUTPUT" : `AGENT_${agentEvent.type}`,
+            message: (agentEvent.message || agentEvent.type).slice(0, 8_000),
+            jobId: currentJob.id,
+            repositoryId: currentJob.repositoryId,
+            scanRunId: currentJob.scanRunId ?? undefined,
+            metadata: agentEvent.metadata as Prisma.InputJsonValue | undefined,
+          });
+        },
+      });
+      return { ...result, responseFilePath, response: "" };
     }
 
     async function reviewImplementation(

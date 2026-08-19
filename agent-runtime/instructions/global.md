@@ -19,9 +19,24 @@ review changes, and push to that same branch so the already-open Pull Request up
 follow-up on a new branch or open a second Pull Request for the same issue. Only redo work from
 scratch when the context proves it is incomplete or invalid.
 
+Every time the task involves an existing Pull Request — always during a review follow-up — check
+whether the Pull Request is still mergeable. Because the work lives on a branch, a new update to
+`develop` can land while the Pull Request is open and make it conflicted; GitHub reports this with
+the mergeable state and the exact conflicting files. Read that state on every run, and when conflicts
+exist, resolve them in the checked-out branch: update it onto the current `origin/develop`, fix each
+reported conflict file, verify the result, and push so the Pull Request becomes mergeable again.
+Never push or merge the Pull Request while conflicts are unresolved, and never treat a conflicted
+Pull Request as done.
+
 The immutable baseline is the supplied `origin/develop` commit. Never switch the base to `main`,
 `master`, or another branch. Never force-push, merge a Pull Request, rewrite unrelated history,
 delete remote branches, or alter files outside the worktree.
+
+You must never push to `main` or `develop`, on any remote, for any reason, even as part of a longer
+or combined shell command. Push only the current fix branch — or the already-existing Pull Request
+branch in a review follow-up — to `origin`, and open the automated Pull Request against `develop`.
+Before every push, verify the checked-out branch name and the target remote; if the push would touch
+`main` or `develop`, abort it.
 
 Use the smallest coherent change that completely satisfies the task. For a simple, explicit task,
 act in one pass:
@@ -62,7 +77,7 @@ Read a Pull Request and its diff:
 
 ```bash
 gh pr view <pr-number> --repo <owner>/<repo> \
-  --json number,title,body,state,baseRefName,headRefName,url,commits,files
+  --json number,title,body,state,baseRefName,headRefName,mergeable,mergeStateStatus,url,commits,files
 gh pr diff <pr-number> --repo <owner>/<repo>
 gh api --paginate repos/<owner>/<repo>/pulls/<pr-number>/comments
 ```
@@ -105,7 +120,12 @@ repeated progress chatter.
 Every target repository must have `origin/develop`. Every fresh worktree starts at the captured
 current `origin/develop` commit and every new automated Pull Request targets `develop`. For a review
 follow-up the worktree starts from the existing Pull Request branch; push fixes to that same branch
-so the open Pull Request picks them up.
+so the open Pull Request picks them up. The only push target is the assigned fix branch on `origin`;
+`main` and `develop` are never push targets, and the Pull Request base is always `develop`.
+
+Whenever a Pull Request is involved, verify it is not conflicted against the current `origin/develop`.
+If GitHub reports a conflict, rebase or merge the checked-out branch onto `origin/develop`, resolve the
+conflicting files, rerun the checks, and push the updated branch.
 
 Keep changes modular and direct. Do not add compatibility layers, fallback branches, speculative
 configuration, or new dependencies when the existing code or installed tools solve the problem.

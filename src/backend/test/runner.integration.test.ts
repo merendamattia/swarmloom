@@ -175,11 +175,15 @@ integration("job runner", () => {
     expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("CANCELLED");
   });
 
-  test("fails with a clear message when the agent finishes without writing the response", async () => {
+  test("retries the role when the agent finishes without writing the response, then fails clearly if it never writes it", async () => {
     const job = await claimed(issueBase + 6);
+    let calls = 0;
     const provider: AgentProvider = {
       name: "opencode",
-      execute: async () => ({ provider: "opencode", sessionId: "session-missing", exitCode: 0, finalOutput: "", stderr: "" }),
+      execute: async () => {
+        calls++;
+        return { provider: "opencode", sessionId: `session-missing-${calls}`, exitCode: 0, finalOutput: "", stderr: "" };
+      },
     };
     const runner = createJobRunner({
       config,
@@ -189,9 +193,35 @@ integration("job runner", () => {
     });
 
     expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(calls).toBe(2);
     const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
     expect(stored.status).toBe("FAILED");
     expect(stored.errorMessage).toContain("without writing the response");
+  });
+
+  test("recovers when the agent writes the response on the retry after finishing without a response file", async () => {
+    const job = await claimed(issueBase + 11);
+    const implementationResponse = [
+      "Outcome: implemented",
+      `PR: https://github.com/acme/runner/pull/${job.issueNumber}`,
+      "Recovered on the retry.",
+    ].join("\n");
+    const provider = new MissingThenSuccessProvider([
+      success(implementationResponse, "implementation-recovered"),
+      success("Review: pass\nLooks good.", "review-recovered"),
+    ]);
+    const runner = createJobRunner({
+      config,
+      provider,
+      github: fakeGitHub(job.issueNumber, job.branchName),
+      createWorktree: async (input) => input.worktreePath,
+    });
+
+    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(stored.status).toBe("COMPLETED");
+    expect(provider.calls.map((call) => call.role)).toEqual(["issue-worker", "issue-worker", "reviewer"]);
+    expect(provider.calls[1]?.context).toContain("without writing the response");
   });
 
   test("retries the role when the first response file lacks a recognized outcome marker", async () => {
@@ -411,6 +441,25 @@ class FakeProvider implements AgentProvider {
 
 function success(finalOutput: string, sessionId: string): AgentResult {
   return { provider: "codex", sessionId, exitCode: 0, finalOutput, stderr: "" };
+}
+
+class MissingThenSuccessProvider implements AgentProvider {
+  readonly name = "codex" as const;
+  readonly calls: AgentRequest[] = [];
+
+  constructor(private readonly results: AgentResult[]) {}
+
+  async execute(request: AgentRequest): Promise<AgentResult> {
+    this.calls.push(request);
+    if (this.calls.length === 1) {
+      return { provider: "codex", sessionId: "missing-first", exitCode: 0, finalOutput: "", stderr: "" };
+    }
+    const result = this.results.shift();
+    if (!result) throw new Error("Missing fake provider result");
+    if (request.responseFilePath) await Bun.write(request.responseFilePath, result.finalOutput);
+    await request.onEvent?.({ type: "SESSION_STARTED", timestamp: new Date().toISOString() });
+    return result;
+  }
 }
 
 function pullRequestShape(number: number, head: string, issueNumber: number) {

@@ -82,8 +82,8 @@ integration("PostgreSQL job lifecycle", () => {
   test("stale recovery blocks the issue instead of leaving it untagged", async () => {
     const { recoverStaleJobs } = await import("../src/worker/recovery.ts");
     const { createEventService } = await import("../src/events/service.ts");
-    const stale = await jobs.tryCreateQueued(queuedJob(issuePrefix + 3));
-    await jobs.claim(stale!.id, environment, "dead-worker");
+    const stale = await jobs.tryCreateQueued(queuedJob(issuePrefix + 3, config.APP_ENV));
+    await jobs.claim(stale!.id, config.APP_ENV, "dead-worker");
     await prisma.job.update({
       where: { id: stale!.id },
       data: { heartbeatAt: new Date(Date.now() - 120_000) },
@@ -104,10 +104,10 @@ integration("PostgreSQL job lifecycle", () => {
     expect(labelCalls[0]).toEqual(["bug", config.ISSUE_BLOCKED_LABEL]);
   });
 
-  function queuedJob(issueNumber: number) {
+  function queuedJob(issueNumber: number, jobEnvironment = environment) {
     return {
       repositoryId,
-      environment,
+      environment: jobEnvironment,
       issueNumber,
       issueTitle: `Issue ${issueNumber}`,
       issueUrl: `https://github.com/test/lifecycle/issues/${issueNumber}`,
