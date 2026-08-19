@@ -87,6 +87,7 @@ export default function OverviewPage() {
           </dd></div>
           <div className="health-fact"><dt>Provider</dt><dd>{statusLabel(status.data.provider)} · {status.data.model}</dd></div>
           <div className="health-fact"><dt>Runtime</dt><dd>{providerVersion}</dd></div>
+          <div className="health-fact"><dt>Version</dt><dd className="mono">{status.data.version}</dd></div>
           <div className="health-fact"><dt>Schedule</dt><dd><span className="mono">{status.data.schedule.cron}</span> · {status.data.schedule.timezone}</dd></div>
           <div className="health-fact"><dt>Workload</dt><dd>{jobCount} total · {queued} queued · {running} running</dd></div>
         </dl>

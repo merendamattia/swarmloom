@@ -10,6 +10,7 @@ import { parseRuntimeSettingsPatch, runtimeSettingsView } from "../core/runtime-
 import { prisma } from "../core/db.ts";
 import { buildHealthServices } from "./health.ts";
 import { logger } from "../core/logger.ts";
+import { readApplicationVersion } from "../core/version.ts";
 import { redactSecrets } from "../core/secrets.ts";
 import { checkProviderAuthentication } from "../core/startup.ts";
 import type { EventService } from "../events/service.ts";
@@ -63,6 +64,8 @@ export function createApp({ config, scanner, github, events, startup, queue, set
   });
   app.notFound((context) => context.json({ error: "Not found" }, 404));
 
+  const version = readApplicationVersion();
+
   return app
     .get("/health", async (context) => {
       const [databaseOk, queueOk, worker, api] = await Promise.all([
@@ -101,6 +104,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       ]);
       return context.json({
         ...startup,
+        version,
         providerAuth,
         schedule: { cron: config.SCHEDULE_CRON, timezone: config.SCHEDULE_TIMEZONE },
         provider: config.AGENT_PROVIDER,

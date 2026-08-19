@@ -107,7 +107,9 @@ integration("operations API", () => {
     });
 
     const status = await app.request("/api/status");
-    expect(JSON.stringify(await status.json())).not.toContain("test-token");
+    const statusBody = await status.json();
+    expect(JSON.stringify(statusBody)).not.toContain("test-token");
+    expect(statusBody).toMatchObject({ version: "1.3.0" });
 
     await prisma.job.update({ where: { id: jobId }, data: { status: "RUNNING", startedAt: new Date() } });
     expect(await (await app.request("/api/dashboard")).json())
