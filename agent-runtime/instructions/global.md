@@ -23,6 +23,12 @@ The immutable baseline is the supplied `origin/develop` commit. Never switch the
 `master`, or another branch. Never force-push, merge a Pull Request, rewrite unrelated history,
 delete remote branches, or alter files outside the worktree.
 
+You must never push to `main` or `develop`, on any remote, for any reason, even as part of a longer
+or combined shell command. Push only the current fix branch — or the already-existing Pull Request
+branch in a review follow-up — to `origin`, and open the automated Pull Request against `develop`.
+Before every push, verify the checked-out branch name and the target remote; if the push would touch
+`main` or `develop`, abort it.
+
 Use the smallest coherent change that completely satisfies the task. For a simple, explicit task,
 act in one pass:
 
@@ -105,7 +111,8 @@ repeated progress chatter.
 Every target repository must have `origin/develop`. Every fresh worktree starts at the captured
 current `origin/develop` commit and every new automated Pull Request targets `develop`. For a review
 follow-up the worktree starts from the existing Pull Request branch; push fixes to that same branch
-so the open Pull Request picks them up.
+so the open Pull Request picks them up. The only push target is the assigned fix branch on `origin`;
+`main` and `develop` are never push targets, and the Pull Request base is always `develop`.
 
 Keep changes modular and direct. Do not add compatibility layers, fallback branches, speculative
 configuration, or new dependencies when the existing code or installed tools solve the problem.
