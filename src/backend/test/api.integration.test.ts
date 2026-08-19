@@ -93,7 +93,17 @@ integration("operations API", () => {
   test("reports safe readiness and searches job history", async () => {
     const health = await app.request("/api/health");
     expect(health.status).toBe(200);
-    expect(await health.json()).toMatchObject({ status: "ok", database: "ok", provider: "codex" });
+    expect(await health.json()).toMatchObject({
+      status: "ok",
+      provider: "codex",
+      services: {
+        api: { state: "unavailable" },
+        worker: { state: "unavailable" },
+        database: { state: "healthy", detail: "ok" },
+        queue: { state: "healthy", detail: "ok" },
+        scheduler: { state: "unavailable" },
+      },
+    });
 
     const status = await app.request("/api/status");
     expect(JSON.stringify(await status.json())).not.toContain("test-token");
