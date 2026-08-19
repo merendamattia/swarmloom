@@ -64,8 +64,12 @@ export function parseRuntimeSettingsPatch(input: unknown) {
   return runtimeSettingSchema.parse(input);
 }
 
-export function applyRuntimeSettings(config: Config, overrides: Record<string, string | undefined>) {
-  const environment: Record<string, string | undefined> = configEnvironment(config);
+export function applyRuntimeSettings(
+  config: Config,
+  overrides: Record<string, string | undefined>,
+  base: Record<string, string | undefined> = configEnvironment(config),
+) {
+  const environment: Record<string, string | undefined> = { ...base };
   for (const definition of runtimeSettingDefinitions) {
     const value = overrides[definition.key];
     if (value !== undefined) environment[definition.key] = value;
