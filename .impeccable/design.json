@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "generatedAt": "2026-08-17T00:00:00.000Z",
-  "title": "Design System: GitHub Agent Worker",
+  "title": "Design System: Swarmloom",
   "extensions": {
     "colorMeta": {
       "canvas": { "role": "neutral", "displayName": "Morning Paper", "canonical": "oklch(97.8% 0.006 78)", "tonalRamp": ["oklch(18% 0.012 78)", "oklch(30% 0.012 78)", "oklch(42% 0.011 78)", "oklch(54% 0.01 78)", "oklch(66% 0.009 78)", "oklch(78% 0.008 78)", "oklch(88% 0.007 78)", "oklch(97.8% 0.006 78)"] },
@@ -70,7 +70,7 @@
   ],
   "narrative": {
     "northStar": "The Morning Ledger",
-    "overview": "GitHub Agent Worker should feel like opening a clean operational ledger at the start of the day: quiet, current, and immediately decisive. The overview leads with a single health judgment and the few exceptions that require action. History and evidence become denser only after the operator drills in. The direction combines familiar operational patterns with a warm paper-like canvas, restrained ink-indigo accent, compact rules, and plain factual language.",
+    "overview": "Swarmloom should feel like opening a clean operational ledger at the start of the day: quiet, current, and immediately decisive. The overview leads with a single health judgment and the few exceptions that require action. History and evidence become denser only after the operator drills in. The direction combines familiar operational patterns with a warm paper-like canvas, restrained ink-indigo accent, compact rules, and plain factual language.",
     "keyCharacteristics": ["Warm, daylight-friendly surfaces with crisp rules instead of floating card walls.", "Exception-first hierarchy: health, affected object, evidence, then recovery action.", "Compact data density with generous page-level breathing room.", "Text, icon, and shape always accompany status color.", "Familiar controls, durable confirmation, and no decorative operational theater."],
     "rules": [
       { "name": "The Rare Accent Rule", "body": "Keep accent color below roughly ten percent of the visual weight so it continues to identify the next action.", "section": "colors" },

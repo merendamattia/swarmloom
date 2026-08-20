@@ -156,6 +156,12 @@ h3 { font-size: 1rem; line-height: 1.35; font-weight: 650; }
 .status-pill[data-tone="danger"] { border-color: color-mix(in oklch, var(--danger), var(--border) 60%); background: var(--danger-soft); color: var(--danger); }
 .status-pill[data-tone="active"] svg { animation: spin 1.2s linear infinite; }
 
+.kind-pill { display: inline-flex; width: max-content; max-width: 100%; min-height: 22px; align-items: center; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-subtle); padding: 3px 7px; color: var(--ink); font-size: .65rem; font-weight: 750; letter-spacing: .06em; line-height: 1.2; text-transform: uppercase; }
+.kind-pill[data-kind="implementation"] { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in oklch, var(--accent), var(--border) 55%); }
+.kind-pill[data-kind="fix"] { background: var(--warning-soft); color: var(--warning); border-color: color-mix(in oklch, var(--warning), var(--border) 55%); }
+.kind-pill[data-kind="review"] { background: var(--success-soft); color: var(--success); border-color: color-mix(in oklch, var(--success), var(--border) 55%); }
+.kind-pill[data-kind="decomposition"] { background: var(--danger-soft); color: var(--danger); border-color: color-mix(in oklch, var(--danger), var(--border) 55%); }
+
 .table-wrap { width: 100%; min-width: 0; overflow-x: auto; }
 .data-table { width: 100%; border-collapse: collapse; color: var(--ink); font-size: .8125rem; font-variant-numeric: tabular-nums; }
 .data-table th { padding: 0 12px 10px; color: var(--ink-muted); font-size: .7rem; font-weight: 700; letter-spacing: .055em; text-align: left; text-transform: uppercase; }

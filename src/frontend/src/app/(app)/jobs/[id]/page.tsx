@@ -14,6 +14,7 @@ import { useParams } from "next/navigation";
 import {
   ActionMessage,
   EmptyState,
+  JobKindPill,
   PageError,
   PageSkeleton,
   SectionHeading,
@@ -28,6 +29,8 @@ import {
   inlineMarkdown,
   shortCommit,
   statusLabel,
+  subjectLabel,
+  triggerLabel,
 } from "@/lib/format";
 
 const cancellable = new Set(["QUEUED", "RUNNING"]);
@@ -45,15 +48,17 @@ export default function JobPage() {
   const events = agentOutputEvents(data.events);
   const result = typeof data.result === "string" && data.result.trim() ? data.result : null;
   const review = typeof data.review?.response === "string" && data.review.response.trim() ? data.review.response : null;
+  const trigger = triggerLabel(data.trigger);
+  const subject = subjectLabel(data.subjectType, data.issueNumber, data.pullRequestNumber);
 
   return (
     <>
-      <nav className="breadcrumbs" aria-label="Breadcrumb"><Link href="/jobs">Jobs</Link><ChevronRight size={14} aria-hidden="true" /><span aria-current="page">{data.repository.fullName} #{data.issueNumber}</span></nav>
+      <nav className="breadcrumbs" aria-label="Breadcrumb"><Link href="/jobs">Jobs</Link><ChevronRight size={14} aria-hidden="true" /><span aria-current="page">{data.repository.fullName} {subject}</span></nav>
       <header className="page-header">
         <div className="job-heading">
           <p className="eyebrow">Job evidence</p>
           <h1>{data.issueTitle}</h1>
-          <div className="job-context"><StatusPill status={data.status} /><a href={data.issueUrl} target="_blank" rel="noreferrer">{data.repository.fullName} #{data.issueNumber} <ExternalLink size={13} aria-hidden="true" /></a><span className="mono">{data.id}</span></div>
+          <div className="job-context"><StatusPill status={data.status} /><JobKindPill jobType={data.jobType} /><a href={data.issueUrl} target="_blank" rel="noreferrer">{subject} · issue #{data.issueNumber} <ExternalLink size={13} aria-hidden="true" /></a><span className="mono">{data.id}</span></div>
         </div>
         <div className="page-actions">
           {cancellable.has(data.status) ? <button className="button danger" type="button" onClick={() => cancel.mutate()} disabled={cancel.isPending}><Ban size={16} aria-hidden="true" />{cancel.isPending ? "Cancelling…" : "Cancel job"}</button> : null}
@@ -61,7 +66,7 @@ export default function JobPage() {
           {data.pullRequestUrl ? <a className="button secondary" href={data.pullRequestUrl} target="_blank" rel="noreferrer"><GitPullRequest size={16} aria-hidden="true" />Open PR</a> : null}
         </div>
       </header>
-      <ActionMessage pending={cancel.isPending || retry.isPending} error={cancel.error || retry.error} success={cancel.isSuccess || retry.isSuccess} pendingText={cancel.isPending ? "Cancelling the job…" : "Restoring the ready label and starting a scan…"} />
+      <ActionMessage pending={cancel.isPending || retry.isPending} error={cancel.error || retry.error} success={cancel.isSuccess || retry.isSuccess} pendingText={cancel.isPending ? "Cancelling the job…" : data.subjectType === "PULL_REQUEST" ? "Restoring the pull request label and starting a scan…" : "Restoring the ready label and starting a scan…"} />
 
       {data.errorMessage ? <div className="notice" role="alert"><CircleAlert size={20} aria-hidden="true" /><div><strong>The job requires attention</strong><p>{data.errorMessage}</p></div></div> : null}
 
@@ -78,8 +83,8 @@ export default function JobPage() {
           </section>
 
           <section className="panel">
-            <SectionHeading title="Independent review" description="A fresh provider session evaluates the pull request against the issue and develop diff." />
-            {data.review ? <ReviewEvidence review={data.review} response={review} /> : <EmptyState title="No review yet" description={data.pullRequestUrl ? "The independent review has not completed." : "A review starts only after the job opens a verified pull request."} />}
+            <SectionHeading title="Automated review" description="Review sessions are independent durable jobs; this evidence belongs to the review job that owns it." />
+            {data.review ? <ReviewEvidence review={data.review} response={review} /> : <EmptyState title="No review recorded" description={data.jobType === "REVIEW" ? "This review job did not persist a review result." : "Reviews run as separate jobs with their own history."} />}
           </section>
         </div>
 
@@ -87,6 +92,9 @@ export default function JobPage() {
           <section className="panel">
             <SectionHeading title="Execution" />
             <dl className="facts">
+              <div className="fact"><dt>Job kind</dt><dd>{statusLabel(data.jobType)}</dd></div>
+              <div className="fact"><dt>Subject</dt><dd>{subject}</dd></div>
+              {trigger ? <div className="fact"><dt>Trigger</dt><dd>{trigger}</dd></div> : null}
               <div className="fact"><dt>Provider</dt><dd>{statusLabel(data.provider)}</dd></div>
               <div className="fact"><dt>Model</dt><dd>{data.model}</dd></div>
               <div className="fact"><dt>Reasoning</dt><dd>{data.reasoningEffort ?? "Provider default"}</dd></div>
@@ -104,6 +112,7 @@ export default function JobPage() {
               <div className="fact"><dt>Baseline</dt><dd className="mono" title={data.baselineCommit}>{shortCommit(data.baselineCommit)}</dd></div>
               <div className="fact"><dt>Branch</dt><dd className="mono">{data.branchName}</dd></div>
               <div className="fact"><dt>Pull request</dt><dd>{data.pullRequestNumber ? `#${data.pullRequestNumber}` : "Not opened"}</dd></div>
+              <div className="fact"><dt>Head SHA</dt><dd className="mono" title={data.headSha ?? undefined}>{shortCommit(data.headSha)}</dd></div>
             </dl>
           </section>
           <section className="panel">

@@ -20,12 +20,17 @@ import {
 type SettingsForm = SettingsPatch & {
   githubRepositories: string;
   issueReadyLabel: string;
-  issueReviewRequestedLabel: string;
   issueWorkingLabel: string;
   issueBlockedLabel: string;
   issueCompletedLabel: string;
   issueDecomposedLabel: string;
+  issueReadyToMergeLabel: string;
   issueHumanReviewLabel: string;
+  prReviewRequestedLabel: string;
+  prFixRequestedLabel: string;
+  prReviewPassedLabel: string;
+  maxAutomaticFixCycles: number;
+  createDiagnosticIssues: boolean;
   scheduleCron: string;
   scheduleTimezone: string;
   maxParallelJobs: number;
@@ -45,12 +50,17 @@ function formFromSettings(settings: Settings): SettingsForm {
   return {
     githubRepositories: settings.githubRepositories,
     issueReadyLabel: settings.issueReadyLabel,
-    issueReviewRequestedLabel: settings.issueReviewRequestedLabel,
     issueWorkingLabel: settings.issueWorkingLabel,
     issueBlockedLabel: settings.issueBlockedLabel,
     issueCompletedLabel: settings.issueCompletedLabel,
     issueDecomposedLabel: settings.issueDecomposedLabel,
+    issueReadyToMergeLabel: settings.issueReadyToMergeLabel,
     issueHumanReviewLabel: settings.issueHumanReviewLabel,
+    prReviewRequestedLabel: settings.prReviewRequestedLabel,
+    prFixRequestedLabel: settings.prFixRequestedLabel,
+    prReviewPassedLabel: settings.prReviewPassedLabel,
+    maxAutomaticFixCycles: settings.maxAutomaticFixCycles,
+    createDiagnosticIssues: settings.createDiagnosticIssues,
     scheduleCron: settings.scheduleCron,
     scheduleTimezone: settings.scheduleTimezone,
     maxParallelJobs: settings.maxParallelJobs,
@@ -121,9 +131,19 @@ export default function SettingsPage() {
           <SectionHeading title="Issue labels" description="These labels are synchronized on the configured repositories during startup and scans." />
           <div className="settings-grid">
             {([
-              ["issueReadyLabel", "Ready label"], ["issueReviewRequestedLabel", "Review requested label"], ["issueWorkingLabel", "Working label"], ["issueBlockedLabel", "Blocked label"],
-              ["issueCompletedLabel", "Completed label"], ["issueDecomposedLabel", "Decomposed label"], ["issueHumanReviewLabel", "Human review label"],
+              ["issueReadyLabel", "Ready label"], ["issueWorkingLabel", "Working label"], ["issueBlockedLabel", "Blocked label"],
+              ["issueCompletedLabel", "Done label"], ["issueDecomposedLabel", "Decomposed label"], ["issueReadyToMergeLabel", "Ready to merge label"], ["issueHumanReviewLabel", "Human review label"],
             ] as const).map(([key, label]) => <div className="field" key={key}><label htmlFor={key}>{label}</label><input className="input" id={key} value={form[key]} onChange={(event) => set(key, event.target.value)} /></div>)}
+          </div>
+        </section>
+
+        <section className="panel settings-card">
+          <SectionHeading title="Pull request labels" description="Pull request state stays separate from issue state; these labels drive the fix/review reconciliation." />
+          <div className="settings-grid">
+            {([
+              ["prReviewRequestedLabel", "Review requested"], ["prFixRequestedLabel", "Fix requested"], ["prReviewPassedLabel", "Review passed"],
+            ] as const).map(([key, label]) => <div className="field" key={key}><label htmlFor={key}>{label}</label><input className="input" id={key} value={form[key]} onChange={(event) => set(key, event.target.value)} /></div>)}
+            <div className="field"><label htmlFor="fix-cycles">Automatic fix cycle limit</label><input className="input" id="fix-cycles" type="number" min={1} max={50} value={form.maxAutomaticFixCycles} onChange={(event) => set("maxAutomaticFixCycles", Number(event.target.value))} /><p className="field-help">Consecutive automatic fixes per pull request before the workflow is blocked for human review.</p></div>
           </div>
         </section>
 
@@ -140,6 +160,7 @@ export default function SettingsPage() {
         <section className="panel settings-card">
           <SectionHeading title="Worker timings" description="Tune operational limits without changing database, queue, or process connection settings." />
           <div className="settings-grid">
+            <label className="toggle-field"><input type="checkbox" checked={form.createDiagnosticIssues} onChange={(event) => set("createDiagnosticIssues", event.target.checked)} /><span>Open a diagnostic issue when a job fails</span></label>
             <div className="field"><label htmlFor="heartbeat">Heartbeat interval (ms)</label><input className="input" id="heartbeat" type="number" min={1000} value={form.heartbeatIntervalMs} onChange={(event) => set("heartbeatIntervalMs", Number(event.target.value))} /></div>
             <div className="field"><label htmlFor="stale">Stale threshold (ms)</label><input className="input" id="stale" type="number" min={5000} value={form.staleJobThresholdMs} onChange={(event) => set("staleJobThresholdMs", Number(event.target.value))} /></div>
             <div className="field"><label htmlFor="timeout">Agent timeout (ms)</label><input className="input" id="timeout" type="number" min={60000} value={form.agentTimeoutMs} onChange={(event) => set("agentTimeoutMs", Number(event.target.value))} /></div>

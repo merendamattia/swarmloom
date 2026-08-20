@@ -33,6 +33,18 @@ export function statusLabel(value: string) {
   return value.toLowerCase().replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
 }
 
+export function triggerLabel(value: string | null | undefined) {
+  if (!value) return null;
+  if (value === "REVIEW_CHANGES_REQUESTED") return "reviewer feedback";
+  if (value === "PR_FIX_REQUESTED") return "fix requested";
+  if (value === "ISSUE_READY") return "issue ready";
+  return statusLabel(value);
+}
+
+export function subjectLabel(subjectType: string, issueNumber: number, pullRequestNumber: number | null) {
+  return subjectType === "PULL_REQUEST" ? `PR #${pullRequestNumber ?? "?"}` : `Issue #${issueNumber}`;
+}
+
 export function shortCommit(value: string | null | undefined) {
   return value ? value.slice(0, 8) : "Not recorded";
 }
