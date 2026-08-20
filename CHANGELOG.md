@@ -1,3 +1,18 @@
+# [1.8.0](https://github.com/merendamattia/swarmloom/compare/v1.7.0...v1.8.0) (2026-08-20)
+
+
+### Bug Fixes
+
+* **agent-runtime:** preserve Markdown newlines in PR bodies ([5cdfd86](https://github.com/merendamattia/swarmloom/commit/5cdfd8671b26eb173e01d563292faa1d72cb619e))
+* **backend:** release scan lock after discovery ([0fb2314](https://github.com/merendamattia/swarmloom/commit/0fb2314fb76b7d5c5cf0785aeb58f80e21537a47))
+* **settings:** accept sub-second timing values ([18a2d55](https://github.com/merendamattia/swarmloom/commit/18a2d55a0c9bba3052da9ae13b39de204f78a9d0))
+* **settings:** keep repository editor non-empty ([5a9a083](https://github.com/merendamattia/swarmloom/commit/5a9a0832378622acd684af635f72468ee15511f9))
+
+
+### Features
+
+* **settings:** improve runtime settings readability\n\nWhat: Add repository tag editing, cron descriptions, protected Telegram credential editing, and seconds-based worker timing inputs with info tooltips.\nWhy: Make runtime settings understandable and reduce accidental edits to deployment-oriented values and configured secrets.\nFiles: Update the Settings page and styles; add pure settings presentation helpers and regression tests.\nValidation: bun install --frozen-lockfile; pre-commit run --all-files; bun run db:generate; bun run db:deploy; bun run typecheck; bun run lint; bun run test; bun run build; /usr/local/bin/verify-before-commit. ([37f73df](https://github.com/merendamattia/swarmloom/commit/37f73df41eea19f71c48f4adf9f254350d079b1b))
+
 # [1.7.0](https://github.com/merendamattia/swarmloom/compare/v1.6.1...v1.7.0) (2026-08-20)
 
 
