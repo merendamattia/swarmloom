@@ -232,13 +232,19 @@ free-form response:
 ```
 Outcome: implemented
 PR: https://github.com/<owner>/<repo>/pull/<number>
-# free-form response below; this full content is posted as the comment
+
+TL;DR: Implemented the requested change and opened the pull request.
+
+Detailed implementation, verification, and remaining content.
 ```
 
-Use `Outcome: implemented` (with the linked `PR:` line), `blocked`, or `requires_decomposition`. For
-a fix session on an existing Pull Request, write the free-form response describing the applied fix;
-it may start with `Outcome: implemented` or `Outcome: blocked` (when the fix cannot proceed without
-human input). For a decomposition session use `Outcome: decomposed` or `Outcome: blocked`. For a
-review session, begin with `Review: pass` or `Review: changes_requested` instead of `Outcome:`. If one
-coherent Pull Request cannot safely contain the work, write `requires_decomposition`; the coordinator
-handles any additional execution phase.
+Every response must keep its machine-readable result marker unchanged and include exactly one short
+`TL;DR: <brief summary>` line immediately after that result marker, or immediately after the
+mandatory `PR:` line when one is present. Put all detailed analysis, verification, findings, and
+remaining content after the TL;DR. For implementation, use `Outcome: implemented` with the linked
+`PR:` line. For fix sessions, use `Outcome: implemented` or `Outcome: blocked` as appropriate. For
+other job sessions, use `Outcome: blocked`, `Outcome: decomposed`, or
+`Outcome: requires_decomposition`. For reviews, begin with `Review: pass` or
+`Review: changes_requested` instead of `Outcome:`. If one coherent Pull Request cannot safely contain
+the work, write `Outcome: requires_decomposition`; the coordinator handles any additional execution
+phase.
