@@ -65,15 +65,30 @@ it was actually run.
 The repository's GitHub Actions CI workflow (`.github/workflows/ci.yaml` in the worktree) is the
 definition of "everything works". Before creating a commit, you must explicitly run every command the
 `quality` job of `ci.yaml` runs, in the order it runs them, directly in the worktree:
-`pre-commit run --all-files`, `bun run db:generate`, `bun run db:deploy`, `bun run typecheck`,
-`bun run lint`, `bun run test`, `bun run build`. Do not skip any of them, do not decide on your own
-that a step is unnecessary, and do not claim a step passed without running it and seeing it exit
-zero. Replicate the CI environment the job configures. The container provides ephemeral local
-Postgres and Redis servers for exactly this purpose (no Docker inside the worker); start them with:
+`bun install --frozen-lockfile`, `pip install -r requirements.txt` when that file contains Python
+dependencies beyond the preinstalled `pre-commit`, then `pre-commit run --all-files`,
+`bun run db:generate`, `bun run db:deploy`, `bun run typecheck`, `bun run lint`, `bun run test`,
+`bun run build`. Do not skip any of them, do not decide on your own that a step is unnecessary, and
+do not claim a step passed without running it and seeing it exit zero. Replicate the CI environment
+the job configures. The container provides ephemeral local
+Postgres and Redis servers for exactly this purpose (no Docker inside the worker). It also provides
+the complete CI toolchain: `bun`, `python3`, `pip`, `pre-commit`, `gcc`, `g++`, `make`, `pkg-config`,
+`git`, `gh`, `psql`, and `redis-cli`. Do not spend time installing OS tools inside the worktree;
+verify availability with `command -v` and report a real image defect if one is missing. Start the
+ephemeral services with:
 
 ```bash
 eval "$(swarm-test-services start <database-name>)"
 ```
+
+`BUN_INSTALL_CACHE_DIR`, `PIP_CACHE_DIR`, and `PRE_COMMIT_HOME` point to persistent `/data` caches;
+keep them in place so repeated reviews do not redownload dependencies or recreate hook environments.
+`BUN_INSTALL_IGNORE_SCRIPTS=1` is also set: it skips optional native install scripts that crash Bun
+on the worker's arm64 runtime (BullMQ/msgpackr uses its JavaScript fallback). Do not remove it or
+replace the mandatory `bun install --frozen-lockfile` command with a native rebuild.
+The image already includes this repository's pinned `pre-commit` dependency. If `requirements.txt`
+contains only `pre-commit` and `command -v pre-commit` succeeds, do not reinstall it; install the
+file only when it declares additional or different Python tooling.
 
 Use the database name from the repository's CI `DATABASE_URL` (default `swarmloom`). The command
 exports `DATABASE_URL` and `REDIS_URL` pointing at those local servers. Then export the same

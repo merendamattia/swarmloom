@@ -44,6 +44,8 @@ describe("canonical agent runtime", () => {
   test("requires running every ci.yaml command before committing", async () => {
     const instructions = await loadAgentInstructions(runtime);
     for (const cmd of [
+      "bun install --frozen-lockfile",
+      "pip install -r requirements.txt",
       "pre-commit run --all-files",
       "bun run db:generate",
       "bun run db:deploy",
@@ -58,6 +60,15 @@ describe("canonical agent runtime", () => {
     expect(instructions).toContain("swarm-test-services start");
     expect(instructions).toContain("swarm-test-services stop");
     expect(instructions).toContain("no Docker inside the worker");
+    for (const cache of ["BUN_INSTALL_CACHE_DIR", "PIP_CACHE_DIR", "PRE_COMMIT_HOME"]) {
+      expect(instructions).toContain(cache);
+    }
+    expect(instructions).toContain("BUN_INSTALL_IGNORE_SCRIPTS=1");
+    expect(instructions).toContain("msgpackr");
+    expect(instructions).toContain("do not reinstall it");
+    for (const tool of ["bun", "python3", "pip", "pre-commit", "gcc", "g++", "make", "pkg-config", "git", "gh", "psql", "redis-cli"]) {
+      expect(instructions).toContain(`\`${tool}\``);
+    }
   });
 
   test("tells agents to finish simple requests directly", async () => {

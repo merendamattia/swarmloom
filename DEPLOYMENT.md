@@ -86,7 +86,9 @@ against known credential values before persistence.
 
 The `worker_data` volume contains persistent clones under `/data/repositories` and worktrees under
 `/data/worktrees`. Worktrees are removed once their job reaches a terminal state; local clones are
-garbage-collected after each run and pruned when they are no longer needed.
+garbage-collected after each run and pruned when they are no longer needed. It also keeps Bun,
+pip, and pre-commit caches under `/data/{bun-cache,pip-cache,pre-commit-cache}` so repeated review
+jobs do not redownload dependencies or recreate hook environments.
 
 ## Repository requirements
 
