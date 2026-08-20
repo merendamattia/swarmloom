@@ -166,7 +166,9 @@ export function createJobRunner({
   }
 
   async function reportFailure(job: RunningJob, error: unknown, state: SessionState) {
-    const diagnosticResult = config.CREATE_DIAGNOSTIC_ISSUES ? await createSupportIssue({ config, github, jobId: job.id, environment: job.environment }) : undefined;
+    const diagnosticResult = config.CREATE_DIAGNOSTIC_ISSUES
+      ? await createSupportIssue({ config, github, jobId: job.id, environment: job.environment, origin: "automatic" })
+      : undefined;
     const diagnosticIssue = diagnosticResult?.kind === "created" || diagnosticResult?.kind === "existing" ? diagnosticResult.issue : undefined;
     const comment = [
       `Worker failed: ${safeError(error)}`,

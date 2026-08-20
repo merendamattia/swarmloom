@@ -238,10 +238,10 @@ export function createGitHubClient(options: GitHubClientOptions) {
     };
   }
 
-  async function findIssueByMarker(fullName: string, marker: string) {
+  async function findIssueByMarker(fullName: string, marker: string, signal?: AbortSignal) {
     for (let page = 1; ; page += 1) {
       const query = new URLSearchParams({ state: "all", per_page: "100", page: String(page) });
-      const batch = z.array(issueSchema).parse(await request(`/repos/${fullName}/issues?${query}`));
+      const batch = z.array(issueSchema).parse(await request(`/repos/${fullName}/issues?${query}`, { signal }));
       const issue = batch.find((candidate) => candidate.pull_request === undefined && candidate.body?.includes(marker));
       if (issue) return { number: issue.number, url: issue.html_url };
       if (batch.length < 100) return undefined;
@@ -363,10 +363,11 @@ export function createGitHubClient(options: GitHubClientOptions) {
     }
   }
 
-  async function createIssue(fullName: string, title: string, body: string, labels: string[]) {
+  async function createIssue(fullName: string, title: string, body: string, labels: string[], signal?: AbortSignal) {
     const issue = createdIssueSchema.parse(await request(`/repos/${fullName}/issues`, {
       method: "POST",
       body: JSON.stringify({ title, body, labels }),
+      signal,
     }));
     return { number: issue.number, url: issue.html_url };
   }

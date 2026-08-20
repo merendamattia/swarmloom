@@ -391,6 +391,49 @@ integration("operations API", () => {
     }
   });
 
+  test("renews a live support issue claim during a long GitHub request", async () => {
+    const { createSupportIssue } = await import("../src/support-issues/service.ts");
+    await prisma.job.update({
+      where: { id: jobId },
+      data: {
+        status: "FAILED",
+        supportIssueNumber: null,
+        supportIssueUrl: null,
+        supportIssueCreating: false,
+        errorMessage: "Long-running failure",
+      },
+    });
+    createdIssues.splice(0);
+    let started!: () => void;
+    const creationStarted = new Promise<void>((resolve) => { started = resolve; });
+    let finish!: () => void;
+    const creationFinished = new Promise<void>((resolve) => { finish = resolve; });
+    const github = {
+      createIssue: async () => {
+        started();
+        await creationFinished;
+        createdIssues.push({ title: "long request", body: "body", labels: [] });
+        return { number: 123, url: "https://github.com/acme/api-test/issues/123" };
+      },
+      findIssueByMarker: async () => undefined,
+    };
+
+    const creating = createSupportIssue({
+      config,
+      github,
+      jobId,
+      leaseMs: 100,
+      leaseRenewalIntervalMs: 10,
+    });
+    await creationStarted;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const concurrent = await createSupportIssue({ config, github, jobId, leaseMs: 100, leaseRenewalIntervalMs: 10 });
+    expect(concurrent).toMatchObject({ kind: "in_progress" });
+    finish();
+    expect(await creating).toMatchObject({ kind: "created" });
+    expect(createdIssues).toHaveLength(1);
+  });
+
   test("reconciles a created issue when persistence fails", async () => {
     await prisma.job.update({
       where: { id: jobId },

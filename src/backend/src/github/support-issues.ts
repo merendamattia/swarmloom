@@ -3,6 +3,8 @@ import { redactSecrets } from "../core/secrets.ts";
 
 type DiagnosticRecord = Record<string, unknown>;
 
+export type SupportIssueOrigin = "manual" | "automatic";
+
 type SupportIssueJob = {
   id: string;
   repository: { fullName: string };
@@ -67,7 +69,7 @@ export function supportIssueTitle(job: Pick<SupportIssueJob, "repository" | "iss
   return `[Swarmloom] ${title.slice(0, 120)} (${safe(job.repository.fullName, secrets)}#${job.issueNumber})`;
 }
 
-export function supportIssueBody(job: SupportIssueJob, config: Config) {
+export function supportIssueBody(job: SupportIssueJob, config: Config, origin: SupportIssueOrigin) {
   const secrets = environment(config);
   const diagnostics = record(job.diagnostics);
   const error = safe(job.errorMessage ?? diagnostics?.error ?? "No error summary recorded", secrets, 2_000);
@@ -116,7 +118,9 @@ ${safe(diagnostics.finalOutput, secrets)}` : undefined,
     ...metadata,
     ...(events.length ? ["", "### Agent/tool timeline", ...events.map((event) => `- ${event}`)] : []),
     "",
-    "This issue was created manually from the Swarmloom failed-job view.",
+    origin === "manual"
+      ? "This issue was created manually from the Swarmloom failed-job view."
+      : "This issue was created automatically from a Swarmloom failed job.",
   ].filter((line): line is string => line !== undefined).join("\n");
 }
 
