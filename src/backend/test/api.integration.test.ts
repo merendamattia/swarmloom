@@ -170,6 +170,18 @@ integration("operations API", () => {
     expect((await app.request("/api/notifications/test", { method: "POST" })).status).toBe(409);
   });
 
+  test("retry after a terminal failure restores the ready label", async () => {
+    await prisma.job.update({
+      where: { id: jobId },
+      data: { status: "FAILED", activeIssueKey: null },
+    });
+    labels.splice(0, labels.length, "bug", config.ISSUE_BLOCKED_LABEL);
+    const retry = await app.request(`/api/jobs/${jobId}/retry`, { method: "POST" });
+    expect(retry.status).toBe(202);
+    expect(await retry.json()).toEqual({ scanId: "scan-3", scanStatus: "COMPLETED" });
+    expect(labels).toEqual(["bug", config.ISSUE_READY_LABEL]);
+  });
+
   test("removes an obsolete repository together with its events and job history", async () => {
     const obsolete = await prisma.repository.create({
       data: { fullName: `acme/obsolete-${unique}`, cloneUrl: `https://github.com/acme/obsolete-${unique}.git` },

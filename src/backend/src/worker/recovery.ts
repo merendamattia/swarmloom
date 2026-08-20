@@ -34,7 +34,7 @@ export async function recoverStaleJobs(config: Config, github: GitHubClient, eve
       await github.setIssueLabels(
         job.repository.fullName,
         job.issueNumber,
-        replaceWorkerLabels(issue.labels, config, []),
+        replaceWorkerLabels(issue.labels, config, [config.ISSUE_BLOCKED_LABEL]),
       );
       await github.addIssueComment(
         job.repository.fullName,

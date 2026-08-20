@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { parseConfig } from "../src/core/config-schema.ts";
+import type { GitHubClient } from "../src/github/client.ts";
 
 const integration = process.env.RUN_INTEGRATION === "1" ? describe : describe.skip;
 
@@ -8,6 +10,16 @@ integration("PostgreSQL job lifecycle", () => {
   let repositoryId = "";
   const environment = `test-${crypto.randomUUID()}`;
   const issuePrefix = Math.floor(Math.random() * 100_000) + 100_000;
+  const config = parseConfig({
+    APP_ENV: "test",
+    NODE_ENV: "test",
+    DATABASE_URL: process.env.DATABASE_URL ?? "postgresql://unused:unused@localhost:5432/unused",
+    REDIS_URL: process.env.REDIS_URL ?? "redis://localhost:18422",
+    SETTINGS_ENCRYPTION_KEY: process.env.SETTINGS_ENCRYPTION_KEY ?? "test-settings-encryption-key-0123456789",
+    GITHUB_TOKEN: "test-token",
+    GITHUB_REPOSITORIES: "test/lifecycle",
+    AGENT_PROVIDER: "codex",
+  });
 
   beforeAll(async () => {
     ({ prisma } = await import("../src/core/db.ts"));
@@ -67,10 +79,35 @@ integration("PostgreSQL job lifecycle", () => {
     expect(await jobs.complete(cancelled!.id, { outcome: "wrong" }, 0)).toBe(false);
   });
 
-  function queuedJob(issueNumber: number) {
+  test("stale recovery blocks the issue instead of leaving it untagged", async () => {
+    const { recoverStaleJobs } = await import("../src/worker/recovery.ts");
+    const { createEventService } = await import("../src/events/service.ts");
+    const stale = await jobs.tryCreateQueued(queuedJob(issuePrefix + 3, config.APP_ENV));
+    await jobs.claim(stale!.id, config.APP_ENV, "dead-worker");
+    await prisma.job.update({
+      where: { id: stale!.id },
+      data: { heartbeatAt: new Date(Date.now() - 120_000) },
+    });
+    const labelCalls: string[][] = [];
+    const github = {
+      getIssue: async () => ({
+        number: stale!.issueNumber,
+        labels: ["bug", config.ISSUE_WORKING_LABEL],
+      }),
+      setIssueLabels: async (_repository: string, _issue: number, labels: string[]) => {
+        labelCalls.push(labels);
+      },
+      addIssueComment: async () => {},
+    };
+
+    expect(await recoverStaleJobs(config, github as unknown as GitHubClient, createEventService())).toBe(1);
+    expect(labelCalls[0]).toEqual(["bug", config.ISSUE_BLOCKED_LABEL]);
+  });
+
+  function queuedJob(issueNumber: number, jobEnvironment = environment) {
     return {
       repositoryId,
-      environment,
+      environment: jobEnvironment,
       issueNumber,
       issueTitle: `Issue ${issueNumber}`,
       issueUrl: `https://github.com/test/lifecycle/issues/${issueNumber}`,
