@@ -231,6 +231,7 @@ validation.
 | `TELEGRAM_BOT_TOKEN` | optional bootstrap value | Bot token; Settings encrypts and stores it in PostgreSQL |
 | `TELEGRAM_CHAT_ID` | optional bootstrap value | Private/group/channel destination ID; Settings stores it encrypted |
 | `FRONTEND_URL` | required in production | Exact browser origin allowed by API CORS |
+| `ARTIFACT_BASE_URL` | required in production | Public HTTPS API origin serving signed visual artifacts |
 | `PUBLIC_API_URL` | required at image build | API origin embedded into the browser bundle |
 | `FRONTEND_PORT` | `18420` | Loopback dashboard host port |
 | `BACKEND_PORT` | `18421` | Loopback API host port |

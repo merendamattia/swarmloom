@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { verifyArtifactToken, visualArtifactPath } from "../artifacts.ts";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { requestId } from "hono/request-id";
@@ -207,6 +208,22 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         recentJobs,
         scans,
         heartbeats,
+      });
+    })
+    .get("/artifacts/:jobId", async (context) => {
+      const jobId = context.req.param("jobId");
+      const token = context.req.query("token");
+      if (!token || !verifyArtifactToken(config.SETTINGS_ENCRYPTION_KEY, jobId, token)) {
+        return context.json({ error: "Not found" }, 404);
+      }
+      const job = await jobRepository.hasArtifact(jobId, config.APP_ENV);
+      const artifact = Bun.file(visualArtifactPath(config.DATA_DIR, jobId));
+      if (!job || !await artifact.exists()) return context.json({ error: "Not found" }, 404);
+      return new Response(artifact, {
+        headers: {
+          "Cache-Control": "private, max-age=300",
+          "Content-Type": "image/png",
+        },
       });
     })
     .get("/jobs", async (context) => {

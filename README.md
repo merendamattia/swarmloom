@@ -193,6 +193,7 @@ Edit `.env.production` and replace every placeholder. At minimum configure the e
 ```dotenv
 FRONTEND_URL=http://localhost:18420
 PUBLIC_API_URL=http://localhost:18421
+ARTIFACT_BASE_URL=http://localhost:18421
 ```
 
 Validate and build the deployment:

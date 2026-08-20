@@ -66,6 +66,7 @@ const environmentSchema = z.object({
   TELEGRAM_BOT_TOKEN: optionalNonEmptyString,
   TELEGRAM_CHAT_ID: optionalNonEmptyString,
   FRONTEND_URL: z.url().default("http://localhost:18420"),
+  ARTIFACT_BASE_URL: z.url().default("http://localhost:18421"),
   PORT: z.coerce.number().int().positive().default(18_421),
   WORKER_ID: z.string().min(1).default("local-worker-1"),
   HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1_000).default(10_000),
@@ -85,6 +86,13 @@ const environmentSchema = z.object({
       code: "custom",
       path: ["HEARTBEAT_INTERVAL_MS"],
       message: "Heartbeat interval must be shorter than the stale threshold",
+    });
+  }
+  if (value.APP_ENV === "production" && new URL(value.ARTIFACT_BASE_URL).protocol !== "https:") {
+    context.addIssue({
+      code: "custom",
+      path: ["ARTIFACT_BASE_URL"],
+      message: "must use HTTPS in production",
     });
   }
   if (value.TELEGRAM_ENABLED && (!value.TELEGRAM_BOT_TOKEN || !value.TELEGRAM_CHAT_ID)) {

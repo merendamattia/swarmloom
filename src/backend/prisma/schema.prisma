@@ -138,6 +138,7 @@ model Job {
   result                   Json?         @db.JsonB
   errorMessage             String?       @db.Text
   diagnostics              Json?         @db.JsonB
+  visualVerification      Json?         @db.JsonB
   workerId                 String?
   attempts                 Int           @default(0)
   heartbeatAt              DateTime?

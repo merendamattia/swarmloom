@@ -10,6 +10,8 @@ import {
   parsePullRequestUrl,
   safeError,
 } from "./helpers.ts";
+import { parseFrontendVisualRequest } from "./response.ts";
+import { visualEvidenceComment } from "./visual-comment.ts";
 import type { JobFlow } from "./types.ts";
 
 export const runImplementation: JobFlow = async (context) => {
@@ -59,6 +61,7 @@ export const runImplementation: JobFlow = async (context) => {
   const outcome = parseJobOutcome(implementation.response);
 
   if (outcome === "implemented") {
+    const visualRequest = parseFrontendVisualRequest(implementation.response);
     const pullRequestUrl = parsePullRequestUrl(implementation.response);
     if (!pullRequestUrl) {
       throw new Error('Implemented agent response must include a "PR: <url>" line');
@@ -87,8 +90,10 @@ export const runImplementation: JobFlow = async (context) => {
     if (!managedPullRequestId) {
       throw new Error(`Could not persist managed pull request ${fullName}#${pullRequest.number}`);
     }
+    const visualVerification = await completeVisualVerification(context, visualRequest, job.id, worktreePath, pullRequest.number, signal);
     const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
       result: implementation.response,
+      visualVerification,
       exitCode: implementation.exitCode,
       pullRequestNumber: pullRequest.number,
       pullRequestUrl: pullRequest.url,
@@ -209,3 +214,93 @@ export const runImplementation: JobFlow = async (context) => {
     return;
   }
 };
+
+type VisualVerificationRecord =
+  | import("./visual-verification.ts").VisualVerificationResult
+  | { status: "NOT_REQUIRED"; reason: string; capturedAt: string };
+
+async function completeVisualVerification(
+  context: import("./types.ts").RunnerContext,
+  request: import("./response.ts").FrontendVisualRequest,
+  jobId: string,
+  worktreePath: string,
+  pullRequestNumber: number,
+  signal: AbortSignal,
+): Promise<VisualVerificationRecord> {
+  const capturedAt = new Date().toISOString();
+  if (!request.frontendChanged) {
+    return { status: "NOT_REQUIRED", reason: "Agent declared that the implementation does not change the frontend", capturedAt };
+  }
+  if (!request.route) {
+    const incomplete = {
+      status: "INCOMPLETE" as const,
+      route: null,
+      reason: "Frontend change was declared without a valid Visual route marker",
+      capturedAt,
+    };
+    await recordVisualIncomplete(context, jobId, incomplete);
+    return incomplete;
+  }
+
+  let result: import("./visual-verification.ts").VisualVerificationResult;
+  try {
+    result = await context.visualVerification.verify({
+      jobId,
+      worktreePath,
+      route: request.route,
+      setup: request.setup,
+      signal,
+    });
+  } catch (error) {
+    result = {
+      status: "INCOMPLETE",
+      route: request.route,
+      reason: safeError(error),
+      capturedAt,
+    };
+  }
+
+  if (result.status === "COMPLETED") {
+    const published = await context.commentOnPullRequest(
+      context.job,
+      pullRequestNumber,
+      visualEvidenceComment(result),
+    );
+    if (published) {
+      await context.events.record({
+        type: "VISUAL_VERIFICATION_COMPLETED",
+        message: "Captured visual evidence for " + result.route + " on PR #" + pullRequestNumber,
+        jobId,
+        repositoryId: context.job.repositoryId,
+        scanRunId: context.job.scanRunId ?? undefined,
+        metadata: { route: result.route, artifactUrl: result.artifactUrl, viewport: result.viewport },
+      });
+      return result;
+    }
+    result = {
+      status: "INCOMPLETE",
+      route: result.route,
+      reason: "Screenshot was captured but the visual-evidence pull request comment could not be published",
+      capturedAt: result.capturedAt,
+    };
+  }
+
+  await recordVisualIncomplete(context, jobId, result);
+  return result;
+}
+
+async function recordVisualIncomplete(
+  context: import("./types.ts").RunnerContext,
+  jobId: string,
+  result: Extract<VisualVerificationRecord, { status: "INCOMPLETE" }>,
+) {
+  await context.events.record({
+    type: "VISUAL_VERIFICATION_INCOMPLETE",
+    level: "WARNING",
+    message: "Visual verification incomplete: " + result.reason,
+    jobId,
+    repositoryId: context.job.repositoryId,
+    scanRunId: context.job.scanRunId ?? undefined,
+    metadata: { route: result.route, reason: result.reason },
+  });
+}

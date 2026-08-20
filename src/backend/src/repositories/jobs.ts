@@ -81,6 +81,7 @@ type FinishInput = {
   exitCode?: number;
   errorMessage?: string;
   diagnostics?: Prisma.InputJsonValue;
+  visualVerification?: Prisma.InputJsonValue;
   pullRequestNumber?: number;
   pullRequestUrl?: string;
   headSha?: string;
@@ -103,6 +104,7 @@ async function finishRunning(
       exitCode: input.exitCode,
       errorMessage: input.errorMessage,
       diagnostics: input.diagnostics,
+      visualVerification: input.visualVerification,
       pullRequestNumber: input.pullRequestNumber,
       pullRequestUrl: input.pullRequestUrl,
       headSha: input.headSha,
@@ -114,6 +116,11 @@ async function finishRunning(
     },
   });
   return updated.count === 1;
+}
+
+async function hasArtifact(id: string, environment: string) {
+  const job = await prisma.job.findFirst({ where: { id, environment }, select: { id: true } });
+  return Boolean(job);
 }
 
 async function findRunning(id: string, workerId: string) {
@@ -210,6 +217,7 @@ export const jobRepository = {
   heartbeat,
   failQueued,
   findRunning,
+  hasArtifact,
   setWorktree,
   setImplementationResult,
   finishRunning,

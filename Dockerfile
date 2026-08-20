@@ -35,6 +35,7 @@ RUN --mount=type=cache,target=/root/.npm \
   && node --version \
   && codex --version \
   && opencode --version
+RUN npx playwright install --with-deps chromium
 COPY requirements.txt /tmp/swarmloom-requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
   python3 -m venv /opt/pre-commit \

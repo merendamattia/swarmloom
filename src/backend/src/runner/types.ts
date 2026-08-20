@@ -6,6 +6,7 @@ import type { AgentProvider, AgentRole } from "../providers/index.ts";
 import type { JobQueue } from "../queue/service.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import type { RoleExecution } from "./diagnostics.ts";
+import type { VisualVerification } from "./visual-verification.ts";
 
 export type RunningJob = NonNullable<Awaited<ReturnType<typeof jobRepository.findRunning>>>;
 
@@ -51,7 +52,8 @@ export type RunnerContext = {
   state: SessionState;
   executeRoleWithRetry: ExecuteRoleWithRetry;
   finalizeIssue: (job: RunningJob, labels: string[], comment: string) => Promise<void>;
-  commentOnPullRequest: (job: RunningJob, pullRequestNumber: number, comment: string) => Promise<void>;
+  commentOnPullRequest: (job: RunningJob, pullRequestNumber: number, comment: string) => Promise<boolean>;
+  visualVerification: VisualVerification;
 };
 
 export type JobFlow = (context: RunnerContext) => Promise<void>;

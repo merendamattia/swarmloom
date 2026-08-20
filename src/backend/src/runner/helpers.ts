@@ -199,8 +199,10 @@ export function createCommentOnPullRequest(github: RunnerGitHub, events: RunnerC
   return async function commentOnPullRequest(job: RunningJob, pullRequestNumber: number, comment: string) {
     try {
       await github.addIssueComment(job.repository.fullName, pullRequestNumber, comment);
+      return true;
     } catch (error) {
       await recordGithubFailure(events, job, `comment on pull request #${pullRequestNumber}`, error);
+      return false;
     }
   };
 }

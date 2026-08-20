@@ -27,6 +27,7 @@ import {
 } from "./helpers.ts";
 import { runImplementation } from "./implementation.ts";
 import { runReview } from "./review.ts";
+import { createVisualVerification } from "./visual-verification.ts";
 import { AgentExecutionError, executionFailure, minimalDiagnostics, type JobDiagnostics, type RoleExecution } from "./diagnostics.ts";
 import type { RunnerContext, RunnerGitHub, RunningJob, SessionState } from "./types.ts";
 
@@ -42,6 +43,7 @@ type RunnerDependencies = {
   removeWorktree?: typeof removeTargetWorktree;
   gcRepository?: typeof gcRepository;
   heartbeatIntervalMs?: number;
+  visualVerification?: import("./visual-verification.ts").VisualVerification;
 };
 
 export function createJobRunner({
@@ -56,6 +58,7 @@ export function createJobRunner({
   removeWorktree = removeTargetWorktree,
   gcRepository: gc = gcRepository,
   heartbeatIntervalMs,
+  visualVerification: providedVisualVerification,
 }: RunnerDependencies) {
   async function run(jobId: string, workerId: string) {
     const job = await jobRepository.findRunning(jobId, workerId);
@@ -99,6 +102,7 @@ export function createJobRunner({
         }),
         finalizeIssue: createFinalizeIssue(github, config, events),
         commentOnPullRequest: createCommentOnPullRequest(github, events),
+        visualVerification: providedVisualVerification ?? createVisualVerification(config),
       };
       const flow = {
         IMPLEMENTATION: runImplementation,
