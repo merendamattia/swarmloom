@@ -5,6 +5,7 @@ import type { GitHubClient, GitHubIssueContext } from "../github/client.ts";
 import type { AgentProvider, AgentRole } from "../providers/index.ts";
 import type { JobQueue } from "../queue/service.ts";
 import { jobRepository } from "../repositories/jobs.ts";
+import type { RoleExecution } from "./diagnostics.ts";
 
 export type RunningJob = NonNullable<Awaited<ReturnType<typeof jobRepository.findRunning>>>;
 
@@ -24,6 +25,7 @@ export type SessionState = {
   repositoryPath?: string;
   activePullRequest?: { number: number; url: string };
   liveContext?: GitHubIssueContext;
+  lastExecution?: RoleExecution;
 };
 
 export type ExecuteRoleWithRetry = (
@@ -34,7 +36,7 @@ export type ExecuteRoleWithRetry = (
   workingDirectory: string,
   abortSignal: AbortSignal,
   job: RunningJob,
-) => Promise<{ exitCode: number; sessionId: string | null; stderr: string; response: string }>;
+) => Promise<RoleExecution>;
 
 export type RunnerContext = {
   config: Config;

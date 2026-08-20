@@ -137,6 +137,7 @@ model Job {
   exitCode                Int?
   result                   Json?         @db.JsonB
   errorMessage             String?       @db.Text
+  diagnostics              Json?         @db.JsonB
   workerId                 String?
   attempts                 Int           @default(0)
   heartbeatAt              DateTime?

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { parseConfig } from "../src/core/config-schema.ts";
 import type { AgentProvider, AgentRequest, AgentResult } from "../src/providers/index.ts";
+import { ProviderProcessError } from "../src/providers/process.ts";
 
 const integration = process.env.RUN_INTEGRATION === "1" ? describe : describe.skip;
 
@@ -156,7 +157,15 @@ integration("job runner", () => {
     expect(failedStored.status).toBe("FAILED");
     expect(failedStored.activeIssueKey).toBeNull();
     expect(failedStored.errorMessage).toContain("provider failed");
-    expect(failedGitHub.labels).toContain(config.ISSUE_BLOCKED_LABEL);
+    expect(failedStored.diagnostics).toMatchObject({
+      stage: "implementation",
+      role: "issue-worker",
+      provider: "codex",
+      model: "gpt-5.6-luna",
+      sessionId: "failed",
+      exitCode: 2,
+      stderr: "provider failed",
+    });
     expect(failedGitHub.labels).not.toContain(config.ISSUE_WORKING_LABEL);
     expect(failedGitHub.createdIssues).toEqual([]);
 
@@ -175,6 +184,8 @@ integration("job runner", () => {
 
   test("aborts an active provider when cancellation makes its heartbeat fail", async () => {
     const job = await claimed(issueBase + 5, "IMPLEMENTATION", "ISSUE");
+
+
     let started!: () => void;
     const didStart = new Promise<void>((resolve) => { started = resolve; });
     const provider: AgentProvider = {
@@ -199,7 +210,81 @@ integration("job runner", () => {
     expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("CANCELLED");
   });
 
+
+  test("persists parser diagnostics with final output and the event timeline", async () => {
+    const job = await claimed(issueBase + 11, "IMPLEMENTATION", "ISSUE");
+    const previousToken = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = "diagnostics-secret-token";
+    try {
+      const provider = new FakeProvider([
+        success("Implemented the change and ran the checks.", "parser-first"),
+        success("Still no outcome marker: diagnostics-secret-token present.", "parser-second"),
+      ]);
+      const runner = createJobRunner({
+        config,
+        provider,
+        github: fakeGitHub(job.issueNumber, job.branchName, "8".repeat(40)),
+        createWorktree: async (input) => input.worktreePath,
+      });
+
+      expect(await runner.run(job.id, "runner-worker")).toBe(true);
+      const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+      expect(stored.status).toBe("FAILED");
+      expect(stored.errorMessage).toContain("Agent response must start with");
+      expect(stored.diagnostics).toMatchObject({
+        stage: "parser",
+        role: "issue-worker",
+        provider: "codex",
+        model: "gpt-5.6-luna",
+        sessionId: "parser-second",
+        exitCode: 0,
+        finalOutput: "Still no outcome marker: [REDACTED] present.",
+        causeChain: [
+          expect.stringContaining("Agent response must start with"),
+          "Still no outcome marker: [REDACTED] present.",
+        ],
+        events: [{ type: "SESSION_STARTED" }],
+      });
+    } finally {
+      process.env.GITHUB_TOKEN = previousToken;
+    }
+  });
+
+  test("preserves the session ID when invalid JSONL follows SESSION_STARTED", async () => {
+    const job = await claimed(issueBase + 12, "IMPLEMENTATION", "ISSUE");
+    const provider: AgentProvider = {
+      name: "codex",
+      execute: async (request) => {
+        await request.onEvent?.({
+          type: "SESSION_STARTED",
+          timestamp: "2026-08-20T00:00:00.000Z",
+          metadata: { sessionId: "invalid-jsonl-session" },
+        });
+        throw new ProviderProcessError("Provider emitted invalid JSONL", 3, "stderr evidence");
+      },
+    };
+    const runner = createJobRunner({
+      config,
+      provider,
+      github: fakeGitHub(job.issueNumber, job.branchName, "7".repeat(40)),
+      createWorktree: async (input) => input.worktreePath,
+    });
+
+    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(stored.status).toBe("FAILED");
+    expect(stored.diagnostics).toMatchObject({
+      stage: "provider_process",
+      role: "issue-worker",
+      sessionId: "invalid-jsonl-session",
+      exitCode: 3,
+      stderr: "stderr evidence",
+      events: [{ type: "SESSION_STARTED", timestamp: "2026-08-20T00:00:00.000Z" }],
+    });
+  });
   test("retries the role when the agent finishes without writing the response, then fails clearly if it never writes it", async () => {
+
+
     const job = await claimed(issueBase + 6, "IMPLEMENTATION", "ISSUE");
     let calls = 0;
     const provider: AgentProvider = {

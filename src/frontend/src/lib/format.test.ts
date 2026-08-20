@@ -3,8 +3,10 @@ import {
   agentOutputEvents,
   agentOutputMessage,
   dateTime,
+  diagnosticsBundle,
   duration,
   inlineMarkdown,
+  normalizeDiagnostics,
   shortCommit,
   statusLabel,
 } from "./format.ts";
@@ -47,4 +49,60 @@ test("formats operational values", () => {
   expect(duration(125_000)).toBe("2m 5s");
   expect(statusLabel("CHANGES_REQUESTED")).toBe("Changes requested");
   expect(shortCommit("1234567890abcdef")).toBe("12345678");
+});
+
+test("normalizes persisted failure diagnostics", () => {
+  expect(normalizeDiagnostics({
+    stage: "parser",
+    role: "issue-worker",
+    provider: "codex",
+    model: "gpt-5",
+    sessionId: "session-1",
+    exitCode: 0,
+    error: "Agent response must start with Outcome:",
+    causeChain: ["Agent response must start with Outcome:", "trailing prose"],
+    stderr: "",
+    finalOutput: "trailing prose",
+    events: [{ type: "SESSION_STARTED", timestamp: "2026-01-01T00:00:00Z" }],
+  })).toEqual({
+    stage: "parser",
+    role: "issue-worker",
+    provider: "codex",
+    model: "gpt-5",
+    sessionId: "session-1",
+    exitCode: 0,
+    error: "Agent response must start with Outcome:",
+    causeChain: ["Agent response must start with Outcome:", "trailing prose"],
+    stderr: null,
+    finalOutput: "trailing prose",
+    events: [{ type: "SESSION_STARTED", timestamp: "2026-01-01T00:00:00Z", message: null, tool: null }],
+  });
+});
+
+test("rejects non-diagnostic payloads", () => {
+  expect(normalizeDiagnostics(null)).toBeNull();
+  expect(normalizeDiagnostics({ stage: "" })).toBeNull();
+  expect(normalizeDiagnostics("Agent response must start with Outcome:")).toBeNull();
+});
+
+test("builds a complete sanitized diagnostic bundle", () => {
+  const bundle = diagnosticsBundle({
+    stage: "parser",
+    role: "issue-worker",
+    provider: "codex",
+    model: "gpt-5",
+    sessionId: "session-1",
+    exitCode: 0,
+    error: "Agent response must start with Outcome:",
+    causeChain: ["Agent response must start with Outcome:"],
+    stderr: null,
+    finalOutput: "trailing prose",
+    events: [{ type: "SESSION_STARTED", timestamp: "2026-01-01T00:00:00Z", message: null, tool: null }],
+  });
+  expect(bundle).toContain("Stage: Parser");
+  expect(bundle).toContain("Session: session-1");
+  expect(bundle).toContain("Stderr: Not recorded");
+  expect(bundle).toContain("Final provider output: trailing prose");
+  expect(bundle).toContain("[2026-01-01T00:00:00Z] SESSION_STARTED");
+  expect(bundle).toContain("Cause chain:");
 });

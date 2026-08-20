@@ -48,6 +48,42 @@ const jobQuery = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
 });
 
+
+const jobSummaryFields = {
+  id: true,
+  jobType: true,
+  subjectType: true,
+  issueNumber: true,
+  issueTitle: true,
+  issueUrl: true,
+  status: true,
+  completedAt: true,
+  durationMs: true,
+  branchName: true,
+  baselineCommit: true,
+  pullRequestNumber: true,
+  pullRequestUrl: true,
+  headSha: true,
+  trigger: true,
+  provider: true,
+  model: true,
+  startedAt: true,
+  attempts: true,
+  errorMessage: true,
+  updatedAt: true,
+  createdAt: true,
+};
+
+const jobSummarySelect = {
+  ...jobSummaryFields,
+  repository: { select: { fullName: true } },
+  review: { select: { status: true } },
+} satisfies Prisma.JobSelect;
+
+const repositoryJobSummarySelect = {
+  ...jobSummaryFields,
+  review: { select: { status: true } },
+} satisfies Prisma.JobSelect;
 export function createApp({ config, scanner, github, events, startup, queue, settings, scheduler }: Dependencies) {
   const app = new Hono().basePath("/api");
   app.use("*", requestId(), secureHeaders(), cors({
@@ -143,13 +179,13 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         prisma.job.findMany({
           where: { environment: config.APP_ENV, status: "RUNNING" },
           orderBy: { startedAt: "asc" },
-          include: { repository: { select: { fullName: true } }, review: true },
+          select: jobSummarySelect,
         }),
         prisma.job.findMany({
           where: { environment: config.APP_ENV },
           orderBy: { createdAt: "desc" },
           take: 12,
-          include: { repository: { select: { fullName: true } }, review: true },
+          select: jobSummarySelect,
         }),
         prisma.scanRun.findMany({
           where: { environment: config.APP_ENV }, orderBy: { startedAt: "desc" }, take: 10,
@@ -193,7 +229,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
           orderBy: { createdAt: "desc" },
           skip: (page - 1) * pageSize,
           take: pageSize,
-          include: { repository: { select: { fullName: true } }, review: true },
+          select: jobSummarySelect,
         }),
         prisma.job.count({ where }),
       ]);
@@ -220,7 +256,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
           where: { environment: config.APP_ENV },
           orderBy: { createdAt: "desc" },
           take: 5,
-          include: { review: true },
+          select: repositoryJobSummarySelect,
         },
       },
     })))
