@@ -11,7 +11,7 @@ import { prisma } from "../core/db.ts";
 import { buildHealthServices } from "./health.ts";
 import { logger } from "../core/logger.ts";
 import { redactSecrets } from "../core/secrets.ts";
-import { checkProviderAuthentication } from "../core/startup.ts";
+import { checkProviderAuthentication, validateStartup } from "../core/startup.ts";
 import type { EventService } from "../events/service.ts";
 import type { GitHubClient } from "../github/client.ts";
 import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.ts";
@@ -24,13 +24,14 @@ type Scanner = { run(source: "SCHEDULED" | "MANUAL"): Promise<{ id: string; stat
 type ApiGitHub = Pick<GitHubClient,
   "getIssue" | "setIssueLabels" | "addIssueComment" | "getPullRequestLabels" | "setPullRequestLabels">;
 type Scheduler = { restart(): void };
+type Startup = Awaited<ReturnType<typeof validateStartup>>;
 
 type Dependencies = {
   config: Config;
   scanner: Scanner;
   github: ApiGitHub;
   events: EventService;
-  startup: Record<string, unknown>;
+  startup: Startup;
   queue: Pick<JobQueue, "health" | "remove">;
   settings: SettingsService;
   scheduler: Scheduler;
