@@ -16,7 +16,6 @@ import { runDecomposition } from "./decomposition.ts";
 import { runFix } from "./fix.ts";
 import {
   createCommentOnPullRequest,
-  createDiagnosticIssue,
   createFinalizeIssue,
   executeRole,
   readResponseFile,
@@ -26,6 +25,7 @@ import {
 } from "./helpers.ts";
 import { runImplementation } from "./implementation.ts";
 import { runReview } from "./review.ts";
+import { createSupportIssue } from "../support-issues/service.ts";
 import { AgentExecutionError, executionFailure, minimalDiagnostics, type JobDiagnostics, type RoleExecution } from "./diagnostics.ts";
 import type { RunnerContext, RunnerGitHub, RunningJob, SessionState } from "./types.ts";
 
@@ -166,16 +166,8 @@ export function createJobRunner({
   }
 
   async function reportFailure(job: RunningJob, error: unknown, state: SessionState) {
-    const diagnosticIssue = config.CREATE_DIAGNOSTIC_ISSUES
-      ? await createDiagnosticIssue(github, config, job, error, state.activePullRequest)
-      : undefined;
-    if (diagnosticIssue) {
-      try {
-        await jobRepository.recordSupportIssue(job.id, diagnosticIssue);
-      } catch {
-        // The diagnostic issue URL is still included in the originating issue comment.
-      }
-    }
+    const diagnosticResult = config.CREATE_DIAGNOSTIC_ISSUES ? await createSupportIssue({ config, github, jobId: job.id, environment: job.environment }) : undefined;
+    const diagnosticIssue = diagnosticResult?.kind === "created" || diagnosticResult?.kind === "existing" ? diagnosticResult.issue : undefined;
     const comment = [
       `Worker failed: ${safeError(error)}`,
       config.CREATE_DIAGNOSTIC_ISSUES

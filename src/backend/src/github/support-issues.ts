@@ -107,6 +107,7 @@ ${safe(diagnostics.finalOutput, secrets)}` : undefined,
     error,
     "",
     "### Error details and stack trace",
+    "Stack trace:",
     "```text",
     details.length ? details.join("\n\n") : error,
     "```",
@@ -117,4 +118,8 @@ ${safe(diagnostics.finalOutput, secrets)}` : undefined,
     "",
     "This issue was created manually from the Swarmloom failed-job view.",
   ].filter((line): line is string => line !== undefined).join("\n");
+}
+
+export function supportIssueMarker(jobId: string) {
+  return `Job ID: \`${jobId}\``;
 }

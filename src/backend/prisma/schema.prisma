@@ -141,6 +141,8 @@ model Job {
   supportIssueNumber      Int?
   supportIssueUrl         String?
   supportIssueCreating    Boolean       @default(false)
+  supportIssueCreatingAt  DateTime?
+  supportIssueReconcileRequired Boolean   @default(false)
   workerId                 String?
   attempts                 Int           @default(0)
   heartbeatAt              DateTime?

@@ -238,41 +238,6 @@ export async function applyPullRequestLabels(
   );
 }
 
-export async function createDiagnosticIssue(
-  github: RunnerGitHub,
-  config: Config,
-  job: RunningJob,
-  error: unknown,
-  pullRequest: { number: number; url: string } | undefined,
-) {
-  const details = failureDetails(error, config.GITHUB_TOKEN);
-  const diagnosticBody = [
-    "## Swarmloom job failure",
-    `Original issue: ${job.issueUrl}`,
-    pullRequest ? `Pull Request: ${pullRequest.url}` : undefined,
-    `Job ID: ${job.id}`,
-    "",
-    "### Error and stack trace",
-    "```text",
-    details,
-    "```",
-    "",
-    "Fix the root cause, add or update regression coverage, and leave the issue ready for another worker pass.",
-  ].filter((line): line is string => line !== undefined).join("\n");
-  let diagnosticIssue: { number: number; url: string } | undefined;
-  try {
-    diagnosticIssue = await github.createIssue(
-      job.repository.fullName,
-      `[Swarmloom] Fix failed job for ${job.repository.fullName}#${job.issueNumber}`,
-      diagnosticBody,
-      [config.ISSUE_READY_LABEL],
-    );
-  } catch {
-    diagnosticIssue = undefined;
-  }
-  return diagnosticIssue;
-}
-
 export function terminalEvent(
   job: { id: string; repositoryId: string; scanRunId: string | null; issueUrl: string },
   type: string,
@@ -295,14 +260,6 @@ function roleStage(role: AgentRole): JobDiagnostics["stage"] {
 export function safeError(error: unknown) {
 
   return redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000);
-}
-
-export function failureDetails(error: unknown, githubToken: string) {
-  const text = error instanceof Error ? `${error.message}\n\nStack trace:\n${error.stack ?? "Unavailable"}` : String(error);
-  return redactSecrets(redactSecrets(text), {
-    ...globalThis.process.env,
-    GITHUB_TOKEN: githubToken,
-  }).slice(0, 12_000);
 }
 
 export function duration(startedAt: Date | null) {

@@ -52,6 +52,24 @@ describe("GitHub client", () => {
     expect(requests[0].headers.get("authorization")).toBe("Bearer secret-token");
   });
 
+  test("finds support issues by job marker without matching pull requests", async () => {
+    const requests: Request[] = [];
+    const client = createGitHubClient({
+      token: "secret-token",
+      fetch: async (input, init) => {
+        requests.push(new Request(input, init));
+        return Response.json([
+          { ...issue(7), body: "Job ID: `job-123`" },
+          { ...issue(8), body: "Job ID: `job-123`", pull_request: { url: "https://api.github.test/pulls/8" } },
+        ]);
+      },
+    });
+
+    expect(await client.findIssueByMarker("acme/app", "Job ID: `job-123`"))
+      .toEqual({ number: 7, url: "https://github.com/acme/app/issues/7" });
+    expect(requests[0]?.url).toContain("/repos/acme/app/issues?state=all");
+  });
+
   test("replaces issue labels and adds comments through authenticated JSON requests", async () => {
     const requests: Request[] = [];
     const client = createGitHubClient({
