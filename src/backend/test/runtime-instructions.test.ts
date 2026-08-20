@@ -41,6 +41,17 @@ describe("canonical agent runtime", () => {
     expect(instructions).toContain("mergeable");
   });
 
+  test("requires real newlines in GitHub Markdown bodies", async () => {
+    const instructions = await loadAgentInstructions(runtime);
+    expect(instructions).toContain("real line-feed characters");
+    expect(instructions).toContain("temporary file or a quoted heredoc");
+    expect(instructions).toContain("Do not");
+    expect(instructions).toContain("JSON-style `\\n` inside a shell-quoted argument");
+    expect(instructions).toContain("--body-file");
+    expect(instructions).toContain("Intended section breaks");
+    expect(instructions).toContain("Keep intentional fenced code blocks intact");
+  });
+
   test("requires running every ci.yaml command before committing", async () => {
     const instructions = await loadAgentInstructions(runtime);
     for (const cmd of [
