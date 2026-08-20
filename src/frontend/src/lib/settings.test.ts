@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   describeCron,
   parseRepositoryList,
+  removeRepository,
   secondsToMilliseconds,
 } from "./settings";
 
@@ -11,6 +12,10 @@ describe("settings presentation helpers", () => {
       "acme/api",
       "acme/web",
     ]);
+  });
+
+  test("keeps one repository because the settings API requires a repository", () => {
+    expect(removeRepository(["acme/api"], "acme/api")).toEqual(["acme/api"]);
   });
 
   test("explains a recurring minute schedule", () => {

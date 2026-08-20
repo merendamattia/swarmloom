@@ -20,6 +20,7 @@ import {
   describeCron,
   millisecondsToSeconds,
   parseRepositoryList,
+  removeRepository as removeRepositoryFromList,
   secondsToMilliseconds,
 } from "@/lib/settings";
 
@@ -121,13 +122,14 @@ export default function SettingsPage() {
   const removeRepository = (repository: string) => {
     setDraft((current) => {
       const next = current ?? formFromSettings(settings.data!);
-      return { ...next, githubRepositories: next.githubRepositories.filter((value) => value !== repository) };
+      return { ...next, githubRepositories: removeRepositoryFromList(next.githubRepositories, repository) };
     });
   };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const { telegramBotToken, telegramChatId, githubRepositories, ...values } = form;
+    if (githubRepositories.length === 0) return;
     const patch: SettingsPatch = {
       ...values,
       githubRepositories: githubRepositories.join(", "),
@@ -166,7 +168,7 @@ export default function SettingsPage() {
                   {form.githubRepositories.map((repository) => (
                     <span className="tag" key={repository}>
                       {repository}
-                      <button className="tag-remove" type="button" aria-label={`Remove ${repository}`} onClick={() => removeRepository(repository)}>
+                      <button className="tag-remove" type="button" aria-label={`Remove ${repository}`} disabled={form.githubRepositories.length === 1} onClick={() => removeRepository(repository)}>
                         <X size={13} aria-hidden="true" />
                       </button>
                     </span>
@@ -187,6 +189,7 @@ export default function SettingsPage() {
                 />
               </div>
               <p className="field-help">Type a repository and press Enter to add it.</p>
+              <p className="field-help">At least one repository is required.</p>
             </div>
             <div className="field"><label htmlFor="cron">Schedule cron</label><input className="input mono" id="cron" value={form.scheduleCron} onChange={(event) => set("scheduleCron", event.target.value)} /><p className="field-help" aria-live="polite">{describeCron(form.scheduleCron)}</p></div>
           </div>

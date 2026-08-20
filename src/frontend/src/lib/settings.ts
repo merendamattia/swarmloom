@@ -4,6 +4,10 @@ export function parseRepositoryList(value: string) {
   return [...new Set(value.split(/[\s,]+/).map((repository) => repository.trim()).filter(Boolean))];
 }
 
+export function removeRepository(repositories: string[], repository: string) {
+  return repositories.length <= 1 ? repositories : repositories.filter((value) => value !== repository);
+}
+
 export function secondsToMilliseconds(seconds: number) {
   return Math.round(seconds * 1_000);
 }
