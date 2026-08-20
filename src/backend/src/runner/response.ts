@@ -6,10 +6,11 @@ const JOB_OUTCOMES = new Set<JobOutcome>(["implemented", "blocked", "decomposed"
 export type FrontendVisualRequest = {
   frontendChanged: boolean;
   route: string | null;
+  origin: string | null;
   setup: string | null;
 };
 
-function markerLine(text: string, field: "Outcome" | "Review" | "PR" | "Frontend change" | "Visual route" | "Visual setup"): string | null {
+function markerLine(text: string, field: "Outcome" | "Review" | "PR" | "Frontend change" | "Visual route" | "Visual origin" | "Visual setup"): string | null {
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (trimmed.toLowerCase().startsWith(`${field.toLowerCase()}:`)) {
@@ -50,16 +51,48 @@ export function parsePullRequestUrl(text: string): string | null {
 
 export function parseFrontendVisualRequest(text: string): FrontendVisualRequest {
   const declaration = markerLine(text, "Frontend change")?.toLowerCase();
-  if (declaration === "unchanged") return { frontendChanged: false, route: null, setup: null };
+  if (declaration === "unchanged") return { frontendChanged: false, route: null, origin: null, setup: null };
   if (declaration !== "changed") {
     throw new Error('Implemented agent response must include "Frontend change: changed|unchanged"', {
       cause: evidence(text),
     });
   }
-  const route = markerLine(text, "Visual route");
+  const rawRoute = markerLine(text, "Visual route");
+  const route = rawRoute && rawRoute.startsWith("/") && !rawRoute.startsWith("//") ? rawRoute : null;
+  if (!route) {
+    throw new Error('Implemented agent response must include "Visual route: /the/relevant/path"', {
+      cause: evidence(text),
+    });
+  }
+  const rawOrigin = markerLine(text, "Visual origin");
+  const origin = parseVisualOrigin(rawOrigin);
+  if (!origin) {
+    throw new Error('Implemented agent response must include "Visual origin: http://localhost:<port>"', {
+      cause: evidence(text),
+    });
+  }
+  const setup = markerLine(text, "Visual setup");
+  if (!setup) {
+    throw new Error('Implemented agent response must include "Visual setup: <command or none>"', {
+      cause: evidence(text),
+    });
+  }
   return {
     frontendChanged: true,
-    route: route && route.startsWith("/") && !route.startsWith("//") ? route : null,
-    setup: markerLine(text, "Visual setup"),
+    route,
+    origin,
+    setup,
   };
+}
+
+function parseVisualOrigin(value: string | null) {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password
+      || url.pathname !== "/" || url.search || url.hash) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
 }

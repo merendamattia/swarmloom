@@ -1,4 +1,4 @@
-import type { ManagedPrState, ManagedPrWorkflow } from "@prisma/client";
+import type { ManagedPrState, ManagedPrWorkflow, Prisma } from "@prisma/client";
 import { prisma } from "../core/db.ts";
 
 type UpsertManagedPrInput = {
@@ -38,6 +38,32 @@ async function upsertFromImplementation(input: UpsertManagedPrInput) {
     RETURNING "id"
   `;
   return row?.id ?? null;
+}
+
+async function claimVisualEvidence(id: string, key: string, result: Prisma.InputJsonValue) {
+  const claimed = await prisma.managedPullRequest.updateMany({
+    where: { id, visualEvidenceKey: null },
+    data: { visualEvidenceKey: key, visualVerification: result },
+  });
+  const row = await prisma.managedPullRequest.findUnique({
+    where: { id },
+    select: { visualEvidenceKey: true, visualVerification: true, visualEvidencePublishedAt: true },
+  });
+  if (!row?.visualEvidenceKey || !row.visualVerification) return null;
+  return {
+    key: row.visualEvidenceKey,
+    result: row.visualVerification,
+    publishedAt: row.visualEvidencePublishedAt,
+    claimed: claimed.count === 1,
+  };
+}
+
+async function markVisualEvidencePublished(id: string, key: string) {
+  const updated = await prisma.managedPullRequest.updateMany({
+    where: { id, visualEvidenceKey: key, visualEvidencePublishedAt: null },
+    data: { visualEvidencePublishedAt: new Date() },
+  });
+  return updated.count === 1;
 }
 
 async function findOpen(repositoryId: string) {
@@ -123,6 +149,8 @@ export const managedPullRequestRepository = {
   incrementFixCycle,
   resetFixCycle,
   block,
+  claimVisualEvidence,
+  markVisualEvidencePublished,
   unblock,
   markState,
 };

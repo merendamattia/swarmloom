@@ -98,6 +98,7 @@ integration("job runner", () => {
       `PR: https://github.com/acme/runner/pull/${job.issueNumber}`,
       "Frontend change: changed",
       "Visual route: /dashboard",
+      "Visual origin: http://localhost:3000",
       "Visual setup: none",
     ].join("\n");
     const state = fakeGitHub(job.issueNumber, job.branchName, "j".repeat(40));
@@ -131,12 +132,72 @@ integration("job runner", () => {
       capturedAt: "2026-08-20T00:00:00.000Z",
       viewport: { width: 1440, height: 900 },
     });
-    expect(state.comments.filter(({ issue, body }) => issue === job.issueNumber && body.includes("## Visual evidence")))
-      .toEqual([{
-        issue: job.issueNumber,
-        body: "## Visual evidence\n\nRoute: `/dashboard`\n\n![Screenshot of /dashboard](https://worker.example.com/api/artifacts/visual.png?token=signed)",
-      }]);
+    const visualComments = state.comments.filter(({ issue, body }) => issue === job.issueNumber && body.includes("## Visual evidence"));
+    expect(visualComments).toHaveLength(1);
+    expect(visualComments[0]?.body).toContain("<!-- swarmloom:visual-evidence:");
+    expect(visualComments[0]?.body).toContain("![Screenshot of /dashboard](https://worker.example.com/api/artifacts/visual.png?token=signed)");
     expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "VISUAL_VERIFICATION_COMPLETED" } })).not.toBeNull();
+  });
+
+
+  test("persists visual evidence before a stale worker can finish", async () => {
+    const job = await claimed(issueBase + 19, "IMPLEMENTATION", "ISSUE");
+    const response = [
+      "Outcome: implemented",
+      "PR: https://github.com/acme/runner/pull/" + job.issueNumber,
+      "Frontend change: changed",
+      "Visual route: /dashboard",
+      "Visual origin: http://localhost:3000",
+      "Visual setup: none",
+    ].join("\n");
+    const state = fakeGitHub(job.issueNumber, job.branchName, "l".repeat(40));
+    let staleOnce = true;
+    const originalAddIssueComment = state.addIssueComment;
+    state.addIssueComment = async (fullName, issue, body) => {
+      await originalAddIssueComment(fullName, issue, body);
+      if (staleOnce && body.includes("## Visual evidence")) {
+        staleOnce = false;
+        await prisma.job.update({
+          where: { id: job.id },
+          data: { status: "STALE", activeIssueKey: null, activePrKey: null, heartbeatAt: null, completedAt: new Date() },
+        });
+      }
+    };
+    const visualVerification = {
+      verify: async ({ route }: { route: string }) => ({
+        status: "COMPLETED" as const,
+        route,
+        artifactUrl: "https://worker.example.com/api/artifacts/stale.png?token=signed",
+        capturedAt: "2026-08-20T00:00:00.000Z",
+        viewport: { width: 1440, height: 900 },
+      }),
+    };
+    const runner = createJobRunner({
+      config,
+      provider: new FakeProvider([success(response, "implementation-stale")]),
+      github: state,
+      createWorktree: async (input) => input.worktreePath,
+      visualVerification,
+    });
+    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(stored.status).toBe("STALE");
+    expect(stored.visualVerification).toMatchObject({ status: "COMPLETED", route: "/dashboard" });
+    expect(state.comments.filter(({ issue, body }) => issue === job.issueNumber && body.includes("## Visual evidence"))).toHaveLength(1);
+
+    const retry = await claimed(job.issueNumber, "IMPLEMENTATION", "ISSUE");
+    const retryRunner = createJobRunner({
+      config,
+      provider: new FakeProvider([success(response, "implementation-stale-retry")]),
+      github: state,
+      createWorktree: async (input) => input.worktreePath,
+      visualVerification,
+    });
+    expect(await retryRunner.run(retry.id, "runner-worker")).toBe(true);
+    expect(state.comments.filter(({ issue, body }) => issue === job.issueNumber && body.includes("## Visual evidence"))).toHaveLength(1);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: retry.id } })).toMatchObject({
+      visualVerification: { status: "COMPLETED", route: "/dashboard" },
+    });
   });
 
   test("persists incomplete visual verification without claiming a screenshot", async () => {
@@ -146,6 +207,7 @@ integration("job runner", () => {
       "PR: https://github.com/acme/runner/pull/" + job.issueNumber,
       "Frontend change: changed",
       "Visual route: /dashboard",
+      "Visual origin: http://localhost:3000",
       "Visual setup: none",
     ].join("\n");
     const state = fakeGitHub(job.issueNumber, job.branchName, "k".repeat(40));
@@ -937,11 +999,16 @@ function fakeGitHub(issueNumber: number, branchName: string, headSha: string) {
       state.prLabelWrites.push([...labels]);
       state.prLabels.splice(0, state.prLabels.length, ...labels);
     },
-    async getIssueContext() {
+    async getIssueContext(_fullName: string, _issueNumber: number, _issueUrl: string, pullRequestNumber?: number) {
       return {
         issue: await state.getIssue(),
-        issueComments: [],
-        pullRequests: [],
+        issueComments: state.comments.filter(({ issue }) => issue === _issueNumber).map(({ body }) => ({ body, url: "https://github.com/acme/runner/comments/1", user: null, createdAt: null })),
+        pullRequests: pullRequestNumber === undefined ? [] : [{
+          ...pullRequestShape(pullRequestNumber, branchName, issueNumber, headSha),
+          diff: "diff --git a/src/app.ts b/src/app.ts",
+          reviews: [],
+          comments: state.comments.filter(({ issue }) => issue === pullRequestNumber).map(({ body }) => ({ body, path: null, line: null, url: "https://github.com/acme/runner/comments/1", user: null, createdAt: null })),
+        }],
       };
     },
     async createIssue(_fullName: string, title: string, body: string, labels: string[]) {

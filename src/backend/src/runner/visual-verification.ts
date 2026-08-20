@@ -14,6 +14,7 @@ export type VisualVerificationInput = {
   jobId: string;
   worktreePath: string;
   route: string;
+  origin: string;
   setup: string | null;
   signal: AbortSignal;
 };
@@ -38,7 +39,7 @@ export type VisualVerification = {
 };
 
 export function createVisualVerification(
-  config: Pick<Config, "DATA_DIR" | "FRONTEND_URL" | "ARTIFACT_BASE_URL" | "SETTINGS_ENCRYPTION_KEY">,
+  config: Pick<Config, "DATA_DIR" | "ARTIFACT_BASE_URL" | "SETTINGS_ENCRYPTION_KEY">,
 ): VisualVerification {
   return {
     async verify(input) {
@@ -48,7 +49,7 @@ export function createVisualVerification(
       const finalPath = visualArtifactPath(config.DATA_DIR, input.jobId);
       const temporaryPath = visualArtifactTempPath(config.DATA_DIR, input.jobId);
       try {
-        const targetUrl = routeUrl(config.FRONTEND_URL, input.route);
+        const targetUrl = visualRouteUrl(input.origin, input.route);
         await mkdir(dirname(finalPath), { recursive: true });
         if (input.setup && input.setup.toLowerCase() !== "none") {
           frontend = Bun.spawn(["sh", "-lc", input.setup], {
@@ -89,7 +90,7 @@ export function createVisualVerification(
   };
 }
 
-async function waitForPage(
+export async function waitForPage(
   page: Awaited<ReturnType<Awaited<ReturnType<typeof chromium.launch>>["newPage"]>>,
   url: string,
   signal: AbortSignal,
@@ -109,7 +110,7 @@ async function waitForPage(
   throw lastError ?? new Error(`Frontend route did not become ready: ${url}`);
 }
 
-function routeUrl(baseUrl: string, route: string) {
+export function visualRouteUrl(baseUrl: string, route: string) {
   if (!route.startsWith("/") || route.startsWith("//")) throw new Error("Visual route must be an absolute application path");
   const base = new URL(baseUrl);
   const target = new URL(route, base);

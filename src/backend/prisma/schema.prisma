@@ -172,6 +172,9 @@ model ManagedPullRequest {
   fixReason           String?
   fixDetails          String?          @db.Text
   fixCycleCount       Int              @default(0)
+  visualVerification  Json?            @db.JsonB
+  visualEvidenceKey   String?
+  visualEvidencePublishedAt DateTime?
   blocked             Boolean          @default(false)
   lastObservedAt      DateTime?
   createdAt           DateTime         @default(now())

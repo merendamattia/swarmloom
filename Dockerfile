@@ -35,7 +35,12 @@ RUN --mount=type=cache,target=/root/.npm \
   && node --version \
   && codex --version \
   && opencode --version
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN npx playwright install --with-deps chromium
+RUN chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH"
+USER bun
+RUN bun -e 'import { chromium } from "playwright"; const browser = await chromium.launch({ headless: true }); await browser.close();'
+USER root
 COPY requirements.txt /tmp/swarmloom-requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
   python3 -m venv /opt/pre-commit \

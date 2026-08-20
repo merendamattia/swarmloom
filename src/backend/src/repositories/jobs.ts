@@ -146,6 +146,14 @@ async function setImplementationResult(id: string, sessionId: string | null, exi
   return updated.count === 1;
 }
 
+async function setVisualVerification(id: string, visualVerification: Prisma.InputJsonValue) {
+  const updated = await prisma.job.updateMany({
+    where: { id, status: "RUNNING" },
+    data: { visualVerification },
+  });
+  return updated.count === 1;
+}
+
 async function cancel(id: string) {
   const updated = await prisma.job.updateMany({
     where: { id, status: { in: ["QUEUED", "RUNNING"] } },
@@ -220,5 +228,6 @@ export const jobRepository = {
   hasArtifact,
   setWorktree,
   setImplementationResult,
+  setVisualVerification,
   finishRunning,
 };

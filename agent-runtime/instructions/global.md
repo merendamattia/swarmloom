@@ -231,8 +231,9 @@ handles any additional execution phase.
 
 For an implementation response, declare whether the PR changes the frontend. Use these exact markers:
 `Frontend change: changed` or `Frontend change: unchanged`. When it is changed, also provide
-`Visual route: /the/relevant/path` and a concise `Visual setup: <command or none>` marker. The worker
-will start the setup command in the worktree, wait for the configured frontend origin, capture a
-fixed 1440x900 viewport with Chromium, and publish exactly one visual-evidence comment to the PR.
+`Visual route: /the/relevant/path`, `Visual origin: http://localhost:<port>`, and a concise
+`Visual setup: <command or none>` marker. The worker will start the setup command in the worktree,
+wait for the declared target origin, capture a fixed 1440x900 viewport with Chromium, and publish
+exactly one visual-evidence comment to the PR.
 Never infer the route from filenames. If the frontend cannot be started or the artifact cannot be
 published, the worker records visual verification as incomplete rather than claiming evidence.

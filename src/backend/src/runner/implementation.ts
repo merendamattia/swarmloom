@@ -11,7 +11,7 @@ import {
   safeError,
 } from "./helpers.ts";
 import { parseFrontendVisualRequest } from "./response.ts";
-import { visualEvidenceComment } from "./visual-comment.ts";
+import { visualEvidenceComment, visualEvidenceMarker } from "./visual-comment.ts";
 import type { JobFlow } from "./types.ts";
 
 export const runImplementation: JobFlow = async (context) => {
@@ -90,7 +90,7 @@ export const runImplementation: JobFlow = async (context) => {
     if (!managedPullRequestId) {
       throw new Error(`Could not persist managed pull request ${fullName}#${pullRequest.number}`);
     }
-    const visualVerification = await completeVisualVerification(context, visualRequest, job.id, worktreePath, pullRequest.number, signal);
+    const visualVerification = await completeVisualVerification(context, visualRequest, job.id, worktreePath, managedPullRequestId, pullRequest.url, pullRequest.number, signal);
     const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
       result: implementation.response,
       visualVerification,
@@ -224,6 +224,8 @@ async function completeVisualVerification(
   request: import("./response.ts").FrontendVisualRequest,
   jobId: string,
   worktreePath: string,
+  managedPullRequestId: string,
+  pullRequestUrl: string,
   pullRequestNumber: number,
   signal: AbortSignal,
 ): Promise<VisualVerificationRecord> {
@@ -248,6 +250,7 @@ async function completeVisualVerification(
       jobId,
       worktreePath,
       route: request.route,
+      origin: request.origin!,
       setup: request.setup,
       signal,
     });
@@ -261,30 +264,72 @@ async function completeVisualVerification(
   }
 
   if (result.status === "COMPLETED") {
-    const published = await context.commentOnPullRequest(
-      context.job,
-      pullRequestNumber,
-      visualEvidenceComment(result),
-    );
-    if (published) {
-      await context.events.record({
-        type: "VISUAL_VERIFICATION_COMPLETED",
-        message: "Captured visual evidence for " + result.route + " on PR #" + pullRequestNumber,
-        jobId,
-        repositoryId: context.job.repositoryId,
-        scanRunId: context.job.scanRunId ?? undefined,
-        metadata: { route: result.route, artifactUrl: result.artifactUrl, viewport: result.viewport },
-      });
-      return result;
+    const visualEvidenceKey = `swarmloom:visual-evidence:${managedPullRequestId}`;
+    const claim = await managedPullRequestRepository.claimVisualEvidence(managedPullRequestId, visualEvidenceKey, result);
+    if (!claim) {
+      result = {
+        status: "INCOMPLETE",
+        route: result.route,
+        reason: "Could not claim durable visual evidence state for the managed pull request",
+        capturedAt: result.capturedAt,
+      };
+      return persistVisualIncomplete(context, jobId, result);
     }
-    result = {
-      status: "INCOMPLETE",
-      route: result.route,
-      reason: "Screenshot was captured but the visual-evidence pull request comment could not be published",
-      capturedAt: result.capturedAt,
-    };
+    const claimedResult = claim.result as Extract<import("./visual-verification.ts").VisualVerificationResult, { status: "COMPLETED" }>;
+    if (!await jobRepository.setVisualVerification(jobId, claimedResult)) return claimedResult;
+    if (!claim.publishedAt) {
+      let alreadyPublished = false;
+      try {
+        const liveContext = await context.github.getIssueContext(context.job.repository.fullName, pullRequestNumber, pullRequestUrl);
+        alreadyPublished = liveContext.issueComments.some((comment) => comment.body.includes(visualEvidenceMarker(claim.key)));
+      } catch (error) {
+        result = {
+          status: "INCOMPLETE",
+          route: claimedResult.route,
+          reason: "Could not inspect pull request comments for existing visual evidence: " + safeError(error),
+          capturedAt: claimedResult.capturedAt,
+        };
+        return persistVisualIncomplete(context, jobId, result);
+      }
+      if (!alreadyPublished) {
+        const published = await context.commentOnPullRequest(
+          context.job,
+          pullRequestNumber,
+          visualEvidenceComment(claimedResult, claim.key),
+        );
+        if (!published) {
+          result = {
+            status: "INCOMPLETE",
+            route: claimedResult.route,
+            reason: "Screenshot was captured but the visual-evidence pull request comment could not be published",
+            capturedAt: claimedResult.capturedAt,
+          };
+          return persistVisualIncomplete(context, jobId, result);
+        }
+      }
+      await managedPullRequestRepository.markVisualEvidencePublished(managedPullRequestId, claim.key);
+    }
+    await context.events.record({
+      type: "VISUAL_VERIFICATION_COMPLETED",
+      message: "Captured visual evidence for " + claimedResult.route + " on PR #" + pullRequestNumber,
+      jobId,
+      repositoryId: context.job.repositoryId,
+      scanRunId: context.job.scanRunId ?? undefined,
+      metadata: { route: claimedResult.route, artifactUrl: claimedResult.artifactUrl, viewport: claimedResult.viewport },
+    });
+    return claimedResult;
   }
 
+  await recordVisualIncomplete(context, jobId, result);
+  return result;
+}
+
+async function persistVisualIncomplete(
+  context: import("./types.ts").RunnerContext,
+  jobId: string,
+  result: Extract<VisualVerificationRecord, { status: "INCOMPLETE" }>,
+) {
+  await jobRepository.setVisualVerification(jobId, result);
   await recordVisualIncomplete(context, jobId, result);
   return result;
 }
