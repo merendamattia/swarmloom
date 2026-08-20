@@ -17,6 +17,9 @@ integration("operations API", () => {
   const labels = ["bug", "agent:working"];
   const createdIssues: Array<{ title: string; body: string; labels: string[] }> = [];
   let createIssueError: Error | undefined;
+  let beforeCreateIssue: (() => Promise<void>) | undefined;
+  let afterCreateIssue: (() => Promise<void>) | undefined;
+  let reconciledIssue: { number: number; url: string } | undefined;
   const config = parseConfig({
     APP_ENV: "test",
     NODE_ENV: "test",
@@ -91,9 +94,13 @@ integration("operations API", () => {
         },
         createIssue: async (_repository, title, body, issueLabels) => {
           if (createIssueError) throw createIssueError;
+          await beforeCreateIssue?.();
+          const issue = { number: 123, url: "https://github.com/acme/api-test/issues/123" };
           createdIssues.push({ title, body, labels: issueLabels });
-          return { number: 123, url: "https://github.com/acme/api-test/issues/123" };
+          await afterCreateIssue?.();
+          return issue;
         },
+        findIssueByMarker: async () => reconciledIssue,
         addIssueComment: async () => {},
         getPullRequestLabels: async () => [],
         setPullRequestLabels: async () => {},
@@ -335,6 +342,97 @@ integration("operations API", () => {
       .toMatchObject({ status: "FAILED", supportIssueNumber: null, supportIssueUrl: null, supportIssueCreating: false });
   });
 
+  test("serializes automatic support orchestration with the manual endpoint", async () => {
+    const { createSupportIssue } = await import("../src/support-issues/service.ts");
+    await prisma.job.update({
+      where: { id: jobId },
+      data: {
+        status: "FAILED",
+        supportIssueNumber: null,
+        supportIssueUrl: null,
+        supportIssueCreating: false,
+        errorMessage: "Automatic failure",
+      },
+    });
+    config.CREATE_DIAGNOSTIC_ISSUES = true;
+    createIssueError = undefined;
+    createdIssues.splice(0);
+    let started!: () => void;
+    const automaticStarted = new Promise<void>((resolve) => { started = resolve; });
+    let release!: () => void;
+    const releaseAutomatic = new Promise<void>((resolve) => { release = resolve; });
+    beforeCreateIssue = async () => {
+      started();
+      await releaseAutomatic;
+    };
+    const github = {
+      createIssue: async (_repository: string, title: string, body: string, issueLabels: string[]) => {
+        await beforeCreateIssue?.();
+        createdIssues.push({ title, body, labels: issueLabels });
+        return { number: 123, url: "https://github.com/acme/api-test/issues/123" };
+      },
+      findIssueByMarker: async () => undefined,
+    };
+
+    try {
+      const automatic = createSupportIssue({ config, github, jobId });
+      await automaticStarted;
+      const manual = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+      expect(manual.status).toBe(409);
+      release();
+      expect(await automatic).toMatchObject({ kind: "created" });
+      expect(createdIssues).toHaveLength(1);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: jobId } }))
+        .toMatchObject({ status: "FAILED", supportIssueNumber: 123, supportIssueUrl: "https://github.com/acme/api-test/issues/123", supportIssueCreating: false });
+    } finally {
+      beforeCreateIssue = undefined;
+      afterCreateIssue = undefined;
+      config.CREATE_DIAGNOSTIC_ISSUES = false;
+    }
+  });
+
+  test("reconciles a created issue when persistence fails", async () => {
+    await prisma.job.update({
+      where: { id: jobId },
+      data: {
+        status: "FAILED",
+        supportIssueNumber: null,
+        supportIssueUrl: null,
+        supportIssueCreating: false,
+      },
+    });
+    createdIssues.splice(0);
+    reconciledIssue = undefined;
+    afterCreateIssue = async () => {
+      await prisma.job.update({ where: { id: jobId }, data: { status: "COMPLETED" } });
+    };
+
+    try {
+      const failed = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+      expect(failed.status).toBe(500);
+      expect(await failed.json()).toEqual({ error: "Support issue was created but could not be recorded" });
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: jobId } }))
+        .toMatchObject({ status: "COMPLETED", supportIssueNumber: null, supportIssueUrl: null, supportIssueCreating: true });
+
+      reconciledIssue = { number: 123, url: "https://github.com/acme/api-test/issues/123" };
+      await prisma.job.update({ where: { id: jobId }, data: { status: "FAILED" } });
+      afterCreateIssue = undefined;
+      const recovered = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+      expect(recovered.status).toBe(200);
+      expect(await recovered.json()).toEqual({
+        status: "existing",
+        issueNumber: 123,
+        issueUrl: "https://github.com/acme/api-test/issues/123",
+      });
+      expect(createdIssues).toHaveLength(1);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: jobId } }))
+        .toMatchObject({ status: "FAILED", supportIssueNumber: 123, supportIssueUrl: "https://github.com/acme/api-test/issues/123", supportIssueCreating: false });
+    } finally {
+      beforeCreateIssue = undefined;
+      afterCreateIssue = undefined;
+      reconciledIssue = undefined;
+    }
+  });
   test("removes an obsolete repository together with its events and job history", async () => {
     const obsolete = await prisma.repository.create({
       data: { fullName: `acme/obsolete-${unique}`, cloneUrl: `https://github.com/acme/obsolete-${unique}.git` },

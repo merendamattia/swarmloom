@@ -14,7 +14,7 @@ import { redactSecrets } from "../core/secrets.ts";
 import { checkProviderAuthentication, validateStartup } from "../core/startup.ts";
 import type { EventService } from "../events/service.ts";
 import type { GitHubClient } from "../github/client.ts";
-import { supportIssueBody, supportIssueTitle } from "../github/support-issues.ts";
+import { createSupportIssue } from "../support-issues/service.ts";
 import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.ts";
 import { dashboardExceptionRepository } from "../repositories/dashboard-exceptions.ts";
 import { jobRepository } from "../repositories/jobs.ts";
@@ -23,7 +23,7 @@ import type { JobQueue } from "../queue/service.ts";
 
 type Scanner = { run(source: "SCHEDULED" | "MANUAL"): Promise<{ id: string; status: string }> };
 type ApiGitHub = Pick<GitHubClient,
-  "getIssue" | "setIssueLabels" | "addIssueComment" | "getPullRequestLabels" | "setPullRequestLabels" | "createIssue">;
+  "getIssue" | "setIssueLabels" | "addIssueComment" | "getPullRequestLabels" | "setPullRequestLabels" | "createIssue" | "findIssueByMarker">;
 type Scheduler = { restart(): void };
 type Startup = Awaited<ReturnType<typeof validateStartup>>;
 
@@ -271,45 +271,32 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         : context.json({ error: "Not found" }, 404);
     })
     .post("/jobs/:id/support-issue", async (context) => {
-      const claim = await jobRepository.claimSupportIssue(context.req.param("id"), config.APP_ENV);
-      if (claim.kind === "missing") return context.json({ error: "Not found" }, 404);
-      if (claim.kind === "not_failed") return context.json({ error: "Only failed jobs can create support issues" }, 409);
-      if (claim.kind === "existing") {
+      const result = await createSupportIssue({ config, github, jobId: context.req.param("id") });
+      if (result.kind === "missing") return context.json({ error: "Not found" }, 404);
+      if (result.kind === "not_failed") return context.json({ error: "Only failed jobs can create support issues" }, 409);
+      if (result.kind === "existing") {
         return context.json({
           status: "existing" as const,
-          issueNumber: claim.issueNumber,
-          issueUrl: claim.issueUrl,
+          issueNumber: result.issue.number,
+          issueUrl: result.issue.url,
         });
       }
-      if (claim.kind === "in_progress") {
-        return context.json({ error: "Support issue creation is already in progress" }, 409);
+      if (result.kind === "in_progress") return context.json({ error: "Support issue creation is already in progress" }, 409);
+      if (result.kind === "failed") {
+        const message = result.reason === "persistence"
+          ? "Support issue was created but could not be recorded"
+          : redactSecrets(result.error instanceof Error ? result.error.message : String(result.error), {
+            ...globalThis.process.env,
+            GITHUB_TOKEN: config.GITHUB_TOKEN,
+          }).slice(0, 2_000);
+        return context.json({ error: result.reason === "persistence" ? message : `Could not create support issue: ${message}` }, result.reason === "persistence" ? 500 : 502);
       }
-
-      let issue: { number: number; url: string };
-      try {
-        issue = await github.createIssue(
-          claim.job.repository.fullName,
-          supportIssueTitle(claim.job, config),
-          supportIssueBody(claim.job, config),
-          [config.ISSUE_READY_LABEL],
-        );
-      } catch (error) {
-        await jobRepository.releaseSupportIssue(claim.job.id, config.APP_ENV);
-        const message = redactSecrets(error instanceof Error ? error.message : String(error), {
-          ...globalThis.process.env,
-          GITHUB_TOKEN: config.GITHUB_TOKEN,
-        }).slice(0, 2_000);
-        return context.json({ error: `Could not create support issue: ${message}` }, 502);
-      }
-
-      if (!await jobRepository.saveSupportIssue(claim.job.id, config.APP_ENV, issue)) {
-        return context.json({ error: "Support issue was created but could not be recorded" }, 500);
-      }
+      const issue = result.issue;
       void events.record({
         type: "SUPPORT_ISSUE_CREATED",
-        message: `Created support issue #${issue.number} for failed job ${claim.job.id}`,
-        jobId: claim.job.id,
-        repositoryId: claim.job.repositoryId,
+        message: `Created support issue #${issue.number} for failed job ${context.req.param("id")}`,
+        jobId: context.req.param("id"),
+        repositoryId: result.repositoryId,
         metadata: { issueUrl: issue.url },
       }).catch(() => {});
       return context.json({ status: "created" as const, issueNumber: issue.number, issueUrl: issue.url }, 201);

@@ -861,6 +861,7 @@ function fakeGitHub(issueNumber: number, branchName: string, headSha: string) {
       state.createdIssues.push({ title, body, labels });
       return { number: issueNumber + 1000, url: `https://github.com/acme/runner/issues/${issueNumber + 1000}` };
     },
+    async findIssueByMarker() { return undefined; },
     async setIssueLabels(_fullName: string, _number: number, labels: string[]) { state.labels.splice(0, state.labels.length, ...labels); },
     async addIssueComment(_fullName: string, issue: number, body: string) { state.comments.push({ issue, body }); },
   };

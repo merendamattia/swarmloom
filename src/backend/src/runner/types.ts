@@ -12,7 +12,7 @@ export type RunningJob = NonNullable<Awaited<ReturnType<typeof jobRepository.fin
 export type RunnerGitHub = Pick<GitHubClient,
   "getIssue" | "getIssueContext" | "getPullRequest" | "getPullRequestDiff" |
   "getPullRequestLabels" | "setPullRequestLabels" |
-  "createIssue" | "setIssueLabels" | "addIssueComment">;
+  "createIssue" | "findIssueByMarker" | "setIssueLabels" | "addIssueComment">;
 
 export type CreateWorktree = typeof createJobWorktree;
 export type CreateReviewWorktree = typeof createReviewWorktree;
