@@ -290,3 +290,12 @@ model RuntimeSetting {
   @@index([environment, updatedAt])
   @@map("runtime_setting")
 }
+
+model DashboardExceptionAcknowledgement {
+  environment   String   @id
+  acknowledgedAt DateTime
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("dashboard_exception_acknowledgement")
+}

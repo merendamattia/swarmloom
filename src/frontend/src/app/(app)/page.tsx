@@ -12,16 +12,16 @@ import {
   SectionHeading,
   StatusPill,
 } from "@/components/operational";
-import { useDashboard, useHealth, useRunScan, useStatus } from "@/hooks/api";
+import { useClearDashboardExceptions, useDashboard, useHealth, useRunScan, useStatus } from "@/hooks/api";
 import { dateTime, duration, shortCommit, statusLabel } from "@/lib/format";
 
-const exceptionStatuses = new Set(["FAILED", "BLOCKED", "STALE"]);
 const serviceStateLabel: Record<string, string> = { healthy: "Healthy", offline: "Offline", unavailable: "Unavailable" };
 
 export default function OverviewPage() {
   const dashboard = useDashboard();
   const health = useHealth();
   const status = useStatus();
+  const clearExceptions = useClearDashboardExceptions();
   const runScan = useRunScan();
   const pending = dashboard.isPending || health.isPending || status.isPending;
   const error = dashboard.error || health.error || status.error;
@@ -32,7 +32,7 @@ export default function OverviewPage() {
   }
 
   const invalidRepositories = dashboard.data.repositories.filter((repository) => repository.status === "INVALID" || repository.status === "ERROR");
-  const exceptionJobs = dashboard.data.recentJobs.filter((job) => exceptionStatuses.has(job.status));
+  const exceptionJobs = dashboard.data.exceptionJobs;
   const needsAttention = health.data.services.worker.state !== "healthy" || invalidRepositories.length > 0 || exceptionJobs.length > 0;
   const activeJob = dashboard.data.activeJobs[0];
   const providerVersion = "providerVersion" in status.data ? String(status.data.providerVersion) : "Available";
@@ -68,6 +68,7 @@ export default function OverviewPage() {
         description="Current health, exceptions, and durable worker activity."
         actions={<button className="button primary" type="button" onClick={() => runScan.mutate()} disabled={runScan.isPending}><Play size={16} aria-hidden="true" />{runScan.isPending ? "Starting scan…" : "Run now"}</button>}
       />
+      <ActionMessage pending={clearExceptions.isPending} error={clearExceptions.error} success={clearExceptions.isSuccess} pendingText="Clearing resolved exceptions…" successText="Resolved exceptions cleared." />
       <ActionMessage pending={runScan.isPending} error={runScan.error} success={runScan.isSuccess} pendingText="Starting a manual scan…" />
 
       <section className="health-strip" data-health={needsAttention ? "attention" : "healthy"} aria-labelledby="health-title">
@@ -95,7 +96,19 @@ export default function OverviewPage() {
 
       <div className="overview-grid">
         <section className="panel" aria-labelledby="exceptions-title">
-          <SectionHeading id="exceptions-title" title="Exceptions" description="Only states that may need operator intervention." />
+          <SectionHeading
+            id="exceptions-title"
+            title="Exceptions"
+            description="Only states that may need operator intervention."
+            action={exceptionJobs.length > 0 ? <button
+              className="button secondary"
+              type="button"
+              onClick={() => {
+                if (window.confirm("Clear resolved historical exceptions from the Overview? Jobs and timelines remain available in history.")) clearExceptions.mutate();
+              }}
+              disabled={clearExceptions.isPending}
+            >{clearExceptions.isPending ? "Clearing…" : "Clear resolved"}</button> : undefined}
+          />
           {invalidRepositories.length === 0 && exceptionJobs.length === 0 && health.data.services.worker.state === "healthy" ? (
             <EmptyState title="No exceptions" description="Repositories are valid and recent jobs have no failed, blocked, or stale state." />
           ) : (
