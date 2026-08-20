@@ -111,6 +111,13 @@ The container already includes `gh`, `git`, and the provider CLI. Use GitHub CLI
 GitHub reads and mutations; `GH_TOKEN` is already provided by the worker. Never print, persist, or
 include the token in issue, Pull Request, commit, or agent output. Replace the angle-bracket
 placeholders before running commands.
+Markdown bodies for GitHub issues and Pull Requests must contain real line-feed characters. Create
+multiline bodies with a temporary file or a quoted heredoc and pass it with `--body-file`. Do not
+write JSON-style `\n` inside a shell-quoted argument; that sends literal backslash-n bytes to GitHub.
+Keep intentional fenced code blocks intact.
+After creating a Pull Request, verify the stored body with
+`gh pr view <number> --json body --template '{{.body}}' | sed -n 'l'`. Intended section breaks must
+appear as real lines, not `\n`.
 
 Read the current issue, including labels and comments:
 
