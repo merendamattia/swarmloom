@@ -3,6 +3,7 @@ import {
   describeCron,
   parseRepositoryList,
   removeRepository,
+  timingStepSeconds,
   secondsToMilliseconds,
 } from "./settings";
 
@@ -23,6 +24,8 @@ describe("settings presentation helpers", () => {
   });
 
   test("converts seconds back to the runtime milliseconds format", () => {
+    expect(timingStepSeconds).toBe(0.001);
+    expect(secondsToMilliseconds(1.5)).toBe(1_500);
     expect(secondsToMilliseconds(60)).toBe(60_000);
   });
 });

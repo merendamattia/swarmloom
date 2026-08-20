@@ -22,6 +22,7 @@ import {
   parseRepositoryList,
   removeRepository as removeRepositoryFromList,
   secondsToMilliseconds,
+  timingStepSeconds,
 } from "@/lib/settings";
 
 type SettingsForm = Omit<SettingsPatch, "githubRepositories" | "scheduleTimezone"> & {
@@ -236,9 +237,9 @@ export default function SettingsPage() {
           <SectionHeading title="Worker timings" description="Tune operational limits without changing database, queue, or process connection settings." />
           <div className="settings-grid">
             <label className="toggle-field"><input type="checkbox" checked={form.createDiagnosticIssues} onChange={(event) => set("createDiagnosticIssues", event.target.checked)} /><span>Open a diagnostic issue when a job fails</span></label>
-            <div className="field"><FieldLabel htmlFor="heartbeat" help="How often a worker records that it is alive.">Heartbeat interval</FieldLabel><input className="input" id="heartbeat" type="number" min={1} step={1} value={millisecondsToSeconds(form.heartbeatIntervalMs)} onChange={(event) => set("heartbeatIntervalMs", secondsToMilliseconds(Number(event.target.value)))} /><p className="field-help">Seconds</p></div>
-            <div className="field"><FieldLabel htmlFor="stale" help="How long a running job can go without a heartbeat before it is marked stale.">Stale threshold</FieldLabel><input className="input" id="stale" type="number" min={5} step={1} value={millisecondsToSeconds(form.staleJobThresholdMs)} onChange={(event) => set("staleJobThresholdMs", secondsToMilliseconds(Number(event.target.value)))} /><p className="field-help">Seconds</p></div>
-            <div className="field"><FieldLabel htmlFor="timeout" help="The maximum time an agent may run before the worker stops it.">Agent timeout</FieldLabel><input className="input" id="timeout" type="number" min={60} step={1} value={millisecondsToSeconds(form.agentTimeoutMs)} onChange={(event) => set("agentTimeoutMs", secondsToMilliseconds(Number(event.target.value)))} /><p className="field-help">Seconds</p></div>
+            <div className="field"><FieldLabel htmlFor="heartbeat" help="How often a worker records that it is alive.">Heartbeat interval</FieldLabel><input className="input" id="heartbeat" type="number" min={1} step={timingStepSeconds} value={millisecondsToSeconds(form.heartbeatIntervalMs)} onChange={(event) => set("heartbeatIntervalMs", secondsToMilliseconds(Number(event.target.value)))} /><p className="field-help">Seconds</p></div>
+            <div className="field"><FieldLabel htmlFor="stale" help="How long a running job can go without a heartbeat before it is marked stale.">Stale threshold</FieldLabel><input className="input" id="stale" type="number" min={5} step={timingStepSeconds} value={millisecondsToSeconds(form.staleJobThresholdMs)} onChange={(event) => set("staleJobThresholdMs", secondsToMilliseconds(Number(event.target.value)))} /><p className="field-help">Seconds</p></div>
+            <div className="field"><FieldLabel htmlFor="timeout" help="The maximum time an agent may run before the worker stops it.">Agent timeout</FieldLabel><input className="input" id="timeout" type="number" min={60} step={timingStepSeconds} value={millisecondsToSeconds(form.agentTimeoutMs)} onChange={(event) => set("agentTimeoutMs", secondsToMilliseconds(Number(event.target.value)))} /><p className="field-help">Seconds</p></div>
           </div>
         </section>
 

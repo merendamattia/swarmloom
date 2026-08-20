@@ -1,5 +1,7 @@
 const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
+export const timingStepSeconds = 0.001;
+
 export function parseRepositoryList(value: string) {
   return [...new Set(value.split(/[\s,]+/).map((repository) => repository.trim()).filter(Boolean))];
 }
