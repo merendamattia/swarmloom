@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { parseConfig } from "../src/core/config-schema.ts";
-import { acquireIssueLabels, agentLabelDefinitions, replaceWorkerLabels } from "../src/github/labels.ts";
+import {
+  acquireIssueLabels,
+  agentLabelDefinitions,
+  replacePullRequestLabels,
+  replaceWorkerLabels,
+} from "../src/github/labels.ts";
 
 const config = parseConfig({
   DATABASE_URL: "postgresql://worker:worker@localhost:5432/worker",
@@ -20,23 +25,31 @@ describe("worker labels", () => {
     )).toEqual(["bug", config.ISSUE_BLOCKED_LABEL, config.ISSUE_HUMAN_REVIEW_LABEL]);
   });
 
-  test("treats review requested as a worker trigger and preserves it while working", () => {
-    expect(agentLabelDefinitions(config).map(({ name }) => name))
-      .toContain(config.ISSUE_REVIEW_REQUESTED_LABEL);
-    expect(acquireIssueLabels(
-      ["bug", config.ISSUE_REVIEW_REQUESTED_LABEL],
-      config,
-    )).toEqual(["bug", config.ISSUE_REVIEW_REQUESTED_LABEL, config.ISSUE_WORKING_LABEL]);
+  test("keeps issue and pull request label definitions separate", () => {
+    const names = agentLabelDefinitions(config).map(({ name }) => name);
+    expect(names).toContain(config.ISSUE_READY_TO_MERGE_LABEL);
+    expect(names).toContain(config.PR_REVIEW_REQUESTED_LABEL);
+    expect(names).toContain(config.PR_FIX_REQUESTED_LABEL);
+    expect(names).toContain(config.PR_REVIEW_PASSED_LABEL);
   });
 
-  test("acquiring a fresh issue removes only the ready label and keeps every other label", () => {
+  test("acquiring a fresh issue replaces stale worker states and keeps unrelated labels", () => {
     expect(acquireIssueLabels(
-      ["bug", "frontend", config.ISSUE_READY_LABEL],
+      ["bug", "frontend", config.ISSUE_READY_LABEL, config.ISSUE_BLOCKED_LABEL, config.ISSUE_HUMAN_REVIEW_LABEL],
       config,
     )).toEqual(["bug", "frontend", config.ISSUE_WORKING_LABEL]);
-    expect(acquireIssueLabels(
-      ["bug", config.ISSUE_READY_LABEL, config.ISSUE_REVIEW_REQUESTED_LABEL],
+  });
+
+  test("pull request transitions replace only the pull request workflow labels", () => {
+    expect(replacePullRequestLabels(
+      ["feature", config.PR_REVIEW_REQUESTED_LABEL],
       config,
-    )).toEqual(["bug", config.ISSUE_REVIEW_REQUESTED_LABEL, config.ISSUE_WORKING_LABEL]);
+      [config.PR_FIX_REQUESTED_LABEL],
+    )).toEqual(["feature", config.PR_FIX_REQUESTED_LABEL]);
+    expect(replacePullRequestLabels(
+      ["feature", config.PR_FIX_REQUESTED_LABEL, config.ISSUE_HUMAN_REVIEW_LABEL],
+      config,
+      [config.PR_REVIEW_PASSED_LABEL],
+    )).toEqual(["feature", config.PR_REVIEW_PASSED_LABEL]);
   });
 });

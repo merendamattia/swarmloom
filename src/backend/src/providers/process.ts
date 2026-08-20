@@ -68,6 +68,6 @@ export async function runJsonlProcess(
   const [exitCode, errorText] = await Promise.all([process.exited, stderr, stdout])
     .then(([code, error]) => [code, error] as const)
     .finally(() => signal?.removeEventListener("abort", abort));
-  if (parseError) throw new ProviderProcessError("Provider emitted invalid JSONL", exitCode, redactSecrets(errorText.slice(-8_000)), parseError);
-  return { exitCode, stderr: redactSecrets(errorText.slice(-8_000)) };
+  if (parseError) throw new ProviderProcessError("Provider emitted invalid JSONL", exitCode, redactSecrets(errorText.slice(-8_000), environment), parseError);
+  return { exitCode, stderr: redactSecrets(errorText.slice(-8_000), environment) };
 }

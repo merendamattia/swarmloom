@@ -6,9 +6,20 @@ async function start(
   provider: AgentProvider,
   model: string,
   reasoningEffort?: string | null,
+  input: { pullRequestId?: string | null; pullRequestNumber?: number | null; headSha?: string | null } = {},
 ) {
   return prisma.review.create({
-    data: { jobId, provider, model, reasoningEffort, status: "RUNNING", startedAt: new Date() },
+    data: {
+      jobId,
+      provider,
+      model,
+      reasoningEffort,
+      pullRequestId: input.pullRequestId ?? null,
+      pullRequestNumber: input.pullRequestNumber ?? null,
+      headSha: input.headSha ?? null,
+      status: "RUNNING",
+      startedAt: new Date(),
+    },
   });
 }
 

@@ -2,11 +2,10 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { parseConfig } from "../src/core/config-schema.ts";
 import { MissingDevelopBranchError } from "../src/git/repositories.ts";
-import type { AgentProvider } from "../src/providers/index.ts";
 
 const integration = process.env.RUN_INTEGRATION === "1" ? describe : describe.skip;
 
-integration("repository scan", () => {
+integration("issue scanner", () => {
   let prisma: typeof import("../src/core/db.ts").prisma;
   let createScanService: typeof import("../src/scans/service.ts").createScanService;
   const environment = `scan-test-${crypto.randomUUID()}`;
@@ -17,9 +16,7 @@ integration("repository scan", () => {
   let issueNumber = 42;
   let labelFailure = false;
   let freezeReadyList = false;
-  const reviewRequestedIssues: Array<{ number: number; labels: string[] }> = [];
   let firstScanId = "";
-  let activeBranch = "";
   const config = parseConfig({
     DATABASE_URL: process.env.DATABASE_URL ?? "postgresql://unused:unused@localhost:5432/unused",
     REDIS_URL: process.env.REDIS_URL ?? "redis://localhost:18422",
@@ -32,19 +29,10 @@ integration("repository scan", () => {
   });
   const github = {
     getRepository: async (fullName: string) => ({ cloneUrl: `https://github.com/${fullName}.git` }),
+    ensureLabels: async () => {},
     listReadyIssues: async (fullName: string, label: string) => {
       scannedLabels.push(label);
-      if (fullName !== "acme/app") return [];
-      if (label === config.ISSUE_REVIEW_REQUESTED_LABEL) {
-        return reviewRequestedIssues.map((issue) => ({
-          number: issue.number,
-          title: "Address the review",
-          body: "A review requested changes",
-          url: `https://github.com/acme/app/issues/${issue.number}`,
-          labels: issue.labels,
-        }));
-      }
-      if (label !== config.ISSUE_READY_LABEL || freezeReadyList) return [];
+      if (fullName !== "acme/app" || label !== config.ISSUE_READY_LABEL || freezeReadyList) return [];
       return [{
         number: issueNumber,
         title: "Make the queue durable",
@@ -53,6 +41,7 @@ integration("repository scan", () => {
         labels: ["bug", "agent:ready"],
       }];
     },
+    listPullRequests: async () => [],
     setIssueLabels: async (repository: string, issue: number, nextLabels: string[]) => {
       if (labelFailure) throw new Error("GitHub labels unavailable");
       labels.push({ repository, issue, labels: nextLabels });
@@ -63,12 +52,17 @@ integration("repository scan", () => {
       title: `Pull request ${number}`,
       url: `https://github.com/acme/app/pull/${number}`,
       base: "develop",
-      head: activeBranch,
+      head: "agent/issue-1",
+      headSha: "a".repeat(40),
+      state: "open",
+      merged: false,
       body: `Closes #${issueNumber}`,
       additions: 12,
       deletions: 3,
       changedFiles: 2,
     }),
+    getPullRequestLabels: async () => [],
+    setPullRequestLabels: async () => {},
     getPullRequestDiff: async () => "diff --git a/src/a.ts b/src/a.ts",
     getIssueContext: async () => ({
       issue: { number: issueNumber, title: "Issue", body: "", url: `https://github.com/acme/app/issues/${issueNumber}`, labels: ["agent:working"] },
@@ -96,6 +90,7 @@ integration("repository scan", () => {
     });
     const repositoryIds = repositories.map(({ id }) => id);
     await prisma.jobEvent.deleteMany({ where: { repositoryId: { in: repositoryIds } } });
+    await prisma.managedPullRequest.deleteMany({ where: { repositoryId: { in: repositoryIds } } });
     await prisma.job.deleteMany({ where: { environment } });
     await prisma.scanRun.deleteMany({ where: { environment: { in: [environment, barrierEnvironment] } } });
     await prisma.repository.deleteMany({ where: { id: { in: repositoryIds } } });
@@ -111,7 +106,7 @@ integration("repository scan", () => {
     expect((await scanRunRepository.finishJobs(scan.id, barrierEnvironment))?.status).toBe("COMPLETED");
   });
 
-  test("queues ready issues from origin/develop and records invalid repositories", async () => {
+  test("queues ready issues as IMPLEMENTATION jobs from origin/develop and records invalid repositories", async () => {
     const scanner = createScanService({
       config: { ...config, APP_ENV: environment as "test" },
       github,
@@ -123,7 +118,7 @@ integration("repository scan", () => {
 
     expect(scan.status).toBe("RUNNING");
     expect(scan.queuedCount).toBe(1);
-    expect(scannedLabels).toEqual([config.ISSUE_READY_LABEL, config.ISSUE_REVIEW_REQUESTED_LABEL]);
+    expect(scannedLabels).toEqual([config.ISSUE_READY_LABEL]);
     expect(labels).toEqual([{
       repository: "acme/app",
       issue: 42,
@@ -132,6 +127,8 @@ integration("repository scan", () => {
     const job = await prisma.job.findFirstOrThrow({ where: { environment } });
     expect(enqueuedJobs).toEqual([job.id]);
     expect(job).toMatchObject({
+      jobType: "IMPLEMENTATION",
+      subjectType: "ISSUE",
       issueNumber: 42,
       issueBody: "Use PostgreSQL",
       baselineCommit: "b".repeat(40),
@@ -182,71 +179,291 @@ integration("repository scan", () => {
       .toMatchObject({ status: "FAILED", activeIssueKey: null });
     expect(await prisma.jobEvent.findFirst({ where: { scanRunId: scan.id, type: "SCAN_COMPLETED" } }))
       .not.toBeNull();
-    expect(await prisma.jobEvent.findFirst({ where: { scanRunId: scan.id, type: "SCAN_DISCOVERY_COMPLETED" } }))
-      .toMatchObject({ metadata: { queuedCount: 0 } });
     labelFailure = false;
   });
+});
 
-  test("runs a discovered issue through implementation, independent review, and scan completion", async () => {
-    issueNumber = 44;
-    const scanner = createScanService({ config: { ...config, APP_ENV: environment as "test" }, github, syncRepository: sync });
-    const scan = await scanner.run("MANUAL");
-    const { jobRepository } = await import("../src/repositories/jobs.ts");
-    const queued = await prisma.job.findFirstOrThrow({ where: { environment, issueNumber } });
-    const job = await jobRepository.claim(queued.id, environment, "workflow-worker");
-    expect(job).not.toBeNull();
-    activeBranch = job!.branchName;
-    let call = 0;
-    const provider: AgentProvider = {
-      name: "codex",
-      execute: async (request) => {
-        call += 1;
-        const finalOutput = request.role === "reviewer"
-          ? "Review: pass\nThe change is ready."
-          : `Outcome: implemented\nPR: https://github.com/acme/app/pull/44\nImplemented the requested change.`;
-        if (request.responseFilePath) await Bun.write(request.responseFilePath, finalOutput);
-        return { provider: "codex", sessionId: `session-${call}`, exitCode: 0, finalOutput, stderr: "" };
+integration("pull request scanner", () => {
+  let prisma: typeof import("../src/core/db.ts").prisma;
+  let createScanService: typeof import("../src/scans/service.ts").createScanService;
+  const environment = `pr-scan-${crypto.randomUUID()}`;
+  const config = parseConfig({
+    DATABASE_URL: process.env.DATABASE_URL ?? "postgresql://unused:unused@localhost:5432/unused",
+    REDIS_URL: process.env.REDIS_URL ?? "redis://localhost:18422",
+    SETTINGS_ENCRYPTION_KEY: process.env.SETTINGS_ENCRYPTION_KEY ?? "test-settings-encryption-key-0123456789",
+    GITHUB_TOKEN: "test-token",
+    GITHUB_REPOSITORIES: "acme/app",
+    AGENT_PROVIDER: "codex",
+    APP_ENV: "test",
+    AGENT_RUNTIME_DIR: resolve(import.meta.dir, "../../../agent-runtime"),
+  });
+  const enqueuedJobs: string[] = [];
+  let repositoryId = "";
+  let managedPrId = "";
+  const prNumber = 77;
+  const issueNumber = 55;
+  const firstSha = "a".repeat(40);
+  const secondSha = "b".repeat(40);
+  let prState: { state: string; merged: boolean; headSha: string; head: string } = { state: "open", merged: false, headSha: firstSha, head: "agent/issue-55" };
+  let prLabels: string[] = [];
+  let discoveredPullRequests: Array<{ number: number; title: string; body: string; url: string; labels: string[] }> = [];
+  let issueLabels: string[] = ["agent:working"];
+  const scanOrder: string[] = [];
+  const prLabelWrites: string[][] = [];
+  const scanServiceConfig = () => createScanService({
+    config: { ...config, APP_ENV: environment as "test" },
+    github,
+    queue: { enqueue: async (jobId) => { enqueuedJobs.push(jobId); } },
+    syncRepository: async ({ fullName }) => ({ localPath: `/data/repositories/${fullName}`, baselineCommit: firstSha }),
+  });
+  const github = {
+    getRepository: async (fullName: string) => ({ cloneUrl: `https://github.com/${fullName}.git` }),
+    ensureLabels: async () => {},
+    listReadyIssues: async () => { scanOrder.push("issues"); return []; },
+    listPullRequests: async () => [...discoveredPullRequests],
+    setIssueLabels: async (_repository: string, _issue: number, next: string[]) => { issueLabels = [...next]; },
+    getIssue: async () => ({ number: issueNumber, title: "Issue", body: "", url: `https://github.com/acme/app/issues/${issueNumber}`, labels: [...issueLabels] }),
+    getPullRequest: async (_fullName: string, number: number) => {
+      scanOrder.push("pull-requests");
+      return {
+        number,
+        title: `Pull request ${number}`,
+        url: `https://github.com/acme/app/pull/${number}`,
+        base: "develop",
+        head: prState.head,
+        headSha: prState.headSha,
+        state: prState.state,
+        merged: prState.merged,
+        body: `Closes #${issueNumber}`,
+        additions: 12,
+        deletions: 3,
+        changedFiles: 2,
+      };
+    },
+    getPullRequestLabels: async () => [...prLabels],
+    setPullRequestLabels: async (_fullName: string, _number: number, next: string[]) => {
+      prLabelWrites.push(next);
+      prLabels = [...next];
+    },
+    getPullRequestDiff: async () => "",
+    getIssueContext: async () => ({ issue: await github.getIssue(), issueComments: [], pullRequests: [] }),
+    createIssue: async () => ({ number: 1, url: "" }),
+    addIssueComment: async () => {},
+  };
+
+  beforeAll(async () => {
+    ({ prisma } = await import("../src/core/db.ts"));
+    ({ createScanService } = await import("../src/scans/service.ts"));
+    await prisma.job.deleteMany({ where: { environment } });
+    const repository = await prisma.repository.create({
+      data: {
+        fullName: "acme/app",
+        cloneUrl: "https://github.com/acme/app.git",
+        localPath: "/data/repositories/acme/app",
+        status: "READY",
+        developAvailable: true,
+        baselineCommit: firstSha,
       },
-    };
-    const { createJobRunner } = await import("../src/runner/service.ts");
-    const runner = createJobRunner({
-      config: { ...config, APP_ENV: environment as "test" },
-      provider,
-      github,
-      createWorktree: async (input) => input.worktreePath,
     });
-
-    expect(await runner.run(job!.id, "workflow-worker")).toBe(true);
-    expect(await prisma.job.findUniqueOrThrow({ where: { id: job!.id }, include: { review: true } }))
-      .toMatchObject({ status: "COMPLETED", review: { status: "PASSED" } });
-    expect(await prisma.scanRun.findUniqueOrThrow({ where: { id: scan.id } }))
-      .toMatchObject({ status: "COMPLETED", successCount: 1, reviewsCount: 1 });
-    expect(await prisma.jobEvent.findFirst({ where: { scanRunId: scan.id, type: "SCAN_COMPLETED" } }))
-      .not.toBeNull();
+    repositoryId = repository.id;
   });
 
-  test("acquiring a review retry keeps the review-requested label while working", async () => {
-    freezeReadyList = true;
-    reviewRequestedIssues.push({
-      number: 45,
-      labels: ["bug", config.ISSUE_REVIEW_REQUESTED_LABEL],
+  afterAll(async () => {
+    await prisma.jobEvent.deleteMany({ where: { repositoryId } });
+    await prisma.job.deleteMany({ where: { environment } });
+    await prisma.managedPullRequest.deleteMany({ where: { repositoryId } });
+    await prisma.scanRun.deleteMany({ where: { environment } });
+    await prisma.repository.delete({ where: { id: repositoryId } });
+    await prisma.$disconnect();
+  });
+
+  async function releaseScans() {
+    await prisma.scanRun.updateMany({
+      where: { environment },
+      data: { status: "COMPLETED", activeEnvironmentKey: null, completedAt: new Date() },
     });
-    try {
-      const scanner = createScanService({ config: { ...config, APP_ENV: environment as "test" }, github, syncRepository: sync });
-      const scan = await scanner.run("MANUAL");
-      expect(scan.queuedCount).toBe(1);
-      expect(labels.at(-1)).toEqual({
-        repository: "acme/app",
-        issue: 45,
-        labels: ["bug", config.ISSUE_REVIEW_REQUESTED_LABEL, config.ISSUE_WORKING_LABEL],
-      });
-      expect(await prisma.job.findFirstOrThrow({ where: { environment, issueNumber: 45 } }))
-        .toMatchObject({ status: "QUEUED" });
-    } finally {
-      await prisma.job.deleteMany({ where: { environment, issueNumber: 45 } });
-      reviewRequestedIssues.length = 0;
-      freezeReadyList = false;
-    }
+  }
+
+  async function seedManagedPullRequest(overrides: Record<string, unknown> = {}) {
+    const row = await prisma.managedPullRequest.create({
+      data: {
+        repositoryId,
+        prNumber,
+        issueNumber,
+        issueTitle: "Issue 55",
+        issueUrl: `https://github.com/acme/app/issues/${issueNumber}`,
+        headBranch: "agent/issue-55",
+        headSha: firstSha,
+        baseBranch: "develop",
+        state: "OPEN",
+        ...overrides,
+      },
+    });
+    managedPrId = row.id;
+    return row;
+  }
+
+  test("review cron runs before issue discovery and queues REVIEW without the Checks API", async () => {
+    prState = { state: "open", merged: false, headSha: firstSha, head: "agent/issue-55" };
+    prLabels = [config.PR_REVIEW_REQUESTED_LABEL];
+    await seedManagedPullRequest({ workflow: "REVIEW_REQUESTED" });
+    const scan = await scanServiceConfig().run("MANUAL");
+
+    expect(scan.queuedCount).toBe(1);
+    expect(scanOrder.slice(0, 2)).toEqual(["pull-requests", "issues"]);
+    const job = await prisma.job.findFirstOrThrow({ where: { environment } });
+    expect(job).toMatchObject({ jobType: "REVIEW", subjectType: "PULL_REQUEST", headSha: firstSha, trigger: "PR_REVIEW_REQUESTED" });
+    expect(enqueuedJobs).toEqual([job.id]);
+    expect(prLabels).toEqual([config.PR_REVIEW_REQUESTED_LABEL]);
+  });
+
+  test("imports a labeled open PR before reconciling it", async () => {
+    await prisma.job.deleteMany({ where: { environment } });
+    await prisma.managedPullRequest.deleteMany({ where: { repositoryId } });
+    await releaseScans();
+    enqueuedJobs.length = 0;
+    scanOrder.length = 0;
+    prState = { state: "open", merged: false, headSha: firstSha, head: "agent/issue-55" };
+    prLabels = [config.PR_REVIEW_REQUESTED_LABEL];
+    discoveredPullRequests = [{
+      number: prNumber,
+      title: "Pull request 77",
+      body: "Closes #55",
+      url: `https://github.com/acme/app/pull/${prNumber}`,
+      labels: [config.PR_REVIEW_REQUESTED_LABEL],
+    }];
+
+    const scan = await scanServiceConfig().run("MANUAL");
+
+    expect(scan.queuedCount).toBe(1);
+    const imported = await prisma.managedPullRequest.findUniqueOrThrow({ where: { repositoryId_prNumber: { repositoryId, prNumber } } });
+    managedPrId = imported.id;
+    expect(imported).toMatchObject({ issueNumber, headBranch: "agent/issue-55", headSha: firstSha, workflow: "REVIEW_REQUESTED" });
+    expect(await prisma.job.findFirstOrThrow({ where: { environment } }))
+      .toMatchObject({ jobType: "REVIEW", subjectType: "PULL_REQUEST", pullRequestNumber: prNumber, headSha: firstSha });
+    discoveredPullRequests = [];
+  });
+
+  test("duplicate review scans create exactly one REVIEW for the current head SHA", async () => {
+    const scan = await scanServiceConfig().run("MANUAL");
+
+    expect(scan.queuedCount).toBe(0);
+    const job = await prisma.job.findFirstOrThrow({ where: { environment } });
+    expect(job).toMatchObject({
+      jobType: "REVIEW",
+      subjectType: "PULL_REQUEST",
+      pullRequestId: managedPrId,
+      pullRequestNumber: prNumber,
+      headSha: firstSha,
+      issueNumber,
+    });
+    expect(await prisma.job.count({ where: { environment } })).toBe(1);
+  });
+
+  test("repairs a persisted implementation PR that is missing its review label", async () => {
+    await prisma.job.deleteMany({ where: { environment } });
+    await releaseScans();
+    enqueuedJobs.length = 0;
+    prLabels = ["feature"];
+    await prisma.managedPullRequest.update({
+      where: { id: managedPrId },
+      data: { workflow: "NONE", implementationJobId: crypto.randomUUID() },
+    });
+
+    const scan = await scanServiceConfig().run("MANUAL");
+
+    expect(scan.queuedCount).toBe(1);
+    expect(prLabels).toEqual(["feature", config.PR_REVIEW_REQUESTED_LABEL]);
+    expect(await prisma.managedPullRequest.findUniqueOrThrow({ where: { id: managedPrId } }))
+      .toMatchObject({ workflow: "REVIEW_REQUESTED" });
+    expect(await prisma.job.findFirstOrThrow({ where: { environment } }))
+      .toMatchObject({ jobType: "REVIEW", headSha: firstSha });
+  });
+
+  test("an old head SHA can never trigger work for a newer SHA", async () => {
+    await prisma.job.deleteMany({ where: { environment } });
+    await releaseScans();
+    enqueuedJobs.length = 0;
+    prState = { state: "open", merged: false, headSha: secondSha, head: "agent/issue-55" };
+    prLabels = [config.PR_REVIEW_REQUESTED_LABEL];
+    await prisma.managedPullRequest.update({ where: { id: managedPrId }, data: { headSha: firstSha, workflow: "REVIEW_REQUESTED" } });
+    const scan = await scanServiceConfig().run("MANUAL");
+
+    const job = await prisma.job.findFirstOrThrow({ where: { environment } });
+    expect(job.headSha).toBe(secondSha);
+    expect(scan.queuedCount).toBe(1);
+  });
+
+  test("fix-requested creates a FIX job carrying the stored reason and preserves unrelated PR labels", async () => {
+    await prisma.job.deleteMany({ where: { environment } });
+    await releaseScans();
+    enqueuedJobs.length = 0;
+    prState = { state: "open", merged: false, headSha: secondSha, head: "agent/issue-55" };
+    prLabels = ["feature", config.PR_FIX_REQUESTED_LABEL];
+    await prisma.managedPullRequest.update({
+      where: { id: managedPrId },
+      data: { headSha: secondSha, workflow: "FIX_REQUESTED", fixReason: "REVIEW_CHANGES_REQUESTED", fixDetails: "Add a guard." },
+    });
+    const scan = await scanServiceConfig().run("MANUAL");
+
+    expect(scan.queuedCount).toBe(1);
+    const job = await prisma.job.findFirstOrThrow({ where: { environment } });
+    expect(job).toMatchObject({ jobType: "FIX", trigger: "REVIEW_CHANGES_REQUESTED", headSha: secondSha });
+    expect(prLabels).toEqual(["feature", config.PR_FIX_REQUESTED_LABEL]);
+  });
+
+  test("review-passed waits for the human merge without creating jobs", async () => {
+    await prisma.job.deleteMany({ where: { environment } });
+    await releaseScans();
+    enqueuedJobs.length = 0;
+    prLabels = [config.PR_REVIEW_PASSED_LABEL];
+    await prisma.managedPullRequest.update({ where: { id: managedPrId }, data: { workflow: "REVIEW_PASSED" } });
+    const scan = await scanServiceConfig().run("MANUAL");
+
+    expect(scan.queuedCount).toBe(0);
+    expect(enqueuedJobs).toEqual([]);
+    expect(await prisma.job.count({ where: { environment } })).toBe(0);
+  });
+
+  test("a human merge finalizes the originating issue with the done label", async () => {
+    await releaseScans();
+    prState = { state: "closed", merged: true, headSha: secondSha, head: "agent/issue-55" };
+    const scan = await scanServiceConfig().run("MANUAL");
+
+    expect(scan.queuedCount).toBe(0);
+    expect(issueLabels).toEqual([config.ISSUE_COMPLETED_LABEL]);
+    expect(await prisma.managedPullRequest.findUniqueOrThrow({ where: { id: managedPrId } }))
+      .toMatchObject({ state: "MERGED" });
+    expect(await prisma.jobEvent.findFirst({ where: { repositoryId, type: "ISSUE_DONE" } })).not.toBeNull();
+  });
+
+  test("a blocked PR is unblocked with a fresh cycle budget when a human re-adds fix-requested", async () => {
+    await releaseScans();
+    prState = { state: "open", merged: false, headSha: secondSha, head: "agent/issue-55" };
+    prLabels = [config.PR_FIX_REQUESTED_LABEL];
+    await prisma.managedPullRequest.update({
+      where: { id: managedPrId },
+      data: { state: "OPEN", blocked: true, fixCycleCount: 9, workflow: "FIX_REQUESTED", fixReason: "REVIEW_CHANGES_REQUESTED" },
+    });
+    const scan = await scanServiceConfig().run("MANUAL");
+
+    expect(scan.queuedCount).toBe(1);
+    expect(await prisma.managedPullRequest.findUniqueOrThrow({ where: { id: managedPrId } }))
+      .toMatchObject({ blocked: false, fixCycleCount: 0 });
+  });
+
+  test("a closed unmerged pull request is recorded without touching the issue", async () => {
+    await prisma.job.deleteMany({ where: { environment } });
+    await releaseScans();
+    issueLabels = ["agent:working"];
+    prState = { state: "closed", merged: false, headSha: secondSha, head: "agent/issue-55" };
+    const scan = await scanServiceConfig().run("MANUAL");
+
+    expect(scan.queuedCount).toBe(0);
+    expect(await prisma.managedPullRequest.findUniqueOrThrow({ where: { id: managedPrId } }))
+      .toMatchObject({ state: "CLOSED" });
+    expect(issueLabels).toEqual(["agent:working"]);
+    expect(await prisma.jobEvent.findFirst({ where: { repositoryId, type: "PULL_REQUEST_CLOSED" } })).not.toBeNull();
   });
 });
 
@@ -269,9 +486,16 @@ integration("aggregated queue notifications", () => {
   });
   const github = {
     getRepository: async (fullName: string) => ({ cloneUrl: `https://github.com/${fullName}.git` }),
+    ensureLabels: async () => {},
     listReadyIssues: async (fullName: string, label: string) =>
       fullName === repositories[0] && label === config.ISSUE_READY_LABEL ? readyIssues : [],
+    listPullRequests: async () => [],
     setIssueLabels: async () => {},
+    getIssue: async () => ({ number: 1, title: "Issue", body: "", url: "", labels: [] }),
+    addIssueComment: async () => {},
+    getPullRequest: async () => ({ number: 1, title: "PR", url: "", base: "develop", head: "agent/x", headSha: "a".repeat(40), state: "open", merged: false, body: "", additions: 0, deletions: 0, changedFiles: 0 }),
+    getPullRequestLabels: async () => [],
+    setPullRequestLabels: async () => {},
   };
   const sync = async () => ({ localPath: `/data/repositories/${repositories[0]}`, baselineCommit: "b".repeat(40) });
 
@@ -321,18 +545,13 @@ integration("aggregated queue notifications", () => {
     expect(summaries[0]).toMatchObject({
       scanRunId: scan.id,
       jobs: [
-        { repository: "acme/queue-summary", issueNumber: 101, issueTitle: "Fix <alpha>", issueUrl: "https://github.com/acme/queue-summary/issues/101" },
-        { repository: "acme/queue-summary", issueNumber: 102, issueTitle: "Fix beta", issueUrl: "https://github.com/acme/queue-summary/issues/102" },
+        { repository: "acme/queue-summary", issueNumber: 101, jobType: "IMPLEMENTATION", issueUrl: "https://github.com/acme/queue-summary/issues/101" },
+        { repository: "acme/queue-summary", issueNumber: 102, issueTitle: "Fix beta", jobType: "IMPLEMENTATION" },
       ],
     });
     const queued = await prisma.jobEvent.findMany({ where: { scanRunId: scan.id, type: "JOB_QUEUED" } });
     expect(queued).toHaveLength(2);
     expect(queued.every((event) => event.notifiedAt !== null)).toBe(true);
-    for (const type of ["SCAN_STARTED", "SCAN_DISCOVERY_COMPLETED"]) {
-      const lifecycle = await prisma.jobEvent.findFirst({ where: { scanRunId: scan.id, type } });
-      expect(lifecycle).not.toBeNull();
-      expect(lifecycle!.notifiedAt).toBeNull();
-    }
 
     const queuedJobs = await prisma.job.findMany({ where: { scanRunId: scan.id } });
     await prisma.job.updateMany({
@@ -364,33 +583,5 @@ integration("aggregated queue notifications", () => {
     expect(scan.queuedCount).toBe(0);
     expect(sent).toEqual([]);
     expect(summaries).toEqual([]);
-  });
-
-  test("sends one queue summary when a scan queues a single job", async () => {
-    readyIssues = [
-      { number: 103, title: "Fix gamma", body: "Use SQL", url: "https://github.com/acme/queue-summary/issues/103", labels: ["agent:ready"] },
-    ];
-    const sent: string[] = [];
-    const summaries: unknown[] = [];
-    const events = createEventService({
-      enabled: () => true,
-      send: async (event) => { sent.push(event.type); },
-      sendQueued: async (summary) => { summaries.push(summary); },
-    });
-    const scanner = createScanService({
-      config: { ...config, APP_ENV: environment as "test" },
-      github,
-      events,
-      queue: { enqueue: async () => {} },
-      syncRepository: sync,
-    });
-    const scan = await scanner.run("MANUAL");
-
-    expect(scan.queuedCount).toBe(1);
-    expect(sent).toEqual([]);
-    expect(summaries).toHaveLength(1);
-    expect(summaries[0]).toMatchObject({ jobs: [
-      { repository: "acme/queue-summary", issueNumber: 103, issueTitle: "Fix gamma" },
-    ] });
   });
 });

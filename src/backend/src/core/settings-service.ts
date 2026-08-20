@@ -9,17 +9,20 @@ import {
   runtimeSettingValues,
   runtimeSettingsView,
   telegramBootstrapValues,
+  type RuntimeSettingKey,
 } from "./runtime-settings.ts";
 import { settingsRepository } from "../repositories/settings.ts";
 
 export function createSettingsService(config: Config) {
+  const environmentBase = configEnvironment(config);
+
   async function reload() {
     const rows = await settingsRepository.list(config.APP_ENV);
     const overrides = Object.fromEntries(rows.map((row) => [
       row.key,
       row.secret ? decryptSetting(row.value, config.SETTINGS_ENCRYPTION_KEY) : row.value,
     ]));
-    Object.assign(config, applyRuntimeSettings(config, overrides));
+    Object.assign(config, applyRuntimeSettings(config, overrides, environmentBase));
     return config;
   }
 
@@ -61,10 +64,18 @@ export function createSettingsService(config: Config) {
     return config;
   }
 
+  async function remove(patchKey: RuntimeSettingKey) {
+    const definition = runtimeSettingDefinitions.find((item) => item.patchKey === patchKey);
+    if (!definition) throw new Error(`Unsupported runtime setting: ${patchKey}`);
+    await settingsRepository.removeMany(config.APP_ENV, [definition.key]);
+    return reload();
+  }
+
   return {
     initialize,
     reload,
     update,
+    remove,
     view: () => runtimeSettingsView(config),
   };
 }

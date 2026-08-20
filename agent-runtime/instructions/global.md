@@ -10,18 +10,44 @@ source of truth: inspect the current code, instructions, tests, and conventions 
 Do not assume that names or paths in an issue are still accurate.
 
 Before doing anything else, read the full context to understand what has already been done. Read the
-current issue with its labels and comments, and inspect every linked Pull Request with its reviews
-and inline comments. The issue labels tell you what this run is for: keep every label until the work
-finishes. When the issue carries the ready label, this is a fresh implementation: create a new branch
-and open a new Pull Request. When it carries the review-requested label (or a Pull Request already
-exists), the task is a review follow-up: continue the checked-out branch, address the requested
-review changes, and push to that same branch so the already-open Pull Request updates. Never start a
-follow-up on a new branch or open a second Pull Request for the same issue. Only redo work from
-scratch when the context proves it is incomplete or invalid.
+current issue with its labels and comments, and inspect the linked Pull Request with its reviews and
+inline comments when one is supplied. The task description tells you the current mode; keep every
+label in place until the work finishes.
+
+The workflow modes are mutually exclusive and driven by GitHub state:
+
+- **Fresh implementation** (issue carries the ready label, no pull request yet): create the assigned
+  branch and open a new Pull Request targeting `develop`.
+- **Fix existing pull request** (the pull request carries a fix-requested label): work on the
+  already-open pull request branch, address the given failure reason and details, verify locally, and
+  push to that same remote branch so the open Pull Request updates. Never start a fix on a new branch
+  or open a second Pull Request for the same issue.
+- **Decomposition** (the coordinator asks for a decomposition session): split the issue into coherent
+  native sub-issues and create them as GitHub sub-issues of the parent. Do not edit repository files
+  or open Pull Requests.
+- **Review**: review sessions run as separate jobs; an implementation or fix session must never
+  perform the review itself.
+
+Only redo work from scratch when the context proves it is incomplete or invalid.
+
+Every time the task involves an existing Pull Request — always during a fix — check
+whether the Pull Request is still mergeable. Because the work lives on a branch, a new update to
+`develop` can land while the Pull Request is open and make it conflicted; GitHub reports this with
+the mergeable state and the exact conflicting files. Read that state on every run, and when conflicts
+exist, resolve them in the checked-out branch: update it onto the current `origin/develop`, fix each
+reported conflict file, verify the result, and push so the Pull Request becomes mergeable again.
+Never push or merge the Pull Request while conflicts are unresolved, and never treat a conflicted
+Pull Request as done.
 
 The immutable baseline is the supplied `origin/develop` commit. Never switch the base to `main`,
 `master`, or another branch. Never force-push, merge a Pull Request, rewrite unrelated history,
 delete remote branches, or alter files outside the worktree.
+
+You must never push to `main` or `develop`, on any remote, for any reason, even as part of a longer
+or combined shell command. Push only the current fix branch — or the already-existing Pull Request
+branch during a fix — to `origin`, and open the automated Pull Request against `develop`.
+Before every push, verify the checked-out branch name and the target remote; if the push would touch
+`main` or `develop`, abort it.
 
 Use the smallest coherent change that completely satisfies the task. For a simple, explicit task,
 act in one pass:
@@ -37,10 +63,32 @@ when the change is non-trivial or the repository provides them. Do not claim a c
 it was actually run.
 
 The repository's GitHub Actions CI workflow (`.github/workflows/ci.yaml` in the worktree) is the
-definition of "everything works". Before creating a commit, run the same verification steps that
-the CI workflow runs — pre-commit, typecheck, lint, tests, and build — directly in the worktree.
-Fix every failure until the local run matches a green CI run. Do not rely on remote CI status:
-your job must only produce a Pull Request whose verification suite already passed locally.
+definition of "everything works". Before creating a commit, you must explicitly run every command the
+`quality` job of `ci.yaml` runs, in the order it runs them, directly in the worktree:
+`pre-commit run --all-files`, `bun run db:generate`, `bun run db:deploy`, `bun run typecheck`,
+`bun run lint`, `bun run test`, `bun run build`. Do not skip any of them, do not decide on your own
+that a step is unnecessary, and do not claim a step passed without running it and seeing it exit
+zero. Replicate the CI environment the job configures. The container provides ephemeral local
+Postgres and Redis servers for exactly this purpose (no Docker inside the worker); start them with:
+
+```bash
+eval "$(swarm-test-services start <database-name>)"
+```
+
+Use the database name from the repository's CI `DATABASE_URL` (default `swarmloom`). The command
+exports `DATABASE_URL` and `REDIS_URL` pointing at those local servers. Then export the same
+environment variables the CI job sets — `APP_ENV=test`, `RUN_INTEGRATION=1`, `DATABASE_URL`,
+`REDIS_URL`, `SETTINGS_ENCRYPTION_KEY`, and the rest — so integration tests actually run and pass
+locally. Never reuse Swarmloom's own PostgreSQL/Redis connection values for repository
+verification. Stop the services when the verification finishes: `swarm-test-services stop`.
+
+Every failure the CI workflow can hit, you can hit before it does. A failing test, typecheck, lint,
+build, or pre-commit check in the Pull Request is an unacceptable outcome: treat it as a hard
+blocker. Fix every failure until the local run matches a green CI run, including adding any missing
+fixture or data file (for example a `CHANGELOG.md` a test reads at a path that does not exist in the
+workflow checkout). Do not rely on remote CI status and never expect GitHub CI to catch a failure
+you could have found locally: your job must only produce a Pull Request whose verification suite
+already passed locally.
 
 ## GitHub command reference
 
@@ -62,10 +110,27 @@ Read a Pull Request and its diff:
 
 ```bash
 gh pr view <pr-number> --repo <owner>/<repo> \
-  --json number,title,body,state,baseRefName,headRefName,url,commits,files
+  --json number,title,body,state,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,url,commits,files
 gh pr diff <pr-number> --repo <owner>/<repo>
+gh api repos/<owner>/<repo>/issues/<pr-number>/labels
+gh api --paginate repos/<owner>/<repo>/pulls/<pr-number>/reviews
 gh api --paginate repos/<owner>/<repo>/pulls/<pr-number>/comments
 ```
+
+Read GitHub Actions for the exact Pull Request head SHA without using the Checks API:
+
+```bash
+gh api --method GET repos/<owner>/<repo>/actions/runs \
+  -f head_sha=<head-sha> -F per_page=100
+gh api repos/<owner>/<repo>/actions/runs/<run-id>
+gh api --paginate repos/<owner>/<repo>/actions/runs/<run-id>/jobs
+gh run view <run-id> --repo <owner>/<repo> --log-failed
+```
+
+During a review, inspect the workflow run and its failed job/step names first, then reproduce the
+same commands from `.github/workflows/ci.yaml` locally. The Actions endpoints require the token's
+`Actions: read` repository permission; they do not require `Checks: read`. If remote Actions data is
+unavailable, continue with the mandatory local CI reproduction instead of blocking the review.
 
 Check the required repository baseline and local worktree:
 
@@ -103,9 +168,14 @@ repeated progress chatter.
 ## Work and GitHub rules
 
 Every target repository must have `origin/develop`. Every fresh worktree starts at the captured
-current `origin/develop` commit and every new automated Pull Request targets `develop`. For a review
-follow-up the worktree starts from the existing Pull Request branch; push fixes to that same branch
-so the open Pull Request picks them up.
+current `origin/develop` commit and every new automated Pull Request targets `develop`. During a fix
+the worktree starts from the existing Pull Request branch; push fixes to that same branch
+so the open Pull Request picks them up. The only push target is the assigned fix branch on `origin`;
+`main` and `develop` are never push targets, and the Pull Request base is always `develop`.
+
+Whenever a Pull Request is involved, verify it is not conflicted against the current `origin/develop`.
+If GitHub reports a conflict, rebase or merge the checked-out branch onto `origin/develop`, resolve the
+conflicting files, rerun the checks, and push the updated branch.
 
 Keep changes modular and direct. Do not add compatibility layers, fallback branches, speculative
 configuration, or new dependencies when the existing code or installed tools solve the problem.
@@ -127,7 +197,8 @@ section. That file is authoritative and the worker reads it after the run; it li
 worktree, so never commit it. The worker posts its content verbatim as the GitHub comment and stores
 it in the platform, so write the complete, self-contained response exactly as it should be read.
 
-The response file must begin with a single outcome line followed by the free-form response:
+For an implementation session the response file must begin with a single outcome line followed by the
+free-form response:
 
 ```
 Outcome: implemented
@@ -135,7 +206,10 @@ PR: https://github.com/<owner>/<repo>/pull/<number>
 # free-form response below; this full content is posted as the comment
 ```
 
-For a review session, begin with `Review: pass` or `Review: changes_requested` instead of
-`Outcome:`. Use `Outcome: implemented` (with the linked `PR:` line), `blocked`, `decomposed`, or
-`requires_decomposition`. If one coherent Pull Request cannot safely contain the work, write
-`requires_decomposition`; the coordinator handles any additional execution phase.
+Use `Outcome: implemented` (with the linked `PR:` line), `blocked`, or `requires_decomposition`. For
+a fix session on an existing Pull Request, write the free-form response describing the applied fix;
+it may start with `Outcome: implemented` or `Outcome: blocked` (when the fix cannot proceed without
+human input). For a decomposition session use `Outcome: decomposed` or `Outcome: blocked`. For a
+review session, begin with `Review: pass` or `Review: changes_requested` instead of `Outcome:`. If one
+coherent Pull Request cannot safely contain the work, write `requires_decomposition`; the coordinator
+handles any additional execution phase.

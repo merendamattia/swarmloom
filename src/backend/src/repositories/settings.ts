@@ -13,5 +13,9 @@ async function upsertMany(environment: string, values: Array<{ key: string; valu
   })));
 }
 
-export const settingsRepository = { list, upsertMany };
+async function removeMany(environment: string, keys: string[]) {
+  return prisma.runtimeSetting.deleteMany({ where: { environment, key: { in: keys } } });
+}
+
+export const settingsRepository = { list, upsertMany, removeMany };
 export type StoredRuntimeSetting = RuntimeSetting;

@@ -8,18 +8,21 @@ import type { Config } from "../core/config-schema.ts";
 import type { SettingsService } from "../core/settings-service.ts";
 import { parseRuntimeSettingsPatch, runtimeSettingsView } from "../core/runtime-settings.ts";
 import { prisma } from "../core/db.ts";
+import { buildHealthServices } from "./health.ts";
 import { logger } from "../core/logger.ts";
 import { redactSecrets } from "../core/secrets.ts";
 import { checkProviderAuthentication } from "../core/startup.ts";
 import type { EventService } from "../events/service.ts";
 import type { GitHubClient } from "../github/client.ts";
-import { replaceWorkerLabels } from "../github/labels.ts";
+import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.ts";
 import { jobRepository } from "../repositories/jobs.ts";
+import { repositoryRepository } from "../repositories/repositories.ts";
 import { finishScanIfComplete } from "../scans/finalize.ts";
 import type { JobQueue } from "../queue/service.ts";
 
 type Scanner = { run(source: "SCHEDULED" | "MANUAL"): Promise<{ id: string; status: string }> };
-type ApiGitHub = Pick<GitHubClient, "getIssue" | "setIssueLabels" | "addIssueComment">;
+type ApiGitHub = Pick<GitHubClient,
+  "getIssue" | "setIssueLabels" | "addIssueComment" | "getPullRequestLabels" | "setPullRequestLabels">;
 type Scheduler = { restart(): void };
 
 type Dependencies = {
@@ -35,6 +38,8 @@ type Dependencies = {
 
 const jobQuery = z.object({
   status: z.enum(["QUEUED", "RUNNING", "COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"]).optional(),
+  jobType: z.enum(["IMPLEMENTATION", "FIX", "REVIEW", "DECOMPOSITION"]).optional(),
+  subjectType: z.enum(["ISSUE", "PULL_REQUEST"]).optional(),
   provider: z.enum(["CODEX", "OPENCODE"]).optional(),
   repositoryId: z.string().optional(),
   q: z.string().trim().min(1).max(100).optional(),
@@ -42,12 +47,48 @@ const jobQuery = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
 });
 
+
+const jobSummaryFields = {
+  id: true,
+  jobType: true,
+  subjectType: true,
+  issueNumber: true,
+  issueTitle: true,
+  issueUrl: true,
+  status: true,
+  completedAt: true,
+  durationMs: true,
+  branchName: true,
+  baselineCommit: true,
+  pullRequestNumber: true,
+  pullRequestUrl: true,
+  headSha: true,
+  trigger: true,
+  provider: true,
+  model: true,
+  startedAt: true,
+  attempts: true,
+  errorMessage: true,
+  updatedAt: true,
+  createdAt: true,
+};
+
+const jobSummarySelect = {
+  ...jobSummaryFields,
+  repository: { select: { fullName: true } },
+  review: { select: { status: true } },
+} satisfies Prisma.JobSelect;
+
+const repositoryJobSummarySelect = {
+  ...jobSummaryFields,
+  review: { select: { status: true } },
+} satisfies Prisma.JobSelect;
 export function createApp({ config, scanner, github, events, startup, queue, settings, scheduler }: Dependencies) {
   const app = new Hono().basePath("/api");
   app.use("*", requestId(), secureHeaders(), cors({
     origin: config.FRONTEND_URL,
     allowHeaders: ["Content-Type"],
-    allowMethods: ["GET", "POST", "PATCH", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
   }));
   app.onError((error, context) => {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
@@ -63,23 +104,29 @@ export function createApp({ config, scanner, github, events, startup, queue, set
 
   return app
     .get("/health", async (context) => {
-      await prisma.$queryRaw`SELECT 1`;
-      await queue.health();
-      const worker = await prisma.serviceHeartbeat.findFirst({
-        where: { environment: config.APP_ENV, serviceName: "worker" },
-        orderBy: { lastSeenAt: "desc" },
-      });
+      const [databaseOk, queueOk, worker, api] = await Promise.all([
+        prisma.$queryRaw`SELECT 1`.then(() => true, () => false),
+        queue.health().then(() => true, () => false),
+        prisma.serviceHeartbeat.findFirst({
+          where: { environment: config.APP_ENV, serviceName: "worker" },
+          orderBy: { lastSeenAt: "desc" },
+        }).catch(() => null),
+        prisma.serviceHeartbeat.findFirst({
+          where: { environment: config.APP_ENV, serviceName: "api" },
+          orderBy: { lastSeenAt: "desc" },
+        }).catch(() => null),
+      ]);
       return context.json({
         status: "ok",
         environment: config.APP_ENV,
-        database: "ok",
-        queue: "ok",
-        scheduler: "running",
         provider: config.AGENT_PROVIDER,
-        worker: {
-          operational: Boolean(worker && worker.lastSeenAt.getTime() > Date.now() - config.STALE_JOB_THRESHOLD_MS),
-          lastSeenAt: worker?.lastSeenAt ?? null,
-        },
+        services: buildHealthServices({
+          api,
+          worker,
+          databaseOk,
+          queueOk,
+          staleThresholdMs: config.STALE_JOB_THRESHOLD_MS,
+        }),
       });
     })
     .get("/status", async (context) => {
@@ -131,13 +178,13 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         prisma.job.findMany({
           where: { environment: config.APP_ENV, status: "RUNNING" },
           orderBy: { startedAt: "asc" },
-          include: { repository: { select: { fullName: true } }, review: true },
+          select: jobSummarySelect,
         }),
         prisma.job.findMany({
           where: { environment: config.APP_ENV },
           orderBy: { createdAt: "desc" },
           take: 12,
-          include: { repository: { select: { fullName: true } }, review: true },
+          select: jobSummarySelect,
         }),
         prisma.scanRun.findMany({
           where: { environment: config.APP_ENV }, orderBy: { startedAt: "desc" }, take: 10,
@@ -172,7 +219,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         ...(q ? { OR: [
           { issueTitle: { contains: q, mode: "insensitive" } },
           { repository: { fullName: { contains: q, mode: "insensitive" } } },
-          ...(issueNumber ? [{ issueNumber }] : []),
+          ...(issueNumber ? [{ issueNumber }, { pullRequestNumber: issueNumber }] : []),
         ] } : {}),
       };
       const [items, total] = await Promise.all([
@@ -181,7 +228,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
           orderBy: { createdAt: "desc" },
           skip: (page - 1) * pageSize,
           take: pageSize,
-          include: { repository: { select: { fullName: true } }, review: true },
+          select: jobSummarySelect,
         }),
         prisma.job.count({ where }),
       ]);
@@ -193,6 +240,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         include: {
           repository: true,
           review: true,
+          pullRequest: true,
           events: { orderBy: { createdAt: "asc" } },
         },
       });
@@ -207,10 +255,35 @@ export function createApp({ config, scanner, github, events, startup, queue, set
           where: { environment: config.APP_ENV },
           orderBy: { createdAt: "desc" },
           take: 5,
-          include: { review: true },
+          select: repositoryJobSummarySelect,
         },
       },
     })))
+    .delete("/repositories/:id", async (context) => {
+      const id = context.req.param("id");
+      const existing = await prisma.repository.findUnique({ where: { id }, select: { fullName: true } });
+      if (!existing) return context.json({ error: "Not found" }, 404);
+      const remaining = config.githubRepositories.filter((name) => name !== existing.fullName);
+      const configured = remaining.length !== config.githubRepositories.length;
+      const result = await repositoryRepository.remove(id, existing.fullName, configured
+        ? { environment: config.APP_ENV, value: remaining.length > 0 ? remaining.join(",") : null }
+        : undefined);
+      if (result?.blocked) {
+        return context.json({
+          error: `Cannot remove the repository while ${result.activeJobs} active job${result.activeJobs === 1 ? "" : "s"} ${result.activeJobs === 1 ? "is" : "are"} queued or running. Cancel or finish them first.`,
+        }, 409);
+      }
+      if (configured) {
+        await settings.reload();
+        scheduler.restart();
+      }
+      await events.record({
+        type: "REPOSITORY_REMOVED",
+        message: `Removed ${existing.fullName} from configured repositories`,
+        metadata: { repositoryId: id },
+      });
+      return context.json({ status: "removed" });
+    })
     .post("/jobs/:id/cancel", async (context) => {
       const job = await prisma.job.findFirst({
         where: { id: context.req.param("id"), environment: config.APP_ENV }, include: { repository: true },
@@ -220,13 +293,25 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       await queue.remove(job.queueJobId);
       await events.record({
         type: "JOB_CANCELLED",
-        message: `Cancelled ${job.repository.fullName}#${job.issueNumber}`,
+        message: `Cancelled ${job.jobType} job for ${job.repository.fullName}#${job.issueNumber}`,
         jobId: job.id,
         repositoryId: job.repositoryId,
         scanRunId: job.scanRunId ?? undefined,
-        metadata: { issueUrl: job.issueUrl },
+        metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber ?? undefined },
       });
-      await reconcileIssue(job, [], "Worker job cancelled by an operator.");
+      if (job.subjectType === "PULL_REQUEST" && job.pullRequestNumber) {
+        try {
+          await github.addIssueComment(
+            job.repository.fullName,
+            job.pullRequestNumber,
+            "Worker job cancelled by an operator. The next scan will reschedule the work.",
+          );
+        } catch {
+          // the event above already carries the durable evidence
+        }
+      } else {
+        await reconcileIssue(job, [], "Worker job cancelled by an operator.");
+      }
       await finishScanIfComplete(job.scanRunId, job.environment, events);
       return context.json({ status: "CANCELLED" });
     })
@@ -238,16 +323,39 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       if (!["FAILED", "BLOCKED", "CANCELLED", "STALE"].includes(job.status)) {
         return context.json({ error: "Only failed, blocked, cancelled, or stale jobs can be retried" }, 409);
       }
-      if (!await reconcileIssue(job, [config.ISSUE_READY_LABEL],
-        `Retry requested for prior worker job ${job.id}.`)) {
-        return context.json({ error: "Could not restore the GitHub ready label" }, 502);
+      if (job.subjectType === "PULL_REQUEST" && job.pullRequestNumber) {
+        try {
+          const labels = await github.getPullRequestLabels(job.repository.fullName, job.pullRequestNumber);
+          const nextLabels = job.jobType === "REVIEW"
+            ? [config.PR_REVIEW_REQUESTED_LABEL]
+            : [config.PR_FIX_REQUESTED_LABEL];
+          await github.setPullRequestLabels(
+            job.repository.fullName,
+            job.pullRequestNumber,
+            replacePullRequestLabels(labels, config, nextLabels),
+          );
+        } catch (error) {
+          await events.record({
+            type: "GITHUB_RECONCILIATION_REQUIRED",
+            level: "ERROR",
+            message: `Could not restore the pull request label for ${job.repository.fullName}#${job.pullRequestNumber}: ${redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
+            jobId: job.id,
+            repositoryId: job.repositoryId,
+            metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber },
+          });
+        }
+      } else {
+        if (!await reconcileIssue(job, [config.ISSUE_READY_LABEL],
+          `Retry requested for prior worker job ${job.id}.`)) {
+          return context.json({ error: "Could not restore the GitHub ready label" }, 502);
+        }
       }
       await events.record({
         type: "JOB_RETRY_REQUESTED",
-        message: `Retry requested for ${job.repository.fullName}#${job.issueNumber}`,
+        message: `Retry requested for ${job.jobType} job on ${job.repository.fullName}#${job.issueNumber}`,
         jobId: job.id,
         repositoryId: job.repositoryId,
-        metadata: { issueUrl: job.issueUrl },
+        metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber ?? undefined },
       });
       const scan = await scanner.run("MANUAL");
       return context.json({ scanId: scan.id, scanStatus: scan.status }, 202);

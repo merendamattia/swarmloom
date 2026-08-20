@@ -6,12 +6,17 @@ import { parseConfig } from "./config-schema.ts";
 const runtimeSettingSchema = z.object({
   githubRepositories: z.string().min(1).optional(),
   issueReadyLabel: z.string().min(1).optional(),
-  issueReviewRequestedLabel: z.string().min(1).optional(),
   issueWorkingLabel: z.string().min(1).optional(),
   issueBlockedLabel: z.string().min(1).optional(),
   issueCompletedLabel: z.string().min(1).optional(),
   issueDecomposedLabel: z.string().min(1).optional(),
+  issueReadyToMergeLabel: z.string().min(1).optional(),
   issueHumanReviewLabel: z.string().min(1).optional(),
+  prReviewRequestedLabel: z.string().min(1).optional(),
+  prFixRequestedLabel: z.string().min(1).optional(),
+  prReviewPassedLabel: z.string().min(1).optional(),
+  maxAutomaticFixCycles: z.coerce.number().int().min(1).max(50).optional(),
+  createDiagnosticIssues: z.boolean().optional(),
   scheduleCron: z.string().refine(isCron, "Invalid five-part cron expression").optional(),
   scheduleTimezone: z.string().min(1).optional(),
   maxParallelJobs: z.coerce.number().int().min(1).max(20).optional(),
@@ -30,12 +35,17 @@ const runtimeSettingSchema = z.object({
 const runtimeToEnvironment = {
   githubRepositories: "GITHUB_REPOSITORIES",
   issueReadyLabel: "ISSUE_READY_LABEL",
-  issueReviewRequestedLabel: "ISSUE_REVIEW_REQUESTED_LABEL",
   issueWorkingLabel: "ISSUE_WORKING_LABEL",
   issueBlockedLabel: "ISSUE_BLOCKED_LABEL",
   issueCompletedLabel: "ISSUE_COMPLETED_LABEL",
   issueDecomposedLabel: "ISSUE_DECOMPOSED_LABEL",
+  issueReadyToMergeLabel: "ISSUE_READY_TO_MERGE_LABEL",
   issueHumanReviewLabel: "ISSUE_HUMAN_REVIEW_LABEL",
+  prReviewRequestedLabel: "PR_REVIEW_REQUESTED_LABEL",
+  prFixRequestedLabel: "PR_FIX_REQUESTED_LABEL",
+  prReviewPassedLabel: "PR_REVIEW_PASSED_LABEL",
+  maxAutomaticFixCycles: "MAX_AUTOMATIC_FIX_CYCLES",
+  createDiagnosticIssues: "CREATE_DIAGNOSTIC_ISSUES",
   scheduleCron: "SCHEDULE_CRON",
   scheduleTimezone: "SCHEDULE_TIMEZONE",
   maxParallelJobs: "MAX_PARALLEL_JOBS",
@@ -64,8 +74,12 @@ export function parseRuntimeSettingsPatch(input: unknown) {
   return runtimeSettingSchema.parse(input);
 }
 
-export function applyRuntimeSettings(config: Config, overrides: Record<string, string | undefined>) {
-  const environment: Record<string, string | undefined> = configEnvironment(config);
+export function applyRuntimeSettings(
+  config: Config,
+  overrides: Record<string, string | undefined>,
+  base: Record<string, string | undefined> = configEnvironment(config),
+) {
+  const environment: Record<string, string | undefined> = { ...base };
   for (const definition of runtimeSettingDefinitions) {
     const value = overrides[definition.key];
     if (value !== undefined) environment[definition.key] = value;
@@ -95,12 +109,17 @@ export function configEnvironment(config: Config) {
     GIT_AUTHOR_NAME: config.GIT_AUTHOR_NAME,
     GIT_AUTHOR_EMAIL: config.GIT_AUTHOR_EMAIL,
     ISSUE_READY_LABEL: config.ISSUE_READY_LABEL,
-    ISSUE_REVIEW_REQUESTED_LABEL: config.ISSUE_REVIEW_REQUESTED_LABEL,
     ISSUE_WORKING_LABEL: config.ISSUE_WORKING_LABEL,
     ISSUE_BLOCKED_LABEL: config.ISSUE_BLOCKED_LABEL,
     ISSUE_COMPLETED_LABEL: config.ISSUE_COMPLETED_LABEL,
     ISSUE_DECOMPOSED_LABEL: config.ISSUE_DECOMPOSED_LABEL,
+    ISSUE_READY_TO_MERGE_LABEL: config.ISSUE_READY_TO_MERGE_LABEL,
     ISSUE_HUMAN_REVIEW_LABEL: config.ISSUE_HUMAN_REVIEW_LABEL,
+    PR_REVIEW_REQUESTED_LABEL: config.PR_REVIEW_REQUESTED_LABEL,
+    PR_FIX_REQUESTED_LABEL: config.PR_FIX_REQUESTED_LABEL,
+    PR_REVIEW_PASSED_LABEL: config.PR_REVIEW_PASSED_LABEL,
+    MAX_AUTOMATIC_FIX_CYCLES: String(config.MAX_AUTOMATIC_FIX_CYCLES),
+    CREATE_DIAGNOSTIC_ISSUES: String(config.CREATE_DIAGNOSTIC_ISSUES),
     SCHEDULE_CRON: config.SCHEDULE_CRON,
     SCHEDULE_TIMEZONE: config.SCHEDULE_TIMEZONE,
     MAX_PARALLEL_JOBS: String(config.MAX_PARALLEL_JOBS),
@@ -126,12 +145,17 @@ export function runtimeSettingsView(config: Config) {
   return {
     githubRepositories: config.GITHUB_REPOSITORIES,
     issueReadyLabel: config.ISSUE_READY_LABEL,
-    issueReviewRequestedLabel: config.ISSUE_REVIEW_REQUESTED_LABEL,
     issueWorkingLabel: config.ISSUE_WORKING_LABEL,
     issueBlockedLabel: config.ISSUE_BLOCKED_LABEL,
     issueCompletedLabel: config.ISSUE_COMPLETED_LABEL,
     issueDecomposedLabel: config.ISSUE_DECOMPOSED_LABEL,
+    issueReadyToMergeLabel: config.ISSUE_READY_TO_MERGE_LABEL,
     issueHumanReviewLabel: config.ISSUE_HUMAN_REVIEW_LABEL,
+    prReviewRequestedLabel: config.PR_REVIEW_REQUESTED_LABEL,
+    prFixRequestedLabel: config.PR_FIX_REQUESTED_LABEL,
+    prReviewPassedLabel: config.PR_REVIEW_PASSED_LABEL,
+    maxAutomaticFixCycles: config.MAX_AUTOMATIC_FIX_CYCLES,
+    createDiagnosticIssues: config.CREATE_DIAGNOSTIC_ISSUES,
     scheduleCron: config.SCHEDULE_CRON,
     scheduleTimezone: config.SCHEDULE_TIMEZONE,
     maxParallelJobs: config.MAX_PARALLEL_JOBS,

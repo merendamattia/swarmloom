@@ -1,35 +1,55 @@
-import { Prisma, type AgentProvider, type Job, type JobStatus } from "@prisma/client";
+import { Prisma, type AgentProvider, type Job, type JobStatus, type JobSubject, type JobType } from "@prisma/client";
 import { prisma } from "../core/db.ts";
 
 export type QueuedJobInput = {
   repositoryId: string;
   scanRunId?: string;
   environment: string;
+  jobType: JobType;
+  subjectType: JobSubject;
   issueNumber: number;
   issueTitle: string;
   issueUrl: string;
   issueBody: string;
   branchName: string;
   baselineCommit: string;
+  pullRequestId?: string;
+  pullRequestNumber?: number;
+  pullRequestUrl?: string;
+  headSha?: string;
+  trigger?: string;
   provider: AgentProvider;
   model: string;
   reasoningEffort?: string;
 };
 
+function activeIssueKey(input: QueuedJobInput) {
+  return input.subjectType === "ISSUE" ? `${input.repositoryId}:${input.issueNumber}` : null;
+}
+
+function activePrKey(input: QueuedJobInput) {
+  if (input.subjectType !== "PULL_REQUEST" || !input.pullRequestId || !input.headSha) return null;
+  return `${input.repositoryId}:${input.pullRequestId}:${input.headSha}:${input.jobType}`;
+}
+
 async function tryCreateQueued(input: QueuedJobInput) {
   const id = crypto.randomUUID();
   const [job] = await prisma.$queryRaw<Job[]>`
     INSERT INTO "job" (
-      "id", "queueJobId", "repositoryId", "scanRunId", "environment", "issueNumber", "issueTitle", "issueUrl", "issueBody",
-      "branchName", "baselineCommit", "provider", "model", "reasoningEffort", "activeIssueKey",
-      "updatedAt"
+      "id", "queueJobId", "repositoryId", "scanRunId", "environment", "jobType", "subjectType",
+      "issueNumber", "issueTitle", "issueUrl", "issueBody", "branchName", "baselineCommit",
+      "pullRequestId", "pullRequestNumber", "pullRequestUrl", "headSha", "trigger",
+      "provider", "model", "reasoningEffort", "activeIssueKey", "activePrKey", "updatedAt"
     ) VALUES (
-      ${id}, ${id}, ${input.repositoryId}, ${input.scanRunId ?? null}, ${input.environment}, ${input.issueNumber},
+      ${id}, ${id}, ${input.repositoryId}, ${input.scanRunId ?? null}, ${input.environment},
+      ${input.jobType}::"JobType", ${input.subjectType}::"JobSubject", ${input.issueNumber},
       ${input.issueTitle}, ${input.issueUrl}, ${input.issueBody}, ${input.branchName},
-      ${input.baselineCommit}, ${input.provider}::"AgentProvider", ${input.model},
-      ${input.reasoningEffort ?? null}, ${`${input.repositoryId}:${input.issueNumber}`}, CURRENT_TIMESTAMP
+      ${input.baselineCommit}, ${input.pullRequestId ?? null}, ${input.pullRequestNumber ?? null},
+      ${input.pullRequestUrl ?? null}, ${input.headSha ?? null}, ${input.trigger ?? null},
+      ${input.provider}::"AgentProvider", ${input.model}, ${input.reasoningEffort ?? null},
+      ${activeIssueKey(input)}, ${activePrKey(input)}, CURRENT_TIMESTAMP
     )
-    ON CONFLICT ("activeIssueKey") DO NOTHING
+    ON CONFLICT DO NOTHING
     RETURNING *
   `;
   return job ?? null;
@@ -63,6 +83,7 @@ type FinishInput = {
   diagnostics?: Prisma.InputJsonValue;
   pullRequestNumber?: number;
   pullRequestUrl?: string;
+  headSha?: string;
 };
 
 async function finishRunning(
@@ -84,9 +105,11 @@ async function finishRunning(
       diagnostics: input.diagnostics,
       pullRequestNumber: input.pullRequestNumber,
       pullRequestUrl: input.pullRequestUrl,
+      headSha: input.headSha,
       completedAt,
       durationMs: Math.max(0, completedAt.getTime() - job.startedAt.getTime()),
       activeIssueKey: null,
+      activePrKey: null,
       heartbeatAt: null,
     },
   });
@@ -96,7 +119,7 @@ async function finishRunning(
 async function findRunning(id: string, workerId: string) {
   return prisma.job.findFirst({
     where: { id, status: "RUNNING", workerId },
-    include: { repository: true },
+    include: { repository: true, pullRequest: true },
   });
 }
 
@@ -123,6 +146,7 @@ async function cancel(id: string) {
       status: "CANCELLED",
       completedAt: new Date(),
       activeIssueKey: null,
+      activePrKey: null,
       heartbeatAt: null,
     },
   });
@@ -142,6 +166,7 @@ async function recoverStaleBefore(environment: string, cutoff: Date) {
       status: "STALE",
       completedAt: new Date(),
       activeIssueKey: null,
+      activePrKey: null,
       heartbeatAt: null,
       errorMessage: "Worker heartbeat expired before the job reached a terminal state",
     },
@@ -149,7 +174,7 @@ async function recoverStaleBefore(environment: string, cutoff: Date) {
   if (updated.count === 0) return [];
   return prisma.job.findMany({
     where: { id: { in: ids }, status: "STALE" },
-    include: { repository: true },
+    include: { repository: true, pullRequest: true },
   });
 }
 
@@ -170,6 +195,7 @@ async function failQueued(id: string, errorMessage: string) {
       errorMessage,
       completedAt,
       activeIssueKey: null,
+      activePrKey: null,
     },
   });
   return updated.count === 1;

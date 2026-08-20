@@ -1,5 +1,5 @@
 import { redactSecrets } from "../core/secrets.ts";
-import type { AgentRole } from "../providers/index.ts";
+import type { AgentProvider, AgentResult, AgentRole } from "../providers/index.ts";
 
 export type DiagnosticStage =
   | "implementation"
@@ -14,6 +14,13 @@ export type DiagnosticEvent = {
   timestamp: string;
   message?: string;
   tool?: string;
+};
+
+export type RoleExecution = AgentResult & {
+  role: AgentRole;
+  response: string;
+  responseFilePath: string;
+  events: DiagnosticEvent[];
 };
 
 export type JobDiagnostics = {
@@ -76,4 +83,35 @@ export function minimalDiagnostics(
 
 export function tail(text: string, limit: number) {
   return text.length > limit ? `[truncated]\n${text.slice(-limit)}` : text;
+}
+
+export function executionFailure(
+  stage: DiagnosticStage,
+  role: AgentRole,
+  job: { model: string },
+  provider: AgentProvider,
+  result: RoleExecution,
+  error: unknown,
+  extra: { cause?: unknown; finalOutput?: string; stderr?: string } = {},
+) {
+  const message = error instanceof Error ? error.message : String(error);
+  const rawOutput = extra.finalOutput
+    ?? (result.response.trim() ? result.response : result.finalOutput.trim() ? result.finalOutput : undefined);
+  return new AgentExecutionError(safeMessage(message), {
+    stage,
+    role,
+    provider: provider.name,
+    model: job.model,
+    sessionId: result.sessionId,
+    exitCode: result.exitCode,
+    error: safeMessage(message),
+    causeChain: causeChain(extra.cause ?? error),
+    stderr: extra.stderr ?? (result.stderr || undefined),
+    finalOutput: rawOutput ? tail(redactSecrets(rawOutput), 20_000) : undefined,
+    events: result.events,
+  });
+}
+
+function safeMessage(message: string) {
+  return redactSecrets(message).slice(0, 2_000);
 }

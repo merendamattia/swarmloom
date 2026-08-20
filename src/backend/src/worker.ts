@@ -26,7 +26,7 @@ const providers = {
   codex: createAgentProvider("codex"),
   opencode: createAgentProvider("opencode"),
 };
-const runner = createJobRunner({ config, providers, github, events });
+const runner = createJobRunner({ config, providers, github, events, queue });
 const worker = startWorkerLoops(config, queue, runner, settings, () => recoverStaleJobs(config, github, events));
 logger.info("Worker started", {
   environment: config.APP_ENV,

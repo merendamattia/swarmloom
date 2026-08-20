@@ -5,31 +5,52 @@ v2 and the production file `docker-compose.production.yaml`. Run them from the r
 
 ## What the application does
 
-Swarmloom scans configured repositories for open issues carrying `agent:ready` or
-`agent:review-requested` (or the configured equivalents). For every acquired issue it:
+Swarmloom scans configured repositories with two logically independent scanners behind one
+scheduler. For every acquired issue or managed Pull Request it:
 
 1. fetches the current `origin/develop`;
 2. stores the issue snapshot and exact baseline commit in PostgreSQL;
-3. removes the ready label, adds the working label, and queues a durable job;
-4. creates a dedicated branch and persistent Git worktree from that exact commit;
-5. starts a fresh Codex or OpenCode session with the canonical material in `agent-runtime`;
-   the request also includes the current issue, every comment, and the full context of linked Pull
-   Requests including diffs and review threads;
-6. implements one coherent issue, decomposes broad work, or reports a precise blocker;
-7. verifies that an implementation PR points from the assigned branch to `develop` and links the
-   original issue;
-8. waits for all Pull Request check runs and commit statuses to complete before reviewing it;
-9. starts a separate, fresh review session and records the reviewer's plain text response;
-10. on a failed check or failed job, starts the Pull Request diagnostic agent when possible, posts
-    the redacted error and stack trace to the issue and Pull Request, and opens a new
-    `agent:ready` diagnostic issue;
-11. stores lifecycle data and events in PostgreSQL, reconciles GitHub labels/comments, and sends
-   selected Telegram notifications.
+3. **IssueScanner** — for issues carrying `agent:ready`:
+   removes the ready label, adds the working label, and queues an `IMPLEMENTATION` job;
+4. **PullRequestScanner** — runs before IssueScanner for every repository tick. It imports open Pull
+   Requests carrying one of the Swarmloom PR workflow labels (using the same label-filtered GitHub
+   issue listing as issue discovery), associates `agent/issue-<number>-…` branches with their
+   originating issue, and then reconciles each managed PR from its labels and current head SHA:
+   - `agent:review-requested` → one `REVIEW` job for that exact head SHA;
+   - `agent:fix-requested` → a `FIX` job on the same PR branch;
+   - `agent:review-passed` → wait for the human merge; once merged, the originating issue becomes
+     `agent:done`;
+   - a persisted implementation PR missing its workflow label → restore
+     `agent:review-requested` and queue its review;
+5. **Implementation jobs** create a dedicated branch and persistent Git worktree from the captured
+   `origin/develop` commit, run a fresh Codex or OpenCode session with the canonical material in
+   `agent-runtime` (including the current issue, comments, and linked PR context), verify that the
+   resulting PR points from the assigned branch to `develop` and links the issue, persist the PR
+   association in PostgreSQL, and apply `agent:review-requested` to the Pull Request. They never run
+   the reviewer and never wait for CI.
+6. **FIX jobs** work on the already-open PR branch, receive the reviewer feedback, push to the same
+   remote branch, and validate that the PR head actually moved.
+7. **REVIEW jobs** are independent durable jobs targeting one PR and one head SHA. They load the PR
+   metadata, diff, comments, review history, originating issue, and available GitHub Actions context,
+   reproduce the repository CI locally, run a fresh reviewer session, post the result to the PR, and
+   persist it in PostgreSQL. `Review: pass` applies
+   `agent:review-passed` to the PR and `agent:ready-to-merge` to the issue; `Review:
+   changes_requested` applies `agent:fix-requested` with the reviewer feedback. A result computed for
+   an outdated head SHA is recognized as stale and can never finalize a newer head.
+8. A configurable safety limit (default five consecutive fix cycles per PR) stops the automatic
+   fix/review loop, blocks the workflow, and applies `agent:human-review` with an explanatory
+   comment;
+9. on a failed job, records and comments the redacted error. A separate `agent:ready` diagnostic
+   issue is created only when the opt-in Settings toggle is enabled;
+10. stores lifecycle data and events in PostgreSQL, reconciles GitHub labels/comments, and sends
+    selected Telegram notifications.
 
 The API/scheduler, BullMQ worker, and dashboard are process roles of one TypeScript application.
 BullMQ owns delivery through the externally managed Redis/Valkey endpoint supplied by `REDIS_URL`;
 PostgreSQL owns business state, history, events, and runtime settings. There is no webhook dependency
-or automatic PR merge.
+or automatic PR merge. Both Compose files pin the Docker project name to `swarmloom`, so newly
+created containers, networks, and named volumes no longer inherit the checkout directory's legacy
+name.
 
 ## Security boundary
 
@@ -53,10 +74,10 @@ against known credential values before persistence.
 
 | Component | Responsibility | Durable storage |
 |---|---|---|
-| `backend` | Hono API, cron scheduler, GitHub discovery, migrations, queue producer | PostgreSQL and repository volume |
-| `worker` | BullMQ consumer, guarded claims, heartbeats, worktrees, provider sessions, review | PostgreSQL and repository volume |
+| `backend` | Hono API, cron scheduler, issue/PR discovery and reconciliation, migrations, queue producer | PostgreSQL and repository volume |
+| `worker` | BullMQ consumer, guarded claims, heartbeats, worktrees, provider sessions for implementation, fix, review, and decomposition jobs | PostgreSQL and repository volume |
 | `frontend` | Operational Next.js dashboard | None |
-| External PostgreSQL | Jobs, scans, reviews, events, repository state, heartbeats, runtime settings | Provider-managed |
+| External PostgreSQL | Jobs, managed Pull Requests, reviews, scans, events, repository state, heartbeats, runtime settings | Provider-managed |
 | External Redis/Valkey | BullMQ delivery, retries, locks, worker coordination | Provider-managed |
 | Codex CLI | Selected agent runtime | `codex_home` for account login cache |
 | OpenCode CLI | Selected agent runtime | `opencode_data` and `opencode_config` |
@@ -64,8 +85,8 @@ against known credential values before persistence.
 | `agent-runtime` | Canonical global instructions and skills | Production image; local read-only bind mount |
 
 The `worker_data` volume contains persistent clones under `/data/repositories` and worktrees under
-`/data/worktrees`. Worktrees are retained after terminal jobs for audit and recovery. They are not
-automatically reused by later jobs.
+`/data/worktrees`. Worktrees are removed once their job reaches a terminal state; local clones are
+garbage-collected after each run and pruned when they are no longer needed.
 
 ## Repository requirements
 
@@ -75,7 +96,9 @@ Every configured repository must meet all of these conditions:
 - the GitHub token can read issues and clone/fetch, and can write labels, comments, branches, and
   Pull Requests;
 - the token can create and update the configured queue/status labels during startup;
-- repository tests and build tooling can run inside the Debian-based worker image;
+- repository tests and build tooling can run inside the Debian-based worker image; integration
+  tests that need Postgres or Redis use the ephemeral local servers bundled in the image via
+  `swarm-test-services` (no Docker inside the worker);
 - repository-local `AGENTS.md` and conventions do not contradict the worker's safety and
   mandatory-branch constraints.
 
@@ -100,6 +123,8 @@ general workflow needs repository permissions:
 - **Contents: read and write** — clone/fetch and push the assigned branch;
 - **Issues: read and write** — discovery, labels, comments, issue creation, and native sub-issues;
 - **Pull requests: read and write** — create/read PRs and post review-related content;
+- **Actions: read** — lets reviewers inspect workflow runs and failed jobs; review still proceeds
+  with local CI reproduction if remote Actions data is unavailable;
 - **Metadata: read** — automatically included by GitHub;
 - **Workflows: write** only if queued work is allowed to modify files in `.github/workflows`.
 
@@ -115,18 +140,41 @@ permission.
 
 Label flow:
 
-- `ready` → `working` when discovery atomically acquires the issue;
-- `working` → `done` after an implementation PR and automated review;
-- `working` → `review-requested` when the automated review requests changes; the next scheduled
-  scan acquires the issue again and runs the worker;
-- a failed Pull Request check also adds `review-requested` to the original issue, comments the
-  failed checks and diagnosis on the issue/PR, and creates a separate `agent:ready` diagnostic issue;
-- any other failed job creates an `agent:ready` diagnostic issue with its redacted stack trace;
-- `working` → `blocked` when essential information is missing;
-- `working` → `decomposed` after child issues are created;
-- worker labels are removed after failure or cancellation;
-- Retry restores `ready`, then a new scan captures a new `origin/develop` baseline and creates a
-  new history row. The earlier row is never overwritten.
+- **Issues** carry the workflow state of the originating issue:
+  `ready` → `working` when discovery atomically acquires the issue; `working` →
+  `ready-to-merge` when an automated review passes; `ready-to-merge` → `done` after a human merge;
+  `working` → `blocked` when essential information is missing; `working` → `decomposed` after child
+  issues are created;
+- **Pull Requests** carry their own workflow state: `review-requested` after implementation and
+  after every fix; `fix-requested` after requested review changes; `review-passed`
+  after a passing review, while the merge remains human;
+- the reviewer inspects GitHub Actions when available and always reproduces CI locally; failed CI is
+  reported as reviewer feedback, which moves the PR to `fix-requested`;
+- when the automatic fix cycle limit is exceeded, the PR and issue receive `agent:human-review`
+  and automation stops until a human intervenes;
+- failed jobs always remain visible in job/event history and move the originating issue to
+  `agent:blocked`; creating a separate `agent:ready` diagnostic issue is optional and disabled by
+  default;
+- stale issue jobs also move the issue to `agent:blocked`; stale PR jobs restore their review/fix
+  trigger for the next scan;
+- cancellation removes worker labels while unrelated labels are always preserved;
+- Retry restores the relevant label (`ready` on issues, the requested label on Pull Requests), then
+  a new scan captures fresh state and creates a new history row. The earlier row is never
+  overwritten.
+
+Only these labels create work during a scan:
+
+| Trigger label | Subject | Job created |
+|---|---|---|
+| `agent:ready` | Issue | `IMPLEMENTATION` from the captured `origin/develop` SHA |
+| `agent:review-requested` | Managed Pull Request | `REVIEW` for the current PR head SHA |
+| `agent:fix-requested` | Managed Pull Request | `FIX` on the existing PR branch and current head SHA |
+
+`DECOMPOSITION` has no trigger label: an `IMPLEMENTATION` result of
+`Outcome: requires_decomposition` creates it directly as a separate durable job. The labels
+`agent:working`, `agent:blocked`, `agent:decomposed`, `agent:ready-to-merge`, `agent:done`,
+`agent:review-passed`, and `agent:human-review` are waiting, terminal, or intervention states and do
+not create jobs. Worker transitions replace only worker-owned labels and preserve unrelated labels.
 
 ## Environment variables
 
@@ -146,14 +194,19 @@ validation.
 | `GITHUB_API_URL` | `https://api.github.com` | REST API base, useful for GitHub Enterprise |
 | `GIT_AUTHOR_NAME` | `swarmloom` | Commit author/committer name for agent sessions |
 | `GIT_AUTHOR_EMAIL` | noreply default | Commit author/committer email |
-| `ISSUE_READY_LABEL` | `agent:ready` | Queue label |
-| `ISSUE_REVIEW_REQUESTED_LABEL` | `agent:review-requested` | Queue label for changes requested by review |
-| `ISSUE_WORKING_LABEL` | `agent:working` | Acquired/running label |
+| `ISSUE_READY_LABEL` | `agent:ready` | Issue queue label |
+| `ISSUE_WORKING_LABEL` | `agent:working` | Acquired/running issue label |
 | `ISSUE_BLOCKED_LABEL` | `agent:blocked` | Missing-information label |
-| `ISSUE_COMPLETED_LABEL` | `agent:done` | Implemented/reviewed label |
+| `ISSUE_COMPLETED_LABEL` | `agent:done` | Issue finalized after a human merge |
 | `ISSUE_DECOMPOSED_LABEL` | `agent:decomposed` | Parent decomposed label |
+| `ISSUE_READY_TO_MERGE_LABEL` | `agent:ready-to-merge` | Automation passed; human merge still required |
 | `ISSUE_HUMAN_REVIEW_LABEL` | `agent:human-review` | Human intervention required label |
-| `SCHEDULE_CRON` | `*/30 * * * *` | Five-part cron expression; discovers GitHub issues every 30 minutes by default |
+| `PR_REVIEW_REQUESTED_LABEL` | `agent:review-requested` | PR requires automated review |
+| `PR_FIX_REQUESTED_LABEL` | `agent:fix-requested` | PR requires a fix after requested review changes |
+| `PR_REVIEW_PASSED_LABEL` | `agent:review-passed` | Review passed; PR awaits a human merge |
+| `MAX_AUTOMATIC_FIX_CYCLES` | `5` | Consecutive fix cycles per PR before the workflow is blocked for human review |
+| `CREATE_DIAGNOSTIC_ISSUES` | `false` | Opens a separate ready-labelled diagnostic issue when a job fails; editable from Settings |
+| `SCHEDULE_CRON` | `*/30 * * * *` | Five-part cron expression; reconciles PRs and discovers issues every 30 minutes by default |
 | `SCHEDULE_TIMEZONE` | `UTC` | IANA timezone used by Croner |
 | `MAX_PARALLEL_JOBS` | `1` | BullMQ worker concurrency; editable from Settings |
 | `WORKER_ID` | environment-specific default | Stable worker heartbeat identity |
@@ -303,19 +356,24 @@ browser closes or a container restarts.
 ## Scheduler, locking, and parallelism
 
 `SCHEDULE_CRON` is a five-part expression evaluated in `SCHEDULE_TIMEZONE`. The default
-`*/30 * * * *` discovers GitHub issues every 30 minutes. Invalid expressions fail validation. Both
+`*/30 * * * *` runs both scanners every 30 minutes. Invalid expressions fail validation. Both
 values can be changed from Settings; the API restarts the scheduler after a successful update.
 
-Scheduled and manual runs call the same scanner. A nullable unique `activeEnvironmentKey` in
-PostgreSQL permits one active scan per `APP_ENV`; a competing request is recorded as `SKIPPED`.
-Individual issues also have a unique active key. The scanner writes the durable PostgreSQL history
-row, then enqueues the same `queueJobId` in BullMQ. Workers alone perform a guarded `QUEUED` →
-`RUNNING` transition, so duplicate delivery is ignored. Set `MAX_PARALLEL_JOBS=1` for sequential
-behavior; raising it changes BullMQ worker concurrency. BullMQ owns retries and locks while
-PostgreSQL retains the visible business state.
+One scheduler tick runs `IssueScanner` (ready issues → `IMPLEMENTATION` jobs) and
+`PullRequestScanner` (managed open PRs → `FIX`/`REVIEW` jobs and merge finalization) with separate
+responsibilities and the same durable scan lifecycle. Scheduled and manual runs call the same
+pipeline. A nullable unique `activeEnvironmentKey` in PostgreSQL permits one active scan per
+`APP_ENV`; a competing request is recorded as `SKIPPED`. Issues have a unique active key
+(repository + issue) and Pull Request jobs have a unique active key
+(repository + PR + head SHA + job kind), so duplicate scans cannot create duplicate active work.
+The scanners write the durable PostgreSQL history rows, then enqueue the same `queueJobId` in
+BullMQ. Workers alone perform a guarded `QUEUED` → `RUNNING` transition, so duplicate delivery is
+ignored. Set `MAX_PARALLEL_JOBS=1` for sequential behavior; raising it changes BullMQ worker
+concurrency. BullMQ owns retries and locks while PostgreSQL retains the visible business state.
 
-At worker startup, expired running jobs become `STALE` and release their issue key. Use Retry to
-create a new attempt/history row from a newly fetched baseline.
+At worker startup, expired running jobs become `STALE` and release their active key. For issue jobs
+the issue returns to the unlabelled state; for PR jobs the scanner-facing label is restored so the
+next scan reschedules the work. Use Retry to create a new attempt/history row.
 
 ## Agent runtime
 
@@ -494,20 +552,26 @@ escaped and capped at the platform's message length.
 
 ## Decomposition and automated review
 
-If triage says a parent cannot fit one coherent PR, the runner starts a fresh provider session in
-the decomposition phase with the same global instructions.
+If the implementation session says a parent cannot fit one coherent PR, the runner finishes the
+implementation job and queues a separate `DECOMPOSITION` job. It starts a fresh provider session
+with the same global instructions.
 Children must include objective, current technical context, acceptance criteria, tests, and
 dependencies. The agent creates GitHub issues, attaches native parent/sub-issue relationships when
 the endpoint is available, and labels only dependency-free children ready. If native sub-issues are
 unavailable, it links both directions and states the limitation. Artificial file-by-file splitting
 is forbidden.
 
-After an implementation, the runner retrieves PR metadata and the full diff from `develop`, then
-starts a fresh provider session in the review phase with issue, acceptance criteria/body, PR, and
-diff.
+Review is a fully independent durable job. The PullRequestScanner creates a `REVIEW` job for a
+specific PR and head SHA whenever it carries `agent:review-requested`; the review runner then retrieves the PR
+metadata and the full diff from `develop`, starts a fresh provider session with the issue,
+acceptance criteria/body, PR, diff, comments, and review history. The reviewer inspects available
+GitHub Actions runs through `gh api` and reproduces `.github/workflows/ci.yaml` locally before its
+verdict; the scheduler itself never calls the Checks API.
 The reviewer writes a plain text response starting with `Review: pass` or `Review: changes_requested`.
-The response is stored verbatim in `review` and posted as a PR comment.
-This is an automated review record, not an automatic merge or GitHub approval.
+The response is stored verbatim in `review` (linked to the review job and head SHA) and posted as a
+PR comment. This is an automated review record, not an automatic merge or GitHub approval. A review
+computed for a head SHA that no longer matches the PR head is discarded as stale and can never
+finalize a newer head.
 
 ## Local development
 
@@ -613,7 +677,8 @@ docker compose --env-file .env.production -f docker-compose.production.yaml star
 Never delete these without a tested backup: `postgres_data`, `worker_data`, `codex_home`,
 `opencode_data`, and `opencode_config`. Keep `agent-runtime` in Git and on the mounted host path.
 
-Worktrees are intentionally retained. To inspect capacity:
+Worktrees are removed automatically once their job reaches a terminal state and leftover worktrees
+from stale jobs are recovered at worker startup. To inspect capacity:
 
 ```bash
 docker compose --env-file .env.production -f docker-compose.production.yaml exec worker du -sh /data/repositories /data/worktrees
@@ -621,8 +686,8 @@ docker compose --env-file .env.production -f docker-compose.production.yaml exec
   git -C /data/repositories/OWNER/REPO worktree list
 ```
 
-Remove a worktree only after its job is terminal, its useful evidence is backed up, and Git reports
-the exact path. Do not recursively delete the data root or repository clone.
+Remove a worktree manually only after its job is terminal and Git reports the exact path. Do not
+recursively delete the data root or repository clone.
 
 ## Troubleshooting
 
@@ -656,8 +721,9 @@ The repository becomes `INVALID`, emits `REPOSITORY_INVALID`, and queues no issu
 ### Worktree errors
 
 - Inspect `git -C /data/repositories/OWNER/REPO worktree list` and the job's `worktreePath`.
-- Retained paths are expected. A duplicate path indicates stale/manual filesystem state; back it up
-  and use `git worktree remove PATH` only after confirming the corresponding job is terminal.
+- Paths from jobs still queued or running are expected. A path without a matching active job
+  indicates stale/manual filesystem state; back it up and use `git worktree remove PATH` only after
+  confirming the corresponding job is terminal.
 - Check free disk space and ownership of `/data` before changing permissions.
 
 ### Codex authentication/runtime
