@@ -118,6 +118,13 @@ Keep intentional fenced code blocks intact.
 After creating a Pull Request, verify the stored body with
 `gh pr view <number> --json body --template '{{.body}}' | sed -n 'l'`. Intended section breaks must
 appear as real lines, not `\n`.
+Issue references in automated Pull Request descriptions:
+
+- For an issue in the same repository, always use `Closes #<issue-number>`.
+- The trusted repository full name and numeric issue number supplied by Swarmloom are the only source for an issue reference.
+- Never copy an issue URL from redacted logs, provider output, diagnostics, or sanitized live context.
+- If a full URL is genuinely required, construct `https://github.com/<owner>/<repo>/issues/<number>` from the trusted repository full name and numeric issue number.
+- Never emit `[REDACTED]` as any part of an issue or pull request hyperlink.
 
 Read the current issue, including labels and comments:
 
@@ -171,7 +178,7 @@ gh issue comment <issue-number> --repo <owner>/<repo> --body '<concise factual c
 gh issue edit <issue-number> --repo <owner>/<repo> --add-label '<label>'
 gh issue edit <issue-number> --repo <owner>/<repo> --remove-label '<label>'
 gh pr create --repo <owner>/<repo> --base develop --head <current-branch> \
-  --title '<title>' --body '<summary and issue link>'
+  --title '<title>' --body-file <body-file>
 gh pr comment <pr-number> --repo <owner>/<repo> --body '<concise factual comment>'
 ```
 

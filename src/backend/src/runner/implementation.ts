@@ -69,9 +69,9 @@ export const runImplementation: JobFlow = async (context) => {
     if (pullRequest.base !== "develop" || pullRequest.head !== job.branchName) {
       throw new Error(`PR #${pullRequest.number} must use ${job.branchName} -> develop`);
     }
-    if (!pullRequest.body.includes(`#${job.issueNumber}`)
-      && !pullRequest.body.includes(job.issueUrl)) {
-      throw new Error(`PR #${pullRequest.number} is not linked to issue #${job.issueNumber}`);
+    const issueReference = `Closes #${job.issueNumber}`;
+    if (!pullRequest.body.includes(issueReference) || pullRequest.body.includes("[REDACTED]")) {
+      throw new Error(`PR #${pullRequest.number} must contain ${issueReference} and no [REDACTED] markers`);
     }
     const managedPullRequestId = await managedPullRequestRepository.upsertFromImplementation({
       repositoryId: job.repositoryId,
