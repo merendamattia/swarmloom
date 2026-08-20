@@ -1,6 +1,6 @@
 "use client";
 
-import { BellRing, Save } from "lucide-react";
+import { BellRing, Info, Save, X } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import {
   ActionMessage,
@@ -16,9 +16,15 @@ import {
   useTestNotification,
   useUpdateSettings,
 } from "@/hooks/api";
+import {
+  describeCron,
+  millisecondsToSeconds,
+  parseRepositoryList,
+  secondsToMilliseconds,
+} from "@/lib/settings";
 
-type SettingsForm = SettingsPatch & {
-  githubRepositories: string;
+type SettingsForm = Omit<SettingsPatch, "githubRepositories" | "scheduleTimezone"> & {
+  githubRepositories: string[];
   issueReadyLabel: string;
   issueWorkingLabel: string;
   issueBlockedLabel: string;
@@ -32,7 +38,6 @@ type SettingsForm = SettingsPatch & {
   maxAutomaticFixCycles: number;
   createDiagnosticIssues: boolean;
   scheduleCron: string;
-  scheduleTimezone: string;
   maxParallelJobs: number;
   agentProvider: "codex" | "opencode";
   opencodeModel: string;
@@ -48,7 +53,7 @@ type SettingsForm = SettingsPatch & {
 
 function formFromSettings(settings: Settings): SettingsForm {
   return {
-    githubRepositories: settings.githubRepositories,
+    githubRepositories: parseRepositoryList(settings.githubRepositories),
     issueReadyLabel: settings.issueReadyLabel,
     issueWorkingLabel: settings.issueWorkingLabel,
     issueBlockedLabel: settings.issueBlockedLabel,
@@ -62,7 +67,6 @@ function formFromSettings(settings: Settings): SettingsForm {
     maxAutomaticFixCycles: settings.maxAutomaticFixCycles,
     createDiagnosticIssues: settings.createDiagnosticIssues,
     scheduleCron: settings.scheduleCron,
-    scheduleTimezone: settings.scheduleTimezone,
     maxParallelJobs: settings.maxParallelJobs,
     agentProvider: settings.agentProvider,
     opencodeModel: settings.opencodeModel,
@@ -77,11 +81,24 @@ function formFromSettings(settings: Settings): SettingsForm {
   };
 }
 
+function FieldLabel({ htmlFor, help, children }: { htmlFor: string; help: string; children: string }) {
+  return (
+    <div className="field-label">
+      <label htmlFor={htmlFor}>{children}</label>
+      <span className="info-tip" tabIndex={0} title={help} aria-label={`More information: ${help}`}>
+        <Info size={14} aria-hidden="true" />
+      </span>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const settings = useSettings();
   const save = useUpdateSettings();
   const testNotification = useTestNotification();
   const [draft, setDraft] = useState<SettingsForm | null>(null);
+  const [repositoryInput, setRepositoryInput] = useState("");
+  const [editingTelegram, setEditingTelegram] = useState(false);
   const form = draft ?? (settings.data ? formFromSettings(settings.data) : null);
 
   if (settings.isPending || !form) return <PageSkeleton label="Loading runtime settings" />;
@@ -91,16 +108,37 @@ export default function SettingsPage() {
     setDraft((current) => ({ ...(current ?? formFromSettings(settings.data!)), [key]: value }));
   };
 
+  const addRepositories = (value: string) => {
+    const repositories = parseRepositoryList(value);
+    if (repositories.length === 0) return;
+    setDraft((current) => {
+      const next = current ?? formFromSettings(settings.data!);
+      return { ...next, githubRepositories: [...new Set([...next.githubRepositories, ...repositories])] };
+    });
+    setRepositoryInput("");
+  };
+
+  const removeRepository = (repository: string) => {
+    setDraft((current) => {
+      const next = current ?? formFromSettings(settings.data!);
+      return { ...next, githubRepositories: next.githubRepositories.filter((value) => value !== repository) };
+    });
+  };
+
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const { telegramBotToken, telegramChatId, ...values } = form;
+    const { telegramBotToken, telegramChatId, githubRepositories, ...values } = form;
     const patch: SettingsPatch = {
       ...values,
+      githubRepositories: githubRepositories.join(", "),
       ...(telegramBotToken ? { telegramBotToken } : {}),
       ...(telegramChatId ? { telegramChatId } : {}),
     };
     save.mutate(patch);
   };
+
+  const telegramDataConfigured = settings.data.telegramBotTokenConfigured || settings.data.telegramChatIdConfigured;
+  const telegramFieldsLocked = telegramDataConfigured && !editingTelegram;
 
   return (
     <>
@@ -121,9 +159,36 @@ export default function SettingsPage() {
         <section className="panel settings-card">
           <SectionHeading title="Schedule and repositories" description="The API reloads the cron schedule immediately; the next scan uses the current repository list." />
           <div className="settings-grid">
-            <div className="field settings-wide"><label htmlFor="repositories">GitHub repositories</label><input className="input" id="repositories" value={form.githubRepositories} onChange={(event) => set("githubRepositories", event.target.value)} /><p className="field-help">Comma or whitespace separated owner/repository values.</p></div>
-            <div className="field"><label htmlFor="cron">Schedule cron</label><input className="input mono" id="cron" value={form.scheduleCron} onChange={(event) => set("scheduleCron", event.target.value)} /></div>
-            <div className="field"><label htmlFor="timezone">Schedule timezone</label><input className="input" id="timezone" value={form.scheduleTimezone} onChange={(event) => set("scheduleTimezone", event.target.value)} /></div>
+            <div className="field settings-wide">
+              <label htmlFor="repositories">GitHub repositories</label>
+              <div className="tag-input">
+                <div className="tag-list" aria-live="polite">
+                  {form.githubRepositories.map((repository) => (
+                    <span className="tag" key={repository}>
+                      {repository}
+                      <button className="tag-remove" type="button" aria-label={`Remove ${repository}`} onClick={() => removeRepository(repository)}>
+                        <X size={13} aria-hidden="true" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <input
+                  className="input"
+                  id="repositories"
+                  value={repositoryInput}
+                  placeholder="owner/repository"
+                  onChange={(event) => setRepositoryInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      addRepositories(repositoryInput);
+                    }
+                  }}
+                />
+              </div>
+              <p className="field-help">Type a repository and press Enter to add it.</p>
+            </div>
+            <div className="field"><label htmlFor="cron">Schedule cron</label><input className="input mono" id="cron" value={form.scheduleCron} onChange={(event) => set("scheduleCron", event.target.value)} /><p className="field-help" aria-live="polite">{describeCron(form.scheduleCron)}</p></div>
           </div>
         </section>
 
@@ -148,11 +213,18 @@ export default function SettingsPage() {
         </section>
 
         <section className="panel settings-card">
-          <SectionHeading title="Telegram" description="Tokens are encrypted before they are stored in PostgreSQL and are never returned to the browser." action={<button className="button secondary" type="button" onClick={() => testNotification.mutate()} disabled={!form.telegramEnabled || testNotification.isPending}><BellRing size={16} aria-hidden="true" />{testNotification.isPending ? "Sending…" : "Send test"}</button>} />
+          <SectionHeading
+            title="Telegram"
+            description="Tokens are encrypted before they are stored in PostgreSQL and are never returned to the browser."
+            action={<div className="section-actions">
+              {telegramDataConfigured && !editingTelegram ? <button className="button secondary" type="button" onClick={() => setEditingTelegram(true)}>Edit token and Chat ID</button> : null}
+              <button className="button secondary" type="button" onClick={() => testNotification.mutate()} disabled={!form.telegramEnabled || testNotification.isPending}><BellRing size={16} aria-hidden="true" />{testNotification.isPending ? "Sending…" : "Send test"}</button>
+            </div>}
+          />
           <div className="settings-grid">
             <label className="toggle-field"><input type="checkbox" checked={form.telegramEnabled} onChange={(event) => set("telegramEnabled", event.target.checked)} /><span>Enable Telegram notifications</span></label>
-            <div className="field"><label htmlFor="telegram-token">Bot token</label><input className="input" id="telegram-token" type="password" autoComplete="new-password" value={form.telegramBotToken} onChange={(event) => set("telegramBotToken", event.target.value)} placeholder={settings.data.telegramBotTokenConfigured ? "Configured — leave empty to keep" : "Paste bot token"} /></div>
-            <div className="field"><label htmlFor="telegram-chat">Chat ID</label><input className="input" id="telegram-chat" value={form.telegramChatId} onChange={(event) => set("telegramChatId", event.target.value)} placeholder={settings.data.telegramChatIdConfigured ? "Configured — leave empty to keep" : "Paste chat ID"} /></div>
+            <div className="field"><label htmlFor="telegram-token">Bot token</label><input className="input" id="telegram-token" type="password" autoComplete="new-password" disabled={telegramFieldsLocked} value={form.telegramBotToken} onChange={(event) => set("telegramBotToken", event.target.value)} placeholder={settings.data.telegramBotTokenConfigured ? "Configured — leave empty to keep" : "Paste bot token"} /></div>
+            <div className="field"><label htmlFor="telegram-chat">Chat ID</label><input className="input" id="telegram-chat" disabled={telegramFieldsLocked} value={form.telegramChatId} onChange={(event) => set("telegramChatId", event.target.value)} placeholder={settings.data.telegramChatIdConfigured ? "Configured — leave empty to keep" : "Paste chat ID"} /></div>
           </div>
           <ActionMessage pending={testNotification.isPending} error={testNotification.error} success={testNotification.isSuccess} pendingText="Sending Telegram test message…" />
         </section>
@@ -161,9 +233,9 @@ export default function SettingsPage() {
           <SectionHeading title="Worker timings" description="Tune operational limits without changing database, queue, or process connection settings." />
           <div className="settings-grid">
             <label className="toggle-field"><input type="checkbox" checked={form.createDiagnosticIssues} onChange={(event) => set("createDiagnosticIssues", event.target.checked)} /><span>Open a diagnostic issue when a job fails</span></label>
-            <div className="field"><label htmlFor="heartbeat">Heartbeat interval (ms)</label><input className="input" id="heartbeat" type="number" min={1000} value={form.heartbeatIntervalMs} onChange={(event) => set("heartbeatIntervalMs", Number(event.target.value))} /></div>
-            <div className="field"><label htmlFor="stale">Stale threshold (ms)</label><input className="input" id="stale" type="number" min={5000} value={form.staleJobThresholdMs} onChange={(event) => set("staleJobThresholdMs", Number(event.target.value))} /></div>
-            <div className="field"><label htmlFor="timeout">Agent timeout (ms)</label><input className="input" id="timeout" type="number" min={60000} value={form.agentTimeoutMs} onChange={(event) => set("agentTimeoutMs", Number(event.target.value))} /></div>
+            <div className="field"><FieldLabel htmlFor="heartbeat" help="How often a worker records that it is alive.">Heartbeat interval</FieldLabel><input className="input" id="heartbeat" type="number" min={1} step={1} value={millisecondsToSeconds(form.heartbeatIntervalMs)} onChange={(event) => set("heartbeatIntervalMs", secondsToMilliseconds(Number(event.target.value)))} /><p className="field-help">Seconds</p></div>
+            <div className="field"><FieldLabel htmlFor="stale" help="How long a running job can go without a heartbeat before it is marked stale.">Stale threshold</FieldLabel><input className="input" id="stale" type="number" min={5} step={1} value={millisecondsToSeconds(form.staleJobThresholdMs)} onChange={(event) => set("staleJobThresholdMs", secondsToMilliseconds(Number(event.target.value)))} /><p className="field-help">Seconds</p></div>
+            <div className="field"><FieldLabel htmlFor="timeout" help="The maximum time an agent may run before the worker stops it.">Agent timeout</FieldLabel><input className="input" id="timeout" type="number" min={60} step={1} value={millisecondsToSeconds(form.agentTimeoutMs)} onChange={(event) => set("agentTimeoutMs", secondsToMilliseconds(Number(event.target.value)))} /><p className="field-help">Seconds</p></div>
           </div>
         </section>
 
