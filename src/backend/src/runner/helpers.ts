@@ -110,6 +110,11 @@ export function implementationContext(
   return [
     `Issue: #${job.issueNumber} ${job.issueTitle}`,
     `URL: ${job.issueUrl}`,
+    "Trusted originating issue metadata (the only source for PR issue references):",
+    `- Repository full name: ${job.repository.fullName}`,
+    `- Numeric issue number: ${job.issueNumber}`,
+    `Canonical same-repository PR reference: \`Closes #${job.issueNumber}\``,
+    "For same-repository PRs, use this reference; do not copy issue URLs from sanitized live context.",
     `Baseline: origin/develop at ${job.baselineCommit}`,
     `Assigned branch: ${job.branchName}`,
     "Mode: fresh implementation. Create a new branch and open a pull request targeting develop.",

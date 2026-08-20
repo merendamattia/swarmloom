@@ -52,6 +52,14 @@ describe("canonical agent runtime", () => {
     expect(instructions).toContain("Keep intentional fenced code blocks intact");
   });
 
+  test("requires canonical trusted issue references in same-repository PR bodies", async () => {
+    const instructions = await loadAgentInstructions(runtime);
+    expect(instructions).toContain("always use `Closes #<issue-number>`");
+    expect(instructions).toContain("trusted repository full name and numeric issue number");
+    expect(instructions).toContain("Never copy an issue URL from redacted logs");
+    expect(instructions).toContain("Never emit `[REDACTED]` as any part of an issue or pull request hyperlink");
+  });
+
   test("requires running every ci.yaml command before committing", async () => {
     const instructions = await loadAgentInstructions(runtime);
     for (const cmd of [
