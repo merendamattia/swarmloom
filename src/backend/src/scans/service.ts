@@ -9,7 +9,6 @@ import { eventRepository } from "../repositories/events.ts";
 import { repositoryRepository } from "../repositories/repositories.ts";
 import { scanRunRepository } from "../repositories/scan-runs.ts";
 import type { JobQueue } from "../queue/service.ts";
-import { finishScanIfComplete } from "./finalize.ts";
 import { createIssueScanner } from "./issue-scanner.ts";
 import { createPullRequestScanner } from "./pr-scanner.ts";
 import type { ScannerShared } from "./common.ts";
@@ -105,7 +104,7 @@ export function createScanService({
       if (queuedJobs.length > 0) {
         await events.notifyQueuedSummary(scan.id, queuedJobs);
       }
-      return await finishScanIfComplete(scan.id, config.APP_ENV, events) ?? discovered;
+      return discovered;
     } catch (error) {
       const message = safeError(error);
       await scanRunRepository.fail(scan.id, message);

@@ -113,6 +113,7 @@ export function implementationContext(
     `Baseline: origin/develop at ${job.baselineCommit}`,
     `Assigned branch: ${job.branchName}`,
     "Mode: fresh implementation. Create a new branch and open a pull request targeting develop.",
+    "Markdown PR body requirement: use real newline characters for headings, lists, and section separators. Build the body with `--body-file` from a temporary file or quoted heredoc; never pass literal `\\n` sequences for line breaks. Verify the created body with `gh pr view <number> --json body --template '{{.body}}' | sed -n 'l'`.",
     `Body:\n${job.issueBody}`,
     liveContext && `Issue labels: ${liveContext.issue.labels.join(", ") || "none"}`,
     liveContext && `Live GitHub context fetched before execution:\n${redactSecrets(JSON.stringify(liveContext, null, 2))}`,
