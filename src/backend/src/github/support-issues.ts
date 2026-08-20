@@ -24,7 +24,7 @@ type SupportIssueJob = {
 };
 
 function environment(config: Config) {
-  return { ...globalThis.process.env, GITHUB_TOKEN: config.GITHUB_TOKEN };
+  return { ...globalThis.process.env, SWARMLOOM_GITHUB_TOKEN: config.GITHUB_TOKEN };
 }
 
 function safe(value: unknown, secrets: Record<string, string | undefined>, limit = 12_000) {
@@ -74,6 +74,7 @@ export function supportIssueBody(job: SupportIssueJob, config: Config, origin: S
   const diagnostics = record(job.diagnostics);
   const error = safe(job.errorMessage ?? diagnostics?.error ?? "No error summary recorded", secrets, 2_000);
   const details = [
+    diagnostics?.stack ? `Stack trace: ${safe(diagnostics.stack, secrets)}` : "Stack trace: Not recorded",
     diagnostics?.error ? `Error: ${safe(diagnostics.error, secrets)}` : undefined,
     ...stringList(diagnostics?.causeChain).map((cause) => `Cause: ${safe(cause, secrets)}`),
     diagnostics?.stderr ? `Stderr:
@@ -109,7 +110,6 @@ ${safe(diagnostics.finalOutput, secrets)}` : undefined,
     error,
     "",
     "### Error details and stack trace",
-    "Stack trace:",
     "```text",
     details.length ? details.join("\n\n") : error,
     "```",

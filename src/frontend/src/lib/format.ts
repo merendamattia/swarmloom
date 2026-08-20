@@ -19,6 +19,7 @@ export type DiagnosticsView = {
   sessionId: string | null;
   exitCode: number | null;
   error: string;
+  stack: string | null;
   causeChain: string[];
   stderr: string | null;
   finalOutput: string | null;
@@ -104,6 +105,7 @@ export function normalizeDiagnostics(value: unknown): DiagnosticsView | null {
     sessionId: nullableString(result.sessionId),
     exitCode: numberOrNull(result.exitCode),
     error: stringValue(result.error) ?? "No error detail recorded",
+    stack: nullableString(result.stack),
     causeChain: stringList(result.causeChain),
     stderr: nullableString(result.stderr),
     finalOutput: nullableString(result.finalOutput),
@@ -131,6 +133,8 @@ export function diagnosticsBundle(view: DiagnosticsView) {
     "",
     "Error:",
     view.error,
+    "Stack trace:",
+    view.stack ?? "Not recorded",
     ...(view.causeChain.length ? ["", "Cause chain:", ...view.causeChain.map((cause) => `- ${cause}`)] : []),
     "",
     `Stderr: ${view.stderr ?? "Not recorded"}`,

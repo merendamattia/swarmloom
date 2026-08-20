@@ -32,6 +32,7 @@ export type JobDiagnostics = {
   exitCode: number | null;
   error: string;
   causeChain: string[];
+  stack?: string;
   stderr?: string;
   finalOutput?: string;
   events: DiagnosticEvent[];
@@ -45,6 +46,14 @@ export class AgentExecutionError extends Error {
     super(message);
     this.name = "AgentExecutionError";
   }
+}
+
+export function stackTrace(
+  error: unknown,
+  environment: Record<string, string | undefined> = globalThis.process.env,
+): string | undefined {
+  const stack = error instanceof Error ? error.stack : undefined;
+  return stack ? redactSecrets(stack, environment).slice(0, 12_000) : undefined;
 }
 
 export function causeChain(
@@ -77,6 +86,7 @@ export function minimalDiagnostics(
     exitCode: null,
     error: message,
     causeChain: causeChain(error, environment),
+    stack: stackTrace(error, environment),
     events: [],
   };
 }
@@ -92,26 +102,28 @@ export function executionFailure(
   provider: AgentProvider,
   result: RoleExecution,
   error: unknown,
-  extra: { cause?: unknown; finalOutput?: string; stderr?: string } = {},
+  extra: { cause?: unknown; finalOutput?: string; stderr?: string; environment?: Record<string, string | undefined> } = {},
 ) {
+  const environment = extra.environment ?? globalThis.process.env;
   const message = error instanceof Error ? error.message : String(error);
   const rawOutput = extra.finalOutput
     ?? (result.response.trim() ? result.response : result.finalOutput.trim() ? result.finalOutput : undefined);
-  return new AgentExecutionError(safeMessage(message), {
+  return new AgentExecutionError(safeMessage(message, environment), {
     stage,
     role,
     provider: provider.name,
     model: job.model,
     sessionId: result.sessionId,
     exitCode: result.exitCode,
-    error: safeMessage(message),
-    causeChain: causeChain(extra.cause ?? error),
+    error: safeMessage(message, environment),
+    causeChain: causeChain(extra.cause ?? error, environment),
+    stack: stackTrace(error, environment),
     stderr: extra.stderr ?? (result.stderr || undefined),
     finalOutput: rawOutput ? tail(redactSecrets(rawOutput), 20_000) : undefined,
     events: result.events,
   });
 }
 
-function safeMessage(message: string) {
-  return redactSecrets(message).slice(0, 2_000);
+function safeMessage(message: string, environment = globalThis.process.env) {
+  return redactSecrets(message, environment).slice(0, 2_000);
 }

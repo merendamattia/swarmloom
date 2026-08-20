@@ -56,6 +56,8 @@ export function createJobRunner({
   gcRepository: gc = gcRepository,
   heartbeatIntervalMs,
 }: RunnerDependencies) {
+  const diagnosticEnvironment = { ...globalThis.process.env, SWARMLOOM_GITHUB_TOKEN: config.GITHUB_TOKEN };
+
   async function run(jobId: string, workerId: string) {
     const job = await jobRepository.findRunning(jobId, workerId);
     if (!job) return false;
@@ -119,8 +121,9 @@ export function createJobRunner({
             provider,
             state.lastExecution,
             error,
+            { environment: diagnosticEnvironment },
           ).diagnostics
-          : minimalDiagnostics(error, { provider: provider?.name ?? "unconfigured", model: job.model });
+          : minimalDiagnostics(error, { provider: provider?.name ?? "unconfigured", model: job.model }, diagnosticEnvironment);
       reachedTerminalState = await jobRepository.finishRunning(job.id, "FAILED", {
         errorMessage: message,
         diagnostics: diagnostics as Prisma.InputJsonValue,
@@ -225,7 +228,7 @@ function createExecuteRoleWithRetry(events: EventService, config: Config, provid
         return completed;
       } catch (error) {
         if (attempt >= 1) {
-          throw executionFailure("parser", role, currentJob, provider, result, error, { finalOutput: response || result.finalOutput });
+          throw executionFailure("parser", role, currentJob, provider, result, error, { finalOutput: response || result.finalOutput, environment: { ...globalThis.process.env, SWARMLOOM_GITHUB_TOKEN: config.GITHUB_TOKEN } });
         }
         guidance = `\n\nYour previous response was not accepted: ${safeError(error)}`;
       } finally {

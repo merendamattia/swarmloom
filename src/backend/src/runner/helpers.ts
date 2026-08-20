@@ -7,7 +7,7 @@ import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.
 import { loadAgentInstructions } from "../runtime/instructions.ts";
 import type { AgentRole } from "../providers/index.ts";
 import { ProviderProcessError } from "../providers/process.ts";
-import { AgentExecutionError, causeChain, type DiagnosticEvent, type JobDiagnostics } from "./diagnostics.ts";
+import { AgentExecutionError, causeChain, stackTrace, type DiagnosticEvent, type JobDiagnostics } from "./diagnostics.ts";
 import type { GitHubIssueContext } from "../github/client.ts";
 import type { RunningJob, RunnerContext, RunnerGitHub } from "./types.ts";
 import { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome } from "./response.ts";
@@ -96,6 +96,7 @@ export async function executeRole(
       exitCode: error instanceof ProviderProcessError ? error.exitCode : null,
       error: safeError(error),
       causeChain: causeChain(error),
+      stack: stackTrace(error, { ...globalThis.process.env, SWARMLOOM_GITHUB_TOKEN: context.config.GITHUB_TOKEN }),
       stderr: error instanceof ProviderProcessError ? error.stderr : undefined,
       events: diagnosticEvents,
     });

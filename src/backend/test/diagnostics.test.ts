@@ -36,6 +36,7 @@ describe("job diagnostics", () => {
       exitCode: null,
       error: "job [REDACTED] broke",
       causeChain: ["job [REDACTED] broke"],
+      stack: expect.stringContaining("Error: job [REDACTED] broke"),
       events: [],
     });
   });
