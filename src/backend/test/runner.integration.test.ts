@@ -180,6 +180,8 @@ integration("job runner", () => {
     expect(await diagnosticRunner.run(diagnostic.id, "runner-worker")).toBe(true);
     expect(diagnosticGitHub.createdIssues[0]?.labels).toEqual([config.ISSUE_READY_LABEL]);
     expect(diagnosticGitHub.createdIssues[0]?.body).toContain("Stack trace:");
+    expect(diagnosticGitHub.createdIssues[0]?.body).toContain("created automatically");
+    expect(diagnosticGitHub.createdIssues[0]?.body).not.toContain("created manually");
   });
 
   test("aborts an active provider when cancellation makes its heartbeat fail", async () => {

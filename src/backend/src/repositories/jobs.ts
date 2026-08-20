@@ -128,7 +128,7 @@ type SupportIssueClaim =
     reconcile: boolean;
   };
 
-const SUPPORT_ISSUE_LEASE_MS = 5 * 60_000;
+export const SUPPORT_ISSUE_LEASE_MS = 5 * 60_000;
 
 async function findSupportIssueJob(id: string, environment: string) {
   return prisma.job.findFirst({
@@ -137,7 +137,7 @@ async function findSupportIssueJob(id: string, environment: string) {
   });
 }
 
-async function claimSupportIssue(id: string, environment: string): Promise<SupportIssueClaim> {
+async function claimSupportIssue(id: string, environment: string, leaseMs = SUPPORT_ISSUE_LEASE_MS): Promise<SupportIssueClaim> {
   const job = await findSupportIssueJob(id, environment);
   if (!job) return { kind: "missing" };
   if (job.status !== "FAILED") return { kind: "not_failed" };
@@ -145,7 +145,7 @@ async function claimSupportIssue(id: string, environment: string): Promise<Suppo
     return { kind: "existing", issueNumber: job.supportIssueNumber, issueUrl: job.supportIssueUrl, repositoryId: job.repositoryId };
   }
   const now = new Date();
-  const staleBefore = new Date(now.getTime() - SUPPORT_ISSUE_LEASE_MS);
+  const staleBefore = new Date(now.getTime() - leaseMs);
   const reclaimable = !job.supportIssueCreating
     || job.supportIssueReconcileRequired
     || !job.supportIssueCreatingAt
@@ -201,6 +201,23 @@ async function findSupportIssue(id: string, environment: string) {
   });
   if (!job || job.supportIssueNumber === null || job.supportIssueUrl === null) return null;
   return { issueNumber: job.supportIssueNumber, issueUrl: job.supportIssueUrl };
+}
+
+async function renewSupportIssue(id: string, environment: string, claimedAt: Date) {
+  const renewedAt = new Date();
+  const updated = await prisma.job.updateMany({
+    where: {
+      id,
+      environment,
+      status: "FAILED",
+      supportIssueCreating: true,
+      supportIssueCreatingAt: claimedAt,
+      supportIssueNumber: null,
+      supportIssueUrl: null,
+    },
+    data: { supportIssueCreatingAt: renewedAt },
+  });
+  return updated.count === 1 ? renewedAt : null;
 }
 
 async function saveSupportIssue(id: string, environment: string, claimedAt: Date, issue: { number: number; url: string }) {
@@ -341,6 +358,7 @@ export const jobRepository = {
   claimSupportIssue,
   findSupportIssue,
   saveSupportIssue,
+  renewSupportIssue,
   releaseSupportIssue,
   markSupportIssueForReconciliation,
 };
