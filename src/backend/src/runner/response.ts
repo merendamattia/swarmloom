@@ -25,6 +25,11 @@ function validateSummary(text: string, field: "Outcome" | "Review") {
     throw new Error(`Agent response must start with a ${field}: marker`);
   }
 
+  const summaryMarkerCount = lines.filter((line) => line.trim().toLowerCase().startsWith("tl;dr:")).length;
+  if (summaryMarkerCount !== 1) {
+    throw new Error('Agent response must include exactly one "TL;DR: <brief summary>" line');
+  }
+
   const firstFollowingIndex = nextContentIndex(lines, resultIndex + 1);
   if (firstFollowingIndex < 0) {
     throw new Error(`Agent response must include "TL;DR: <brief summary>" after the ${field}: marker`);
