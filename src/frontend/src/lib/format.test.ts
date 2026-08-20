@@ -60,6 +60,7 @@ test("normalizes persisted failure diagnostics", () => {
     sessionId: "session-1",
     exitCode: 0,
     error: "Agent response must start with Outcome:",
+    stack: "Error: parser failed\n    at parse (runner.ts:1:1)",
     causeChain: ["Agent response must start with Outcome:", "trailing prose"],
     stderr: "",
     finalOutput: "trailing prose",
@@ -72,6 +73,7 @@ test("normalizes persisted failure diagnostics", () => {
     sessionId: "session-1",
     exitCode: 0,
     error: "Agent response must start with Outcome:",
+    stack: "Error: parser failed\n    at parse (runner.ts:1:1)",
     causeChain: ["Agent response must start with Outcome:", "trailing prose"],
     stderr: null,
     finalOutput: "trailing prose",
@@ -94,6 +96,7 @@ test("builds a complete sanitized diagnostic bundle", () => {
     sessionId: "session-1",
     exitCode: 0,
     error: "Agent response must start with Outcome:",
+    stack: "Error: parser failed\n    at parse (runner.ts:1:1)",
     causeChain: ["Agent response must start with Outcome:"],
     stderr: null,
     finalOutput: "trailing prose",
@@ -101,6 +104,7 @@ test("builds a complete sanitized diagnostic bundle", () => {
   });
   expect(bundle).toContain("Stage: Parser");
   expect(bundle).toContain("Session: session-1");
+  expect(bundle).toContain("Stack trace:\nError: parser failed");
   expect(bundle).toContain("Stderr: Not recorded");
   expect(bundle).toContain("Final provider output: trailing prose");
   expect(bundle).toContain("[2026-01-01T00:00:00Z] SESSION_STARTED");

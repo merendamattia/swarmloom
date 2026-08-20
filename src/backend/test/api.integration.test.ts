@@ -230,6 +230,7 @@ integration("operations API", () => {
           error: "Provider failed with test-token",
           causeChain: ["Provider failed with test-token"],
           stderr: "command --token test-token",
+          stack: "Error: Provider failed with test-token\n    at runProvider (worker.ts:42:7)",
           events: [{ type: "COMMAND_FAILED", timestamp: "2026-08-20T12:00:00Z", message: "bun test" }],
         },
       },
@@ -248,6 +249,7 @@ integration("operations API", () => {
       labels: [config.ISSUE_READY_LABEL],
     });
     expect(createdIssues[0]?.body).toContain("Provider failed with [REDACTED]");
+    expect(createdIssues[0]?.body).toContain("at runProvider (worker.ts:42:7)");
     expect(createdIssues[0]?.body).toContain("Job ID");
     expect(createdIssues[0]?.body).toContain("COMMAND_FAILED");
     expect(createdIssues[0]?.body).not.toContain("test-token");
