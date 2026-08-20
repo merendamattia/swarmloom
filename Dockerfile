@@ -18,9 +18,13 @@ FROM dependencies AS runtime-tools
 ARG CODEX_CLI_VERSION=0.147.0
 ARG OPENCODE_CLI_VERSION=1.18.18
 USER root
+# postgresql and redis-server give agent sessions local CI services (no Docker in the
+# worker); netcat-openbsd provides the free-port probe used by swarm-test-services.
 RUN --mount=type=cache,target=/var/cache/apt \
   apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl gh git nodejs npm python3 python3-venv \
+      netcat-openbsd postgresql redis-server \
+  && ln -s /usr/lib/postgresql/*/bin/* /usr/local/bin/ \
   && rm -rf /var/lib/apt/lists/*
 RUN --mount=type=cache,target=/root/.cache/pip \
   python3 -m venv /opt/pre-commit \
@@ -44,6 +48,7 @@ COPY src/backend/prisma.config.ts src/backend/prisma.config.ts
 RUN bun run db:generate \
   && mkdir -p /data/codex-home /data/opencode-data /data/opencode-config \
   && ln -s /app/scripts/verify-before-commit.sh /usr/local/bin/verify-before-commit \
+  && ln -s /app/scripts/swarm-test-services.sh /usr/local/bin/swarm-test-services \
   && chown -R bun:bun /data /app
 USER bun
 WORKDIR /app
@@ -103,6 +108,7 @@ RUN bun run db:generate && bun run build
 FROM build AS runtime
 RUN mkdir -p /data/codex-home /data/opencode-data /data/opencode-config \
   && ln -s /app/scripts/verify-before-commit.sh /usr/local/bin/verify-before-commit \
+  && ln -s /app/scripts/swarm-test-services.sh /usr/local/bin/swarm-test-services \
   && chown -R bun:bun /data /app
 USER bun
 WORKDIR /app
