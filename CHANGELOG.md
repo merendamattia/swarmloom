@@ -42,7 +42,7 @@
 
 ### Features
 
-* **worker:** establish agent worker ([cada049](https://github.com/merendamattia/github-agent-worker/commit/cada049aafa721788c366d6ce040e0a02b93cfcd)), closes [#10](https://github.com/merendamattia/github-agent-worker/issues/10)
+* **worker:** establish agent worker ([cada049](https://github.com/merendamattia/swarmloom/commit/cada049aafa721788c366d6ce040e0a02b93cfcd)), closes [#10](https://github.com/merendamattia/swarmloom/issues/10)
 
 # Changelog
 

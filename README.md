@@ -4,24 +4,53 @@
 
 # Swarmloom
 
-Swarmloom is a Dockerized TypeScript application that turns ready-labelled GitHub issues
-into BullMQ jobs, runs them through interchangeable Codex or OpenCode sessions, opens
-Pull Requests to mandatory `develop`, and performs an independent automated review.
+Swarmloom is a Dockerized TypeScript application that turns ready-labelled GitHub issues into
+durable BullMQ jobs, runs them through interchangeable Codex or OpenCode sessions, opens
+Pull Requests against the mandatory `develop` branch, and reconciles each managed Pull Request
+through its own asynchronous lifecycle.
 
-When that review requests changes, the issue receives `agent:review-requested`; the next scheduled
-scan queues it again so the worker can address the findings and run the review again.
+Implementation, fixing, and review are independent jobs. An agent never starts another agent
+directly: each job performs one responsibility, publishes its result to GitHub (labels and comments
+are the human-visible coordination protocol), and terminates. A single scheduler then reconciles the
+observed GitHub state into the next job:
 
-Every job refreshes the complete issue, comments, linked Pull Requests, diffs, and review threads
-before the agent starts. The agent runs the repository's verification suite locally in the worktree
-before opening a Pull Request. If the job fails, Swarmloom posts the diagnosis to the issue and Pull
-Request when available and opens a new `agent:ready` diagnostic issue containing the redacted stack
-trace.
+```text
+Issue agent:ready
+→ IMPLEMENTATION → PR (agent:review-requested)
+→ REVIEW (inspect Actions and reproduce CI locally)
+→ changes requested → PR agent:fix-requested → FIX → agent:review-requested → REVIEW
+→ review pass → PR agent:review-passed, issue agent:ready-to-merge
+→ human merge → issue agent:done
+```
+
+The Pull Request scanner discovers open PRs carrying a Swarmloom workflow label, records their
+structured PR/issue association from the agent branch, and then reconciles them. It does not gate on
+the GitHub Checks API. Every managed PR carrying
+`agent:review-requested` receives an independent review for its exact head SHA. The reviewer reads
+the PR and GitHub Actions context, reproduces the repository CI locally, and either passes or leaves
+actionable changes. `Review: changes_requested` moves the PR to `agent:fix-requested`; the next scan
+queues a `FIX` job on the same PR branch. The loop `REVIEW → changes requested → FIX → push → REVIEW`
+continues until the review passes or a configurable safety limit (default five consecutive fix
+cycles) blocks the workflow with
+`agent:human-review`. Swarmloom never merges Pull Requests.
+
+Every job refreshes the complete issue, comments, the linked Pull Request, diffs, and review threads
+before the agent starts. The implementation agent runs the repository's verification suite locally
+in the worktree before opening a Pull Request; the worker image bundles ephemeral local Postgres and
+Redis servers (`swarm-test-services`) so integration tests run without Docker. CI state for the exact
+PR head SHA is review evidence, not a scheduler gate.
+If a job fails, Swarmloom records the failure and comments on the issue and Pull Request when
+available. Opening a separate `agent:ready` diagnostic issue is disabled by default and can be
+enabled from Settings.
 
 It includes:
 
-- multi-repository scheduled and manual discovery;
+- multi-repository scheduled and manual discovery with two logical scanners (issues and pull
+  requests) running from one scheduler;
 - exact `origin/develop` baselines, isolated branches, and persistent Git worktrees;
-- BullMQ delivery with PostgreSQL history/state and duplicate prevention;
+- one BullMQ queue where the Job type (`IMPLEMENTATION`, `FIX`, `REVIEW`, `DECOMPOSITION`) and
+  subject (`ISSUE`, `PULL_REQUEST`) express the behavior, with PostgreSQL as the durable
+  business-state/history ledger and SQL-guarded duplicate prevention;
 - Codex (`gpt-5.6-luna`, `max`) and OpenCode (DeepSeek V4 Flash) adapters;
 - one provider-independent global instruction set under `agent-runtime`;
 - shared frontend/backend skills installed globally in the image for Codex, OpenCode, and Claude Code;
