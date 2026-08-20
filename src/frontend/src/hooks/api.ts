@@ -147,6 +147,10 @@ export function useTestNotification() {
   return useAction(async () => json(await api.notifications.test.$post()));
 }
 
+export function useClearDashboardExceptions() {
+  return useAction(async () => json(await api.dashboard.exceptions.clear.$post()));
+}
+
 export function useUpdateSettings() {
   const client = useQueryClient();
   return useMutation({

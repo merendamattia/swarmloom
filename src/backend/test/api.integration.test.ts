@@ -133,6 +133,70 @@ integration("operations API", () => {
     expect(await jobs.json()).toMatchObject({ total: 1, items: [{ id: jobId }] });
   });
 
+  test("clears resolved dashboard exceptions without hiding live state or deleting history", async () => {
+    const failedJob = await prisma.job.create({
+      data: {
+        repositoryId,
+        environment: "test",
+        issueNumber: 100,
+        issueTitle: `Resolved failure ${unique}`,
+        issueUrl: `https://github.com/acme/api-${unique}/issues/100`,
+        issueBody: "Failure body",
+        status: "FAILED",
+        queueJobId: crypto.randomUUID(),
+        branchName: "agent/issue-100",
+        baselineCommit: "b".repeat(40),
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+        completedAt: new Date(Date.now() - 1_000),
+        errorMessage: "The old failure was handled",
+      },
+    });
+    await prisma.jobEvent.create({
+      data: { jobId: failedJob.id, repositoryId, type: "JOB_FAILED", message: "Failure evidence" },
+    });
+    await prisma.repository.update({ where: { id: repositoryId }, data: { status: "INVALID", errorMessage: "Still invalid" } });
+
+    const before = await (await app.request("/api/dashboard")).json();
+    expect(before.exceptionJobs).toEqual(expect.arrayContaining([expect.objectContaining({ id: failedJob.id, status: "FAILED" })]));
+
+    const cleared = await app.request("/api/dashboard/exceptions/clear", { method: "POST" });
+    expect(cleared.status).toBe(200);
+    expect(await cleared.json()).toMatchObject({ exceptionJobs: [] });
+
+    const after = await (await app.request("/api/dashboard")).json();
+    expect(after.exceptionJobs).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: failedJob.id })]));
+    expect(after.repositories).toEqual(expect.arrayContaining([expect.objectContaining({ id: repositoryId, status: "INVALID" })]));
+
+    const retained = await app.request(`/api/jobs/${failedJob.id}`);
+    expect(retained.status).toBe(200);
+    expect(await retained.json()).toMatchObject({ id: failedJob.id, status: "FAILED", events: [expect.objectContaining({ message: "Failure evidence" })] });
+
+    const newFailure = await prisma.job.create({
+      data: {
+        repositoryId,
+        environment: "test",
+        issueNumber: 101,
+        issueTitle: `New failure ${unique}`,
+        issueUrl: `https://github.com/acme/api-${unique}/issues/101`,
+        issueBody: "New failure body",
+        status: "STALE",
+        queueJobId: crypto.randomUUID(),
+        branchName: "agent/issue-101",
+        baselineCommit: "c".repeat(40),
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+        completedAt: new Date(Date.now() + 1_000),
+      },
+    });
+    const withNewFailure = await (await app.request("/api/dashboard")).json();
+    expect(withNewFailure.exceptionJobs).toEqual(expect.arrayContaining([expect.objectContaining({ id: newFailure.id, status: "STALE" })]));
+
+    expect(await prisma.dashboardExceptionAcknowledgement.findUnique({ where: { environment: "test" } })).toMatchObject({ environment: "test" });
+    expect(await prisma.dashboardExceptionAcknowledgement.findUnique({ where: { environment: "production" } })).toBeNull();
+    await prisma.repository.update({ where: { id: repositoryId }, data: { status: "READY", errorMessage: null } });
+  });
+
   test("returns the repository PR URL instead of an agent-provided URL", async () => {
     await prisma.job.update({
       where: { id: jobId },

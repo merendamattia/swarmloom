@@ -15,6 +15,7 @@ import { checkProviderAuthentication, validateStartup } from "../core/startup.ts
 import type { EventService } from "../events/service.ts";
 import type { GitHubClient } from "../github/client.ts";
 import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.ts";
+import { dashboardExceptionRepository } from "../repositories/dashboard-exceptions.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import { repositoryRepository } from "../repositories/repositories.ts";
 import type { JobQueue } from "../queue/service.ts";
@@ -172,7 +173,16 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       }
     })
     .get("/dashboard", async (context) => {
-      const [statusCounts, repositories, activeJobs, recentJobs, scans, heartbeats] = await Promise.all([
+      const acknowledgement = await dashboardExceptionRepository.findAcknowledgement(config.APP_ENV);
+      const exceptionWhere: Prisma.JobWhereInput = acknowledgement
+        ? {
+            OR: [
+              { completedAt: { gt: acknowledgement.acknowledgedAt } },
+              { completedAt: null, updatedAt: { gt: acknowledgement.acknowledgedAt } },
+            ],
+          }
+        : {};
+      const [statusCounts, repositories, activeJobs, recentJobs, exceptionJobs, scans, heartbeats] = await Promise.all([
         prisma.job.groupBy({ where: { environment: config.APP_ENV }, by: ["status"], _count: true }),
         prisma.repository.findMany({ orderBy: { fullName: "asc" } }),
         prisma.job.findMany({
@@ -183,6 +193,12 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         prisma.job.findMany({
           where: { environment: config.APP_ENV },
           orderBy: { createdAt: "desc" },
+          take: 12,
+          select: jobSummarySelect,
+        }),
+        prisma.job.findMany({
+          where: { environment: config.APP_ENV, status: { in: [...dashboardExceptionRepository.exceptionStatuses] }, ...exceptionWhere },
+          orderBy: { completedAt: "desc" },
           take: 12,
           select: jobSummarySelect,
         }),
@@ -204,9 +220,14 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         repositories,
         activeJobs,
         recentJobs,
+        exceptionJobs,
         scans,
         heartbeats,
       });
+    })
+    .post("/dashboard/exceptions/clear", async (context) => {
+      const acknowledgement = await dashboardExceptionRepository.acknowledge(config.APP_ENV);
+      return context.json({ acknowledgedAt: acknowledgement.acknowledgedAt, exceptionJobs: [] });
     })
     .get("/jobs", async (context) => {
       const parsed = jobQuery.safeParse(context.req.query());
