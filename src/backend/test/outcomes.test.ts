@@ -25,6 +25,10 @@ describe("agent responses", () => {
     expect(() => parseReviewOutcome("Review: pass\nDetailed findings.\n\nTL;DR: Passed.")).toThrow("TL;DR:");
   });
 
+  test("rejects duplicate TL;DR marker lines", () => {
+    expect(() => parseJobOutcome("Outcome: blocked\nTL;DR: First summary.\nDetails.\nTL;DR: Second summary.")).toThrow("exactly one");
+  });
+
   test("parses review pass and changes_requested", () => {
     expect(parseReviewOutcome("Review: pass\nTL;DR: The review passed.\nLooks good.")).toBe("pass");
     expect(parseReviewOutcome("review: changes_requested\nTL;DR: Changes are required.\nFix the guard.")).toBe("changes_requested");
