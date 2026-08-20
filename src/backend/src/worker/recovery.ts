@@ -5,7 +5,6 @@ import { redactSecrets } from "../core/secrets.ts";
 import type { Config } from "../core/config-schema.ts";
 import { removeJobWorktree, repositoryPath } from "../git/repositories.ts";
 import { jobRepository } from "../repositories/jobs.ts";
-import { finishScanIfComplete } from "../scans/finalize.ts";
 
 export async function recoverStaleJobs(config: Config, github: GitHubClient, events: EventService) {
   const staleJobs = await jobRepository.recoverStaleBefore(
@@ -68,9 +67,6 @@ export async function recoverStaleJobs(config: Config, github: GitHubClient, eve
         metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber ?? undefined },
       });
     }
-  }
-  for (const scanRunId of new Set(staleJobs.flatMap((job) => job.scanRunId ? [job.scanRunId] : []))) {
-    await finishScanIfComplete(scanRunId, config.APP_ENV, events);
   }
   return staleJobs.length;
 }

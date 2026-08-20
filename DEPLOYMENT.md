@@ -363,10 +363,11 @@ values can be changed from Settings; the API restarts the scheduler after a succ
 
 One scheduler tick runs `IssueScanner` (ready issues → `IMPLEMENTATION` jobs) and
 `PullRequestScanner` (managed open PRs → `FIX`/`REVIEW` jobs and merge finalization) with separate
-responsibilities and the same durable scan lifecycle. Scheduled and manual runs call the same
-pipeline. A nullable unique `activeEnvironmentKey` in PostgreSQL permits one active scan per
-`APP_ENV`; a competing request is recorded as `SKIPPED`. Issues have a unique active key
-(repository + issue) and Pull Request jobs have a unique active key
+responsibilities. A scan is a discovery operation: it completes after repository reconciliation
+and enqueueing, without waiting for any worker job to finish. Scheduled and manual runs call the
+same pipeline. A nullable unique `activeEnvironmentKey` in PostgreSQL permits one active discovery
+per `APP_ENV`; a competing discovery request is recorded as `SKIPPED`. Issues have a unique active
+key (repository + issue) and Pull Request jobs have a unique active key
 (repository + PR + head SHA + job kind), so duplicate scans cannot create duplicate active work.
 The scanners write the durable PostgreSQL history rows, then enqueue the same `queueJobId` in
 BullMQ. Workers alone perform a guarded `QUEUED` → `RUNNING` transition, so duplicate delivery is

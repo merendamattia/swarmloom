@@ -17,7 +17,6 @@ import type { GitHubClient } from "../github/client.ts";
 import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import { repositoryRepository } from "../repositories/repositories.ts";
-import { finishScanIfComplete } from "../scans/finalize.ts";
 import type { JobQueue } from "../queue/service.ts";
 
 type Scanner = { run(source: "SCHEDULED" | "MANUAL"): Promise<{ id: string; status: string }> };
@@ -313,7 +312,6 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       } else {
         await reconcileIssue(job, [], "Worker job cancelled by an operator.");
       }
-      await finishScanIfComplete(job.scanRunId, job.environment, events);
       return context.json({ status: "CANCELLED" });
     })
     .post("/jobs/:id/retry", async (context) => {

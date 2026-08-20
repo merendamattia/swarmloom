@@ -12,7 +12,6 @@ import type { AgentProvider } from "../providers/index.ts";
 import { eventRepository } from "../repositories/events.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import type { JobQueue } from "../queue/service.ts";
-import { finishScanIfComplete } from "../scans/finalize.ts";
 import { runDecomposition } from "./decomposition.ts";
 import { runFix } from "./fix.ts";
 import {
@@ -162,7 +161,6 @@ export function createJobRunner({
           // gc is best-effort; leave the local clone untouched on failure
         }
       }
-      await finishScanIfComplete(job.scanRunId, job.environment, events);
     }
     return reachedTerminalState;
   }

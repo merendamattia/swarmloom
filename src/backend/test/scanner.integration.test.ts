@@ -16,7 +16,6 @@ integration("issue scanner", () => {
   let issueNumber = 42;
   let labelFailure = false;
   let freezeReadyList = false;
-  let firstScanId = "";
   const config = parseConfig({
     DATABASE_URL: process.env.DATABASE_URL ?? "postgresql://unused:unused@localhost:5432/unused",
     REDIS_URL: process.env.REDIS_URL ?? "redis://localhost:18422",
@@ -97,13 +96,16 @@ integration("issue scanner", () => {
     await prisma.$disconnect();
   });
 
-  test("does not complete a scan before repository discovery closes", async () => {
+  test("completes after discovery and releases the environment lock", async () => {
     const { scanRunRepository } = await import("../src/repositories/scan-runs.ts");
     const scan = await scanRunRepository.start(barrierEnvironment, "MANUAL", 0);
 
-    expect(await scanRunRepository.finishJobs(scan.id, barrierEnvironment)).toBeNull();
-    await scanRunRepository.finishDiscovery(scan.id, 0);
-    expect((await scanRunRepository.finishJobs(scan.id, barrierEnvironment))?.status).toBe("COMPLETED");
+    expect(scan.status).toBe("RUNNING");
+    const completed = await scanRunRepository.finishDiscovery(scan.id, 0);
+    expect(completed).toMatchObject({ status: "COMPLETED", activeEnvironmentKey: null });
+    const next = await scanRunRepository.start(barrierEnvironment, "MANUAL", 0);
+    expect(next.status).toBe("RUNNING");
+    await scanRunRepository.finishDiscovery(next.id, 0);
   });
 
   test("queues ready issues as IMPLEMENTATION jobs from origin/develop and records invalid repositories", async () => {
@@ -114,9 +116,7 @@ integration("issue scanner", () => {
       syncRepository: sync,
     });
     const scan = await scanner.run("MANUAL");
-    firstScanId = scan.id;
-
-    expect(scan.status).toBe("RUNNING");
+    expect(scan.status).toBe("COMPLETED");
     expect(scan.queuedCount).toBe(1);
     expect(scannedLabels).toEqual([config.ISSUE_READY_LABEL]);
     expect(labels).toEqual([{
@@ -152,11 +152,11 @@ integration("issue scanner", () => {
     })).not.toBeNull();
   });
 
-  test("a repeated scan is skipped while prior work is active", async () => {
+  test("a repeated scan discovers while prior work is active without duplicating it", async () => {
     const scanner = createScanService({ config: { ...config, APP_ENV: environment as "test" }, github, syncRepository: sync });
     const scan = await scanner.run("MANUAL");
 
-    expect(scan.status).toBe("SKIPPED");
+    expect(scan.status).toBe("COMPLETED");
     expect(scan.queuedCount).toBe(0);
     expect(await prisma.job.count({ where: { environment } })).toBe(1);
     const job = await prisma.job.findFirstOrThrow({ where: { environment } });
@@ -164,8 +164,6 @@ integration("issue scanner", () => {
       where: { id: job.id },
       data: { status: "CANCELLED", activeIssueKey: null, completedAt: new Date() },
     });
-    const { scanRunRepository } = await import("../src/repositories/scan-runs.ts");
-    expect((await scanRunRepository.finishJobs(firstScanId, environment))?.status).toBe("COMPLETED");
   });
 
   test("a failed label acquisition releases the issue key and fails the queued row", async () => {
@@ -174,10 +172,10 @@ integration("issue scanner", () => {
     const scanner = createScanService({ config: { ...config, APP_ENV: environment as "test" }, github, syncRepository: sync });
     const scan = await scanner.run("MANUAL");
 
-    expect(scan).toMatchObject({ status: "COMPLETED", queuedCount: 0, failureCount: 1 });
+    expect(scan).toMatchObject({ status: "COMPLETED", queuedCount: 0 });
     expect(await prisma.job.findFirstOrThrow({ where: { environment, issueNumber: 43 } }))
       .toMatchObject({ status: "FAILED", activeIssueKey: null });
-    expect(await prisma.jobEvent.findFirst({ where: { scanRunId: scan.id, type: "SCAN_COMPLETED" } }))
+    expect(await prisma.jobEvent.findFirst({ where: { scanRunId: scan.id, type: "SCAN_DISCOVERY_COMPLETED" } }))
       .not.toBeNull();
     labelFailure = false;
   });
@@ -553,13 +551,6 @@ integration("aggregated queue notifications", () => {
     expect(queued).toHaveLength(2);
     expect(queued.every((event) => event.notifiedAt !== null)).toBe(true);
 
-    const queuedJobs = await prisma.job.findMany({ where: { scanRunId: scan.id } });
-    await prisma.job.updateMany({
-      where: { id: { in: queuedJobs.map((job) => job.id) } },
-      data: { status: "CANCELLED", activeIssueKey: null, completedAt: new Date() },
-    });
-    const { scanRunRepository } = await import("../src/repositories/scan-runs.ts");
-    expect((await scanRunRepository.finishJobs(scan.id, environment))?.status).toBe("COMPLETED");
   });
 
   test("sends no queue summary when a scan queues zero jobs", async () => {
