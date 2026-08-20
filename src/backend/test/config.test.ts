@@ -20,8 +20,11 @@ describe("configuration", () => {
     expect(config.CODEX_REASONING_EFFORT).toBe("max");
     expect(config.OPENCODE_MODEL).toBe("opencode-go/deepseek-v4-flash");
     expect(config.ISSUE_READY_LABEL).toBe("agent:ready");
-    expect(config.ISSUE_REVIEW_REQUESTED_LABEL).toBe("agent:review-requested");
+    expect(config.PR_REVIEW_REQUESTED_LABEL).toBe("agent:review-requested");
     expect(config.ISSUE_HUMAN_REVIEW_LABEL).toBe("agent:human-review");
+    expect(config.ISSUE_READY_TO_MERGE_LABEL).toBe("agent:ready-to-merge");
+    expect(config.MAX_AUTOMATIC_FIX_CYCLES).toBe(5);
+    expect(config.CREATE_DIAGNOSTIC_ISSUES).toBe(false);
     expect(config.MAX_PARALLEL_JOBS).toBe(1);
     expect(config.SCHEDULE_CRON).toBe("*/30 * * * *");
   });

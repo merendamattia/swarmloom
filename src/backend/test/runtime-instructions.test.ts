@@ -23,6 +23,13 @@ describe("canonical agent runtime", () => {
     expect(instructions).not.toContain("Review Agent");
     expect(instructions).toContain("gh issue view");
     expect(instructions).toContain("gh pr view");
+    expect(instructions).toContain("headRefOid");
+    expect(instructions).toContain("repos/<owner>/<repo>/pulls/<pr-number>/reviews");
+    expect(instructions).toContain("-f head_sha=<head-sha>");
+    expect(instructions).toContain("repos/<owner>/<repo>/actions/runs/<run-id>/jobs");
+    expect(instructions).toContain("gh run view <run-id>");
+    expect(instructions).toContain("--log-failed");
+    expect(instructions).toContain("do not require `Checks: read`");
   });
 
   test("forbids pushing to main or develop and resolves pull request conflicts", async () => {
@@ -48,6 +55,9 @@ describe("canonical agent runtime", () => {
     expect(instructions).toContain("Do not skip any of them");
     expect(instructions).toContain("RUN_INTEGRATION=1");
     expect(instructions).toContain("CHANGELOG.md");
+    expect(instructions).toContain("swarm-test-services start");
+    expect(instructions).toContain("swarm-test-services stop");
+    expect(instructions).toContain("no Docker inside the worker");
   });
 
   test("tells agents to finish simple requests directly", async () => {

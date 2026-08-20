@@ -23,7 +23,11 @@ const pullRequestSchema = pullRequestListSchema.extend({
   additions: z.number().int().nonnegative(),
   deletions: z.number().int().nonnegative(),
   changed_files: z.number().int().nonnegative(),
+  state: z.string(),
+  merged: z.boolean().nullable().optional(),
+  head: z.object({ ref: z.string(), sha: z.string() }),
 });
+const labelListSchema = z.array(z.union([z.string(), z.object({ name: z.string().nullable() })]));
 const issueCommentSchema = z.object({
   body: z.string().nullable(),
   html_url: z.url(),
@@ -62,6 +66,9 @@ export type GitHubIssueContext = {
     url: string;
     base: string;
     head: string;
+    headSha: string;
+    state: string;
+    merged: boolean;
     body: string;
     diff: string;
     additions: number;
@@ -193,6 +200,30 @@ export function createGitHubClient(options: GitHubClientOptions) {
     }
   }
 
+  async function listPullRequests(fullName: string, label: string) {
+    const pullRequests = [];
+    for (let page = 1; ; page += 1) {
+      const query = new URLSearchParams({
+        state: "open",
+        labels: label,
+        per_page: "100",
+        page: String(page),
+      });
+      const batch = z.array(issueSchema).parse(await request(`/repos/${fullName}/issues?${query}`));
+      pullRequests.push(...batch.filter((issue) => issue.pull_request !== undefined).map((issue) => ({
+        number: issue.number,
+        title: issue.title,
+        body: issue.body ?? "",
+        url: issue.html_url,
+        labels: issue.labels.flatMap((value) => {
+          const name = typeof value === "string" ? value : value.name;
+          return name ? [name] : [];
+        }),
+      })));
+      if (batch.length < 100) return pullRequests;
+    }
+  }
+
   async function getIssue(fullName: string, issueNumber: number) {
     const issue = issueSchema.parse(await request(`/repos/${fullName}/issues/${issueNumber}`));
     return {
@@ -217,6 +248,9 @@ export function createGitHubClient(options: GitHubClientOptions) {
       url: pullRequest.html_url,
       base: pullRequest.base.ref,
       head: pullRequest.head.ref,
+      headSha: pullRequest.head.sha,
+      state: pullRequest.state,
+      merged: pullRequest.merged === true,
       body: pullRequest.body ?? "",
       additions: pullRequest.additions,
       deletions: pullRequest.deletions,
@@ -230,23 +264,38 @@ export function createGitHubClient(options: GitHubClientOptions) {
     }, true) as string;
   }
 
-  async function getIssueContext(fullName: string, issueNumber: number, issueUrl: string): Promise<GitHubIssueContext> {
+  async function getPullRequestLabels(fullName: string, pullRequestNumber: number) {
+    const labels = labelListSchema.parse(
+      await request(`/repos/${fullName}/issues/${pullRequestNumber}/labels`),
+    );
+    return labels.flatMap((value) => {
+      const name = typeof value === "string" ? value : value.name;
+      return name ? [name] : [];
+    });
+  }
+
+  async function setPullRequestLabels(fullName: string, pullRequestNumber: number, labels: string[]) {
+    await request(`/repos/${fullName}/issues/${pullRequestNumber}/labels`, {
+      method: "PUT",
+      body: JSON.stringify({ labels }),
+    });
+  }
+
+  async function getIssueContext(fullName: string, issueNumber: number, issueUrl: string, pullRequestNumber?: number): Promise<GitHubIssueContext> {
     const [issue, issueComments, pullRequests] = await Promise.all([
       getIssue(fullName, issueNumber),
       listIssueComments(fullName, issueNumber),
-      listPullRequests(fullName),
+      pullRequestNumber !== undefined ? [pullRequestNumber] : [],
     ]);
-    const linkedPullRequests = pullRequests.filter((pullRequest) =>
-      (pullRequest.body ?? "").includes(`#${issueNumber}`) || (pullRequest.body ?? "").includes(issueUrl));
     return {
       issue,
       issueComments,
-      pullRequests: await Promise.all(linkedPullRequests.map(async (pullRequest) => {
+      pullRequests: await Promise.all(pullRequests.map(async (number) => {
         const [metadata, diff, reviews, comments] = await Promise.all([
-          getPullRequest(fullName, pullRequest.number),
-          getPullRequestDiff(fullName, pullRequest.number),
-          listPullRequestReviews(fullName, pullRequest.number),
-          listPullRequestComments(fullName, pullRequest.number),
+          getPullRequest(fullName, number),
+          getPullRequestDiff(fullName, number),
+          listPullRequestReviews(fullName, number),
+          listPullRequestComments(fullName, number),
         ]);
         return { ...metadata, diff, reviews, comments };
       })),
@@ -266,17 +315,6 @@ export function createGitHubClient(options: GitHubClientOptions) {
         createdAt: comment.created_at ?? null,
       })));
       if (batch.length < 100) return comments;
-    }
-  }
-
-  async function listPullRequests(fullName: string) {
-    const pullRequests: Array<z.infer<typeof pullRequestListSchema>> = [];
-    for (let page = 1; ; page += 1) {
-      const batch = z.array(pullRequestListSchema).parse(await request(
-        `/repos/${fullName}/pulls?state=all&per_page=100&page=${page}`,
-      ));
-      pullRequests.push(...batch);
-      if (batch.length < 100) return pullRequests;
     }
   }
 
@@ -341,9 +379,12 @@ export function createGitHubClient(options: GitHubClientOptions) {
     getRepository,
     ensureLabels,
     listReadyIssues,
+    listPullRequests,
     getIssue,
     getPullRequest,
     getPullRequestDiff,
+    getPullRequestLabels,
+    setPullRequestLabels,
     getIssueContext,
     createIssue,
     setIssueLabels,

@@ -14,7 +14,14 @@ const notifiableTypes = new Set([
   "REPOSITORY_ERROR",
   "GITHUB_RECONCILIATION_REQUIRED",
   "PR_OPENED",
+  "PR_REVIEW_REQUESTED",
+  "PR_FIX_REQUESTED",
   "REVIEW_COMPLETED",
+  "REVIEW_PASSED",
+  "READY_TO_MERGE",
+  "PR_MERGED",
+  "ISSUE_DONE",
+  "LOOP_GUARD_TRIPPED",
   "TELEGRAM_TEST",
 ]);
 
@@ -24,6 +31,8 @@ export type QueuedJobInfo = {
   issueTitle: string;
   issueUrl?: string | null;
   jobId?: string | null;
+  jobType?: string | null;
+  pullRequestNumber?: number | null;
 };
 
 type EventNotifier = {

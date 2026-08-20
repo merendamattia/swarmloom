@@ -76,6 +76,8 @@ integration("operations API", () => {
           labels.splice(0, labels.length, ...next);
         },
         addIssueComment: async () => {},
+        getPullRequestLabels: async () => [],
+        setPullRequestLabels: async () => {},
       },
       queue: { health: async () => "PONG", remove: async () => true },
       settings: createSettingsService(config),
@@ -135,6 +137,7 @@ integration("operations API", () => {
       body: JSON.stringify({
         scheduleCron: "*/30 * * * *",
         maxParallelJobs: 2,
+        createDiagnosticIssues: true,
         telegramEnabled: false,
         telegramBotToken: "telegram-secret-token",
         telegramChatId: "telegram-chat-id",
@@ -144,6 +147,7 @@ integration("operations API", () => {
     const body = await response.text();
     expect(body).not.toContain("telegram-secret-token");
     expect(body).not.toContain("telegram-chat-id");
+    expect(JSON.parse(body)).toMatchObject({ createDiagnosticIssues: true });
     expect(await prisma.runtimeSetting.findMany({ where: { environment: "test" } }))
       .toEqual(expect.arrayContaining([
         expect.objectContaining({ key: "TELEGRAM_BOT_TOKEN", secret: true }),

@@ -131,9 +131,9 @@ describe("Telegram queue summary", () => {
       text: [
         "📥 <b>Scan queued 2 jobs</b>",
         "<b>acme/api#7</b> · Make the queue &lt;durable&gt;",
-        "🔗 <a href=\"https://github.com/acme/api/issues/7\">Issue</a>",
+        "🔗 <a href=\"https://github.com/acme/api/issues/7\">issue #7</a>",
         "<b>acme/api#8</b> · Fix the retry loop",
-        "🔗 <a href=\"https://github.com/acme/api/issues/8\">Issue</a>",
+        "🔗 <a href=\"https://github.com/acme/api/issues/8\">issue #8</a>",
       ].join("\n"),
       parse_mode: "HTML",
       disable_web_page_preview: true,
@@ -164,9 +164,9 @@ describe("Telegram queue summary", () => {
     expect(text).toBe([
       "📥 <b>Scan queued 2 jobs</b>",
       "<b>acme/api#7</b> · Make the queue &lt;durable&gt;",
-      "🔗 <a href=\"https://github.com/acme/api/issues/7\">Issue</a>",
+      "🔗 <a href=\"https://github.com/acme/api/issues/7\">issue #7</a>",
       "<b>acme/api#8</b> · Fix the retry loop",
-      "🔗 <a href=\"https://github.com/acme/api/issues/8\">Issue</a>",
+      "🔗 <a href=\"https://github.com/acme/api/issues/8\">issue #8</a>",
     ].join("\n"));
   });
 

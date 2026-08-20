@@ -24,6 +24,31 @@ enum JobStatus {
   STALE
 }
 
+enum JobType {
+  IMPLEMENTATION
+  FIX
+  REVIEW
+  DECOMPOSITION
+}
+
+enum JobSubject {
+  ISSUE
+  PULL_REQUEST
+}
+
+enum ManagedPrState {
+  OPEN
+  MERGED
+  CLOSED
+}
+
+enum ManagedPrWorkflow {
+  NONE
+  REVIEW_REQUESTED
+  FIX_REQUESTED
+  REVIEW_PASSED
+}
+
 enum AgentProvider {
   CODEX
   OPENCODE
@@ -69,6 +94,7 @@ model Repository {
   updatedAt        DateTime         @updatedAt
   jobs             Job[]
   events           JobEvent[]
+  pullRequests     ManagedPullRequest[]
 
   @@index([status, fullName])
   @@map("repository")
@@ -80,6 +106,8 @@ model Job {
   repository              Repository    @relation(fields: [repositoryId], references: [id], onDelete: Restrict)
   scanRunId               String?
   scanRun                  ScanRun?      @relation(fields: [scanRunId], references: [id], onDelete: SetNull)
+  jobType                 JobType       @default(IMPLEMENTATION)
+  subjectType             JobSubject    @default(ISSUE)
   issueNumber             Int
   issueTitle              String
   issueUrl                String
@@ -87,6 +115,7 @@ model Job {
   environment             String
   status                   JobStatus     @default(QUEUED)
   activeIssueKey          String?       @unique
+  activePrKey             String?       @unique
   queueJobId               String        @unique
   queuedAt                DateTime      @default(now())
   startedAt               DateTime?
@@ -97,6 +126,10 @@ model Job {
   baselineCommit          String
   pullRequestNumber       Int?
   pullRequestUrl          String?
+  pullRequestId           String?
+  pullRequest             ManagedPullRequest? @relation(fields: [pullRequestId], references: [id], onDelete: SetNull)
+  headSha                 String?
+  trigger                 String?
   provider                AgentProvider
   model                   String
   reasoningEffort         String?
@@ -116,26 +149,60 @@ model Job {
   @@index([scanRunId, status])
   @@index([environment, status, queuedAt])
   @@index([provider, createdAt])
+  @@index([repositoryId, pullRequestNumber])
   @@map("job")
 }
 
+model ManagedPullRequest {
+  id                  String           @id @default(cuid())
+  repositoryId        String
+  repository          Repository       @relation(fields: [repositoryId], references: [id], onDelete: Restrict)
+  prNumber            Int
+  issueNumber         Int
+  issueTitle          String
+  issueUrl            String
+  headBranch          String
+  headSha             String
+  baseBranch          String
+  implementationJobId String?
+  state               ManagedPrState   @default(OPEN)
+  workflow            ManagedPrWorkflow @default(NONE)
+  fixReason           String?
+  fixDetails          String?          @db.Text
+  fixCycleCount       Int              @default(0)
+  blocked             Boolean          @default(false)
+  lastObservedAt      DateTime?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  jobs                Job[]
+  reviews             Review[]
+
+  @@unique([repositoryId, prNumber])
+  @@index([repositoryId, state])
+  @@map("managed_pull_request")
+}
+
 model Review {
-  id              String        @id @default(cuid())
-  jobId           String        @unique
-  job             Job           @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  status          ReviewStatus  @default(PENDING)
-  provider        AgentProvider
-  model           String
-  reasoningEffort String?
-  sessionId       String?
-  response        String?       @db.Text
-  exitCode        Int?
-  errorMessage    String?       @db.Text
-  startedAt       DateTime?
-  completedAt     DateTime?
-  durationMs      Int?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  id               String             @id @default(cuid())
+  jobId            String             @unique
+  job              Job                @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  pullRequestId    String?
+  pullRequest      ManagedPullRequest? @relation(fields: [pullRequestId], references: [id], onDelete: SetNull)
+  pullRequestNumber Int?
+  headSha          String?
+  status           ReviewStatus       @default(PENDING)
+  provider         AgentProvider
+  model            String
+  reasoningEffort  String?
+  sessionId        String?
+  response         String?            @db.Text
+  exitCode         Int?
+  errorMessage     String?            @db.Text
+  startedAt        DateTime?
+  completedAt      DateTime?
+  durationMs       Int?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
 
   @@index([status, createdAt])
   @@map("review")
