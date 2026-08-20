@@ -162,7 +162,21 @@ integration("issue scanner", () => {
     const job = await prisma.job.findFirstOrThrow({ where: { environment } });
     await prisma.job.update({
       where: { id: job.id },
-      data: { status: "CANCELLED", activeIssueKey: null, completedAt: new Date() },
+      data: {
+        status: "RUNNING",
+        workerId: "scanner-test-worker",
+        startedAt: new Date(),
+        heartbeatAt: new Date(),
+      },
+    });
+    const repeated = await scanner.run("MANUAL");
+
+    expect(repeated.status).toBe("COMPLETED");
+    expect(repeated.queuedCount).toBe(0);
+    expect(await prisma.job.count({ where: { environment } })).toBe(1);
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { status: "CANCELLED", activeIssueKey: null, completedAt: new Date(), heartbeatAt: null },
     });
   });
 
@@ -343,6 +357,16 @@ integration("pull request scanner", () => {
   });
 
   test("duplicate review scans create exactly one REVIEW for the current head SHA", async () => {
+    const existing = await prisma.job.findFirstOrThrow({ where: { environment } });
+    await prisma.job.update({
+      where: { id: existing.id },
+      data: {
+        status: "RUNNING",
+        workerId: "scanner-review-worker",
+        startedAt: new Date(),
+        heartbeatAt: new Date(),
+      },
+    });
     const scan = await scanServiceConfig().run("MANUAL");
 
     expect(scan.queuedCount).toBe(0);
@@ -356,6 +380,10 @@ integration("pull request scanner", () => {
       issueNumber,
     });
     expect(await prisma.job.count({ where: { environment } })).toBe(1);
+    await prisma.job.update({
+      where: { id: existing.id },
+      data: { status: "CANCELLED", activePrKey: null, completedAt: new Date(), heartbeatAt: null },
+    });
   });
 
   test("repairs a persisted implementation PR that is missing its review label", async () => {
