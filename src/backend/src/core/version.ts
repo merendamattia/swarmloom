@@ -10,5 +10,5 @@ export function parseChangelogVersion(changelog: string) {
 }
 
 export function readApplicationVersion() {
-  return parseChangelogVersion(readFileSync(resolve(process.cwd(), "CHANGELOG.md"), "utf8"));
+  return parseChangelogVersion(readFileSync(resolve(import.meta.dir, "../../../../CHANGELOG.md"), "utf8"));
 }
