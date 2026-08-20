@@ -169,6 +169,13 @@ export function createJobRunner({
     const diagnosticIssue = config.CREATE_DIAGNOSTIC_ISSUES
       ? await createDiagnosticIssue(github, config, job, error, state.activePullRequest)
       : undefined;
+    if (diagnosticIssue) {
+      try {
+        await jobRepository.recordSupportIssue(job.id, diagnosticIssue);
+      } catch {
+        // The diagnostic issue URL is still included in the originating issue comment.
+      }
+    }
     const comment = [
       `Worker failed: ${safeError(error)}`,
       config.CREATE_DIAGNOSTIC_ISSUES
