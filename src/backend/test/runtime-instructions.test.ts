@@ -100,6 +100,9 @@ describe("canonical agent runtime", () => {
     const instructions = await loadAgentInstructions(runtime);
     expect(instructions).toContain("Response file");
     expect(instructions).toContain("Outcome: implemented");
+    expect(instructions).toContain("TL;DR:");
+    expect(instructions).toContain("immediately after that result marker");
+    expect(instructions).toContain("mandatory `PR:` line");
     expect(instructions).toContain("Review: pass");
   });
 

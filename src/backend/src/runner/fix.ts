@@ -5,6 +5,7 @@ import { safeWorktreePath } from "./paths.ts";
 import {
   applyPullRequestLabels,
   fixContext,
+  parseJobOutcome,
   safeError,
 } from "./helpers.ts";
 import type { JobFlow } from "./types.ts";
@@ -56,7 +57,7 @@ export const runFix: JobFlow = async (context) => {
       "issue-worker",
       `Fix ${fullName}#${pullRequest.prNumber} for issue #${job.issueNumber}: ${job.issueTitle}`,
       fixContext(job, liveContext, reason, pullRequest.fixDetails),
-      () => {},
+      (response) => { parseJobOutcome(response); },
       worktreePath,
       signal,
       job,
@@ -66,7 +67,7 @@ export const runFix: JobFlow = async (context) => {
     }
     await jobRepository.setImplementationResult(job.id, result.sessionId, result.exitCode);
 
-    const blockedOutcome = /^outcome:\s*blocked/mi.test(result.response);
+    const blockedOutcome = parseJobOutcome(result.response) === "blocked";
     if (blockedOutcome) {
       await managedPullRequestRepository.block(job.repositoryId, pullRequest.prNumber);
       await applyPullRequestLabels(github, config, job, pullRequest.prNumber, [config.ISSUE_HUMAN_REVIEW_LABEL]);
@@ -235,12 +236,12 @@ export const runFix: JobFlow = async (context) => {
     await context.finalizeIssue(
       job,
       [config.ISSUE_BLOCKED_LABEL, config.ISSUE_HUMAN_REVIEW_LABEL],
-      `Automatic fix cycles exceeded the limit of ${config.MAX_AUTOMATIC_FIX_CYCLES}. The workflow is blocked for human review.\n\n${response}`,
+      `${response}\n\nAutomatic fix cycles exceeded the limit of ${config.MAX_AUTOMATIC_FIX_CYCLES}. The workflow is blocked for human review.`,
     );
     await context.commentOnPullRequest(
       job,
       pullRequest.prNumber,
-      `## Swarmloom loop guard\n\nThis pull request reached the automatic fix limit of ${config.MAX_AUTOMATIC_FIX_CYCLES} cycles. Automation is stopped until a human reviews it.\n\nLast fix response:\n\n${response}`,
+      `${response}\n\n## Swarmloom loop guard\n\nThis pull request reached the automatic fix limit of ${config.MAX_AUTOMATIC_FIX_CYCLES} cycles. Automation is stopped until a human reviews it.`,
     );
   }
 };
