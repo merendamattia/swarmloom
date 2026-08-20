@@ -1,3 +1,25 @@
+# [1.7.0](https://github.com/merendamattia/swarmloom/compare/v1.6.1...v1.7.0) (2026-08-20)
+
+
+### Bug Fixes
+
+* **global.md, runtime-instructions.test.ts:** update instructions for CI command execution and add related tests ([5b6eae8](https://github.com/merendamattia/swarmloom/commit/5b6eae84d65ce2cb582451c3e428a00b8d9943a1))
+* **jobs:** pass pre-commit gate and redact final provider output ([14cb730](https://github.com/merendamattia/swarmloom/commit/14cb730055dca5c3f19291308438b209cc060325))
+* **jobs:** reconcile diagnostics with modular runner ([bcd75b5](https://github.com/merendamattia/swarmloom/commit/bcd75b58b7b570ae4eafbe973d679b6463b273a6))
+* **overview:** add final newlines to version files ([04e1c45](https://github.com/merendamattia/swarmloom/commit/04e1c45a5f75509eb3ea40258c9b1223073d403e))
+* **test:** derive version from changelog ([22d6fbb](https://github.com/merendamattia/swarmloom/commit/22d6fbbf4c7aba900d568976855f749166471925))
+* **worker:** preserve blocked label after terminal failure ([3db4e8c](https://github.com/merendamattia/swarmloom/commit/3db4e8cc79189f83f4dc2a6ccfbcc74744a0bd8d))
+* **worker:** provision CI review toolchain ([fa457a3](https://github.com/merendamattia/swarmloom/commit/fa457a31bec5d74a23bd5d9cf284aa7507268ebe))
+
+
+### Features
+
+* **frontend:** expose async job state ([5a4ec32](https://github.com/merendamattia/swarmloom/commit/5a4ec32c8797a4915995be5d61ba80ae3bb49aae))
+* **jobs:** add copyable diagnostics for failed agent jobs ([63d890f](https://github.com/merendamattia/swarmloom/commit/63d890f273ace0598212ede8f8abf39728301e23))
+* **overview:** show deployed application version in Overview ([be59745](https://github.com/merendamattia/swarmloom/commit/be597458a0af300b40a2f993b6b3c62ec986261f))
+* **worker:** block original issue after terminal job failure ([d530872](https://github.com/merendamattia/swarmloom/commit/d530872861c7cd9186d9cea0a45c5987a231e0c0))
+* **worker:** reconcile PR jobs asynchronously ([8200da8](https://github.com/merendamattia/swarmloom/commit/8200da8656d896067a1094f278bbe78e95ee7f9a))
+
 ## [1.6.1](https://github.com/merendamattia/swarmloom/compare/v1.6.0...v1.6.1) (2026-08-19)
 
 
