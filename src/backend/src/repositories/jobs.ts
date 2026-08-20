@@ -116,6 +116,78 @@ async function finishRunning(
   return updated.count === 1;
 }
 
+type SupportIssueClaim =
+  | { kind: "missing" }
+  | { kind: "not_failed" }
+  | { kind: "existing"; issueNumber: number; issueUrl: string }
+  | { kind: "in_progress" }
+  | { kind: "claimed"; job: NonNullable<Awaited<ReturnType<typeof findSupportIssueJob>>> };
+
+async function findSupportIssueJob(id: string, environment: string) {
+  return prisma.job.findFirst({
+    where: { id, environment },
+    include: { repository: true },
+  });
+}
+
+async function claimSupportIssue(id: string, environment: string): Promise<SupportIssueClaim> {
+  const job = await findSupportIssueJob(id, environment);
+  if (!job) return { kind: "missing" };
+  if (job.status !== "FAILED") return { kind: "not_failed" };
+  if (job.supportIssueNumber !== null && job.supportIssueUrl !== null) {
+    return { kind: "existing", issueNumber: job.supportIssueNumber, issueUrl: job.supportIssueUrl };
+  }
+  if (job.supportIssueCreating) return { kind: "in_progress" };
+
+  const claimed = await prisma.job.updateMany({
+    where: {
+      id,
+      environment,
+      status: "FAILED",
+      supportIssueNumber: null,
+      supportIssueUrl: null,
+      supportIssueCreating: false,
+    },
+    data: { supportIssueCreating: true },
+  });
+  if (claimed.count !== 1) {
+    const concurrent = await findSupportIssueJob(id, environment);
+    if (!concurrent) return { kind: "missing" };
+    if (concurrent.status !== "FAILED") return { kind: "not_failed" };
+    if (concurrent.supportIssueNumber !== null && concurrent.supportIssueUrl !== null) {
+      return { kind: "existing", issueNumber: concurrent.supportIssueNumber, issueUrl: concurrent.supportIssueUrl };
+    }
+    return { kind: "in_progress" };
+  }
+
+  const claimedJob = await findSupportIssueJob(id, environment);
+  return claimedJob ? { kind: "claimed", job: claimedJob } : { kind: "missing" };
+}
+
+async function saveSupportIssue(id: string, environment: string, issue: { number: number; url: string }) {
+  const updated = await prisma.job.updateMany({
+    where: { id, environment, status: "FAILED", supportIssueCreating: true },
+    data: { supportIssueNumber: issue.number, supportIssueUrl: issue.url, supportIssueCreating: false },
+  });
+  return updated.count === 1;
+}
+
+async function recordSupportIssue(id: string, issue: { number: number; url: string }) {
+  const updated = await prisma.job.updateMany({
+    where: { id, supportIssueNumber: null, supportIssueUrl: null },
+    data: { supportIssueNumber: issue.number, supportIssueUrl: issue.url, supportIssueCreating: false },
+  });
+  return updated.count === 1;
+}
+
+async function releaseSupportIssue(id: string, environment: string) {
+  const updated = await prisma.job.updateMany({
+    where: { id, environment, status: "FAILED", supportIssueCreating: true },
+    data: { supportIssueCreating: false },
+  });
+  return updated.count === 1;
+}
+
 async function findRunning(id: string, workerId: string) {
   return prisma.job.findFirst({
     where: { id, status: "RUNNING", workerId },
@@ -213,4 +285,8 @@ export const jobRepository = {
   setWorktree,
   setImplementationResult,
   finishRunning,
+  claimSupportIssue,
+  saveSupportIssue,
+  recordSupportIssue,
+  releaseSupportIssue,
 };

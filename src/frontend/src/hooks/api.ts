@@ -12,6 +12,7 @@ export type Job = InferResponseType<typeof api.jobs[":id"]["$get"], 200>;
 export type Repositories = InferResponseType<typeof api.repositories.$get, 200>;
 export type Scans = InferResponseType<typeof api.scans.$get, 200>;
 export type Settings = InferResponseType<typeof api.settings.$get, 200>;
+export type SupportIssue = { status: "created" | "existing"; issueNumber: number; issueUrl: string };
 export type SettingsPatch = {
   githubRepositories?: string;
   issueReadyLabel?: string;
@@ -141,6 +142,17 @@ export function useCancelJob(id: string) {
 
 export function useRetryJob(id: string) {
   return useAction(async () => json(await api.jobs[":id"].retry.$post({ param: { id } })));
+}
+
+export function useCreateSupportIssue(id: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async () => json<SupportIssue>(await api.jobs[":id"]["support-issue"].$post({ param: { id } })),
+    onSuccess: async () => Promise.all([
+      client.invalidateQueries({ queryKey: ["jobs", id] }),
+      client.invalidateQueries({ queryKey: ["jobs"] }),
+    ]),
+  });
 }
 
 export function useTestNotification() {

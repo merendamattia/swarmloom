@@ -15,6 +15,8 @@ integration("operations API", () => {
   const unique = crypto.randomUUID();
   const apiJobId = crypto.randomUUID();
   const labels = ["bug", "agent:working"];
+  const createdIssues: Array<{ title: string; body: string; labels: string[] }> = [];
+  let createIssueError: Error | undefined;
   const config = parseConfig({
     APP_ENV: "test",
     NODE_ENV: "test",
@@ -86,6 +88,11 @@ integration("operations API", () => {
         }),
         setIssueLabels: async (_repository, _issue, next) => {
           labels.splice(0, labels.length, ...next);
+        },
+        createIssue: async (_repository, title, body, issueLabels) => {
+          if (createIssueError) throw createIssueError;
+          createdIssues.push({ title, body, labels: issueLabels });
+          return { number: 123, url: "https://github.com/acme/api-test/issues/123" };
         },
         addIssueComment: async () => {},
         getPullRequestLabels: async () => [],
@@ -198,6 +205,70 @@ integration("operations API", () => {
     expect(retry.status).toBe(202);
     expect(await retry.json()).toEqual({ scanId: "scan-3", scanStatus: "COMPLETED" });
     expect(labels).toEqual(["bug", config.ISSUE_READY_LABEL]);
+  });
+
+  test("creates one sanitized support issue for a failed job and rejects non-failed jobs", async () => {
+    await prisma.job.update({
+      where: { id: jobId },
+      data: {
+        status: "FAILED",
+        errorMessage: "Provider failed with test-token",
+        diagnostics: {
+          stage: "provider_process",
+          role: "issue-worker",
+          provider: "codex",
+          model: "test-model",
+          sessionId: "session-1",
+          exitCode: 1,
+          error: "Provider failed with test-token",
+          causeChain: ["Provider failed with test-token"],
+          stderr: "command --token test-token",
+          events: [{ type: "COMMAND_FAILED", timestamp: "2026-08-20T12:00:00Z", message: "bun test" }],
+        },
+      },
+    });
+
+    const created = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+    expect(created.status).toBe(201);
+    expect(await created.json()).toEqual({
+      status: "created",
+      issueNumber: 123,
+      issueUrl: "https://github.com/acme/api-test/issues/123",
+    });
+    expect(createdIssues).toHaveLength(1);
+    expect(createdIssues[0]).toMatchObject({
+      title: expect.stringContaining("Provider failed"),
+      labels: [config.ISSUE_READY_LABEL],
+    });
+    expect(createdIssues[0]?.body).toContain("Provider failed with [REDACTED]");
+    expect(createdIssues[0]?.body).toContain("Job ID");
+    expect(createdIssues[0]?.body).toContain("COMMAND_FAILED");
+    expect(createdIssues[0]?.body).not.toContain("test-token");
+
+    const duplicate = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+    expect(duplicate.status).toBe(200);
+    expect(await duplicate.json()).toEqual({
+      status: "existing",
+      issueNumber: 123,
+      issueUrl: "https://github.com/acme/api-test/issues/123",
+    });
+    expect(createdIssues).toHaveLength(1);
+
+    await prisma.job.update({ where: { id: jobId }, data: { status: "COMPLETED" } });
+    const notFailed = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+    expect(notFailed.status).toBe(409);
+    expect(await notFailed.json()).toEqual({ error: "Only failed jobs can create support issues" });
+
+    await prisma.job.update({
+      where: { id: jobId },
+      data: { status: "FAILED", supportIssueNumber: null, supportIssueUrl: null, supportIssueCreating: false },
+    });
+    createIssueError = new Error("GitHub is unavailable");
+    const failedCreation = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+    expect(failedCreation.status).toBe(502);
+    expect(await failedCreation.json()).toEqual({ error: "Could not create support issue: GitHub is unavailable" });
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: jobId } }))
+      .toMatchObject({ status: "FAILED", supportIssueNumber: null, supportIssueUrl: null, supportIssueCreating: false });
   });
 
   test("removes an obsolete repository together with its events and job history", async () => {

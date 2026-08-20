@@ -23,7 +23,7 @@ import {
   SectionHeading,
   StatusPill,
 } from "@/components/operational";
-import { useCancelJob, useJob, useRetryJob } from "@/hooks/api";
+import { useCancelJob, useCreateSupportIssue, useJob, useRetryJob } from "@/hooks/api";
 import {
   agentOutputEvents,
   agentOutputMessage,
@@ -77,7 +77,7 @@ export default function JobPage() {
 
       <div className="detail-grid">
         <div className="detail-main">
-          {data.status === "FAILED" ? <section className="panel"><FailureDiagnostics diagnostics={data.diagnostics} /></section> : null}
+          {data.status === "FAILED" ? <section className="panel"><FailureDiagnostics diagnostics={data.diagnostics} jobId={data.id} supportIssueNumber={data.supportIssueNumber ?? null} supportIssueUrl={data.supportIssueUrl ?? null} /></section> : null}
           <section className="panel">
             <SectionHeading title="Timeline" description={data.status === "RUNNING" ? "Polling every two seconds while this job remains active." : "Only non-empty agent output, in chronological order."} />
             {events.length ? <ol className="timeline">{events.map((event) => <li className="timeline-item" data-level={event.level} key={event.id}><span className="timeline-dot" aria-hidden="true" /><div className="timeline-copy"><div className="timeline-head"><strong>Agent output</strong><time dateTime={event.createdAt}>{dateTime(event.createdAt)}</time></div><MarkdownText value={agentOutputMessage(event.message, data.pullRequestUrl)} /></div></li>)}</ol> : <EmptyState title="No agent output recorded" description="Agent messages will appear here as the worker progresses." />}
@@ -145,14 +145,26 @@ function MarkdownText({ value, className = "rich-text" }: { value: string; class
   })}</p>;
 }
 
-function FailureDiagnostics({ diagnostics }: { diagnostics: unknown }) {
+function FailureDiagnostics({ diagnostics, jobId, supportIssueNumber, supportIssueUrl }: { diagnostics: unknown; jobId: string; supportIssueNumber: number | null; supportIssueUrl: string | null }) {
   const [copied, setCopied] = useState(false);
   const view = normalizeDiagnostics(diagnostics);
+  const createSupportIssue = useCreateSupportIssue(jobId);
+  const createdIssueUrl = createSupportIssue.data?.issueUrl ?? supportIssueUrl;
+  const createdIssueNumber = createSupportIssue.data?.issueNumber ?? supportIssueNumber;
+  const supportIssueAction = createdIssueUrl
+    ? <a className="button secondary" href={createdIssueUrl} target="_blank" rel="noreferrer"><ExternalLink size={16} aria-hidden="true" />Open support issue</a>
+    : <button className="button secondary" type="button" onClick={() => createSupportIssue.mutate()} disabled={createSupportIssue.isPending}><ExternalLink size={16} aria-hidden="true" />{createSupportIssue.isPending ? "Creating issue…" : "Open support issue"}</button>;
+  const supportIssueMessage = createSupportIssue.error
+    ? <ActionMessage pending={false} error={createSupportIssue.error} success={false} pendingText="" />
+    : createdIssueUrl
+      ? <p className="action-message" role="status">Support issue available: <a href={createdIssueUrl} target="_blank" rel="noreferrer">{createdIssueNumber ? `#${createdIssueNumber}` : "Open issue"}</a></p>
+      : null;
 
   if (!view) {
     return (
       <>
-        <SectionHeading title="Technical details" description="No structured execution diagnostics were captured for this failed attempt." />
+        <SectionHeading title="Technical details" description="No structured execution diagnostics were captured for this failed attempt." action={<div className="page-actions">{supportIssueAction}</div>} />
+        {supportIssueMessage}
         <div className="outcome-message" data-tone="danger"><CircleAlert size={19} aria-hidden="true" /><div><h3>Diagnostics unavailable</h3><MarkdownText value="This failed job predates structured diagnostics or the worker could not record evidence. The timeline and error evidence above are the only records; nothing is fabricated." /></div></div>
       </>
     );
@@ -173,8 +185,9 @@ function FailureDiagnostics({ diagnostics }: { diagnostics: unknown }) {
       <SectionHeading
         title="Technical details"
         description="Sanitized execution evidence for this failed attempt."
-        action={<button className="button secondary" type="button" onClick={() => void copyDiagnostics()}><Copy size={16} aria-hidden="true" />{copied ? "Copied" : "Copy diagnostics"}</button>}
+        action={<div className="page-actions">{supportIssueAction}<button className="button secondary" type="button" onClick={() => void copyDiagnostics()}><Copy size={16} aria-hidden="true" />{copied ? "Copied" : "Copy diagnostics"}</button></div>}
       />
+      {supportIssueMessage}
       <dl className="facts">
         <div className="fact"><dt>Failed stage</dt><dd>{statusLabel(view.stage)}</dd></div>
         <div className="fact"><dt>Role</dt><dd>{view.role ? statusLabel(view.role) : "Not recorded"}</dd></div>
