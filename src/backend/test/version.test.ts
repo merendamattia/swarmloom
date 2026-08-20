@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { resolve } from "node:path";
 import { parseReleaseVersion, readApplicationVersion } from "../src/core/version.ts";
 
 describe("parseReleaseVersion", () => {
@@ -21,6 +22,7 @@ describe("parseReleaseVersion", () => {
   });
 
   test("reads the changelog used to build the application", async () => {
-    expect(await readApplicationVersion()).toBe("1.3.0");
+    const changelog = await Bun.file(resolve(import.meta.dir, "../../../CHANGELOG.md")).text();
+    expect(await readApplicationVersion()).toBe(parseReleaseVersion(changelog));
   });
 });
