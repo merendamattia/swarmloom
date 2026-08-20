@@ -23,6 +23,8 @@ type QueuedJob = {
   issueTitle: string;
   issueUrl?: string | null;
   jobId?: string | null;
+  jobType?: string | null;
+  pullRequestNumber?: number | null;
 };
 
 export type TelegramQueueSummary = {
@@ -40,7 +42,14 @@ const eventTitles: Record<string, [string, string]> = {
   JOB_CANCELLED: ["🛑", "Job cancelled"],
   JOB_RETRY_REQUESTED: ["🔁", "Job retry requested"],
   PR_OPENED: ["🔗", "Pull request opened"],
+  PR_REVIEW_REQUESTED: ["🧪", "Review requested"],
+  PR_FIX_REQUESTED: ["🛠️", "Fix requested"],
   REVIEW_COMPLETED: ["🧪", "Review completed"],
+  REVIEW_PASSED: ["🎉", "Review passed"],
+  READY_TO_MERGE: ["🚦", "Ready to merge"],
+  PR_MERGED: ["🎊", "Pull request merged"],
+  ISSUE_DONE: ["✅", "Issue done"],
+  LOOP_GUARD_TRIPPED: ["🛑", "Automatic fix limit reached"],
   REPOSITORY_INVALID: ["⚠️", "Repository invalid"],
   REPOSITORY_ERROR: ["⚠️", "Repository error"],
   GITHUB_RECONCILIATION_REQUIRED: ["⚠️", "GitHub reconciliation required"],
@@ -109,8 +118,12 @@ export function formatTelegramQueueSummary(summary: TelegramQueueSummary) {
 }
 
 function queuedJobLine(job: QueuedJob) {
-  const description = `<b>${escapeHtml(`${job.repository}#${job.issueNumber}`)}</b> · ${escapeHtmlWithLimit(job.issueTitle, 200)}`;
-  const issueLink = link(job.issueUrl, "Issue");
+  const kind = job.jobType ? `<b>${escapeHtml(job.jobType)}</b> · ` : "";
+  const subject = job.pullRequestNumber != null
+    ? `PR #${job.pullRequestNumber}`
+    : `issue #${job.issueNumber}`;
+  const description = `<b>${escapeHtml(`${job.repository}#${job.issueNumber}`)}</b> · ${kind}${escapeHtmlWithLimit(job.issueTitle, 200)}`;
+  const issueLink = link(job.issueUrl, subject);
   return issueLink ? `${description}\n🔗 ${issueLink}` : description;
 }
 

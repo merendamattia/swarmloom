@@ -15,12 +15,17 @@ export type Settings = InferResponseType<typeof api.settings.$get, 200>;
 export type SettingsPatch = {
   githubRepositories?: string;
   issueReadyLabel?: string;
-  issueReviewRequestedLabel?: string;
   issueWorkingLabel?: string;
   issueBlockedLabel?: string;
   issueCompletedLabel?: string;
   issueDecomposedLabel?: string;
+  issueReadyToMergeLabel?: string;
   issueHumanReviewLabel?: string;
+  prReviewRequestedLabel?: string;
+  prFixRequestedLabel?: string;
+  prReviewPassedLabel?: string;
+  maxAutomaticFixCycles?: number;
+  createDiagnosticIssues?: boolean;
   scheduleCron?: string;
   scheduleTimezone?: string;
   maxParallelJobs?: number;
@@ -38,6 +43,8 @@ export type SettingsPatch = {
 
 export type JobFilters = {
   status?: string;
+  jobType?: string;
+  subjectType?: string;
   provider?: string;
   repositoryId?: string;
   q?: string;
@@ -83,6 +90,8 @@ export function useJobs(filters: JobFilters) {
       page: String(filters.page),
       pageSize: String(filters.pageSize),
       ...(filters.status ? { status: filters.status as "QUEUED" } : {}),
+      ...(filters.jobType ? { jobType: filters.jobType as "FIX" } : {}),
+      ...(filters.subjectType ? { subjectType: filters.subjectType as "PULL_REQUEST" } : {}),
       ...(filters.provider ? { provider: filters.provider as "CODEX" } : {}),
       ...(filters.repositoryId ? { repositoryId: filters.repositoryId } : {}),
       ...(filters.q ? { q: filters.q } : {}),

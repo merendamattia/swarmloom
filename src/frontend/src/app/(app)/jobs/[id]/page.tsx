@@ -2,8 +2,10 @@
 
 import {
   Ban,
+  ChevronDown,
   ChevronRight,
   CircleAlert,
+  Copy,
   ExternalLink,
   GitPullRequest,
   LoaderCircle,
@@ -11,9 +13,11 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useState } from "react";
 import {
   ActionMessage,
   EmptyState,
+  JobKindPill,
   PageError,
   PageSkeleton,
   SectionHeading,
@@ -24,10 +28,14 @@ import {
   agentOutputEvents,
   agentOutputMessage,
   dateTime,
+  diagnosticsBundle,
   duration,
   inlineMarkdown,
+  normalizeDiagnostics,
   shortCommit,
   statusLabel,
+  subjectLabel,
+  triggerLabel,
 } from "@/lib/format";
 
 const cancellable = new Set(["QUEUED", "RUNNING"]);
@@ -45,15 +53,17 @@ export default function JobPage() {
   const events = agentOutputEvents(data.events);
   const result = typeof data.result === "string" && data.result.trim() ? data.result : null;
   const review = typeof data.review?.response === "string" && data.review.response.trim() ? data.review.response : null;
+  const trigger = triggerLabel(data.trigger);
+  const subject = subjectLabel(data.subjectType, data.issueNumber, data.pullRequestNumber);
 
   return (
     <>
-      <nav className="breadcrumbs" aria-label="Breadcrumb"><Link href="/jobs">Jobs</Link><ChevronRight size={14} aria-hidden="true" /><span aria-current="page">{data.repository.fullName} #{data.issueNumber}</span></nav>
+      <nav className="breadcrumbs" aria-label="Breadcrumb"><Link href="/jobs">Jobs</Link><ChevronRight size={14} aria-hidden="true" /><span aria-current="page">{data.repository.fullName} {subject}</span></nav>
       <header className="page-header">
         <div className="job-heading">
           <p className="eyebrow">Job evidence</p>
           <h1>{data.issueTitle}</h1>
-          <div className="job-context"><StatusPill status={data.status} /><a href={data.issueUrl} target="_blank" rel="noreferrer">{data.repository.fullName} #{data.issueNumber} <ExternalLink size={13} aria-hidden="true" /></a><span className="mono">{data.id}</span></div>
+          <div className="job-context"><StatusPill status={data.status} /><JobKindPill jobType={data.jobType} /><a href={data.issueUrl} target="_blank" rel="noreferrer">{subject} · issue #{data.issueNumber} <ExternalLink size={13} aria-hidden="true" /></a><span className="mono">{data.id}</span></div>
         </div>
         <div className="page-actions">
           {cancellable.has(data.status) ? <button className="button danger" type="button" onClick={() => cancel.mutate()} disabled={cancel.isPending}><Ban size={16} aria-hidden="true" />{cancel.isPending ? "Cancelling…" : "Cancel job"}</button> : null}
@@ -61,12 +71,13 @@ export default function JobPage() {
           {data.pullRequestUrl ? <a className="button secondary" href={data.pullRequestUrl} target="_blank" rel="noreferrer"><GitPullRequest size={16} aria-hidden="true" />Open PR</a> : null}
         </div>
       </header>
-      <ActionMessage pending={cancel.isPending || retry.isPending} error={cancel.error || retry.error} success={cancel.isSuccess || retry.isSuccess} pendingText={cancel.isPending ? "Cancelling the job…" : "Restoring the ready label and starting a scan…"} />
+      <ActionMessage pending={cancel.isPending || retry.isPending} error={cancel.error || retry.error} success={cancel.isSuccess || retry.isSuccess} pendingText={cancel.isPending ? "Cancelling the job…" : data.subjectType === "PULL_REQUEST" ? "Restoring the pull request label and starting a scan…" : "Restoring the ready label and starting a scan…"} />
 
       {data.errorMessage ? <div className="notice" role="alert"><CircleAlert size={20} aria-hidden="true" /><div><strong>The job requires attention</strong><p>{data.errorMessage}</p></div></div> : null}
 
       <div className="detail-grid">
         <div className="detail-main">
+          {data.status === "FAILED" ? <section className="panel"><FailureDiagnostics diagnostics={data.diagnostics} /></section> : null}
           <section className="panel">
             <SectionHeading title="Timeline" description={data.status === "RUNNING" ? "Polling every two seconds while this job remains active." : "Only non-empty agent output, in chronological order."} />
             {events.length ? <ol className="timeline">{events.map((event) => <li className="timeline-item" data-level={event.level} key={event.id}><span className="timeline-dot" aria-hidden="true" /><div className="timeline-copy"><div className="timeline-head"><strong>Agent output</strong><time dateTime={event.createdAt}>{dateTime(event.createdAt)}</time></div><MarkdownText value={agentOutputMessage(event.message, data.pullRequestUrl)} /></div></li>)}</ol> : <EmptyState title="No agent output recorded" description="Agent messages will appear here as the worker progresses." />}
@@ -78,8 +89,8 @@ export default function JobPage() {
           </section>
 
           <section className="panel">
-            <SectionHeading title="Independent review" description="A fresh provider session evaluates the pull request against the issue and develop diff." />
-            {data.review ? <ReviewEvidence review={data.review} response={review} /> : <EmptyState title="No review yet" description={data.pullRequestUrl ? "The independent review has not completed." : "A review starts only after the job opens a verified pull request."} />}
+            <SectionHeading title="Automated review" description="Review sessions are independent durable jobs; this evidence belongs to the review job that owns it." />
+            {data.review ? <ReviewEvidence review={data.review} response={review} /> : <EmptyState title="No review recorded" description={data.jobType === "REVIEW" ? "This review job did not persist a review result." : "Reviews run as separate jobs with their own history."} />}
           </section>
         </div>
 
@@ -87,6 +98,9 @@ export default function JobPage() {
           <section className="panel">
             <SectionHeading title="Execution" />
             <dl className="facts">
+              <div className="fact"><dt>Job kind</dt><dd>{statusLabel(data.jobType)}</dd></div>
+              <div className="fact"><dt>Subject</dt><dd>{subject}</dd></div>
+              {trigger ? <div className="fact"><dt>Trigger</dt><dd>{trigger}</dd></div> : null}
               <div className="fact"><dt>Provider</dt><dd>{statusLabel(data.provider)}</dd></div>
               <div className="fact"><dt>Model</dt><dd>{data.model}</dd></div>
               <div className="fact"><dt>Reasoning</dt><dd>{data.reasoningEffort ?? "Provider default"}</dd></div>
@@ -104,6 +118,7 @@ export default function JobPage() {
               <div className="fact"><dt>Baseline</dt><dd className="mono" title={data.baselineCommit}>{shortCommit(data.baselineCommit)}</dd></div>
               <div className="fact"><dt>Branch</dt><dd className="mono">{data.branchName}</dd></div>
               <div className="fact"><dt>Pull request</dt><dd>{data.pullRequestNumber ? `#${data.pullRequestNumber}` : "Not opened"}</dd></div>
+              <div className="fact"><dt>Head SHA</dt><dd className="mono" title={data.headSha ?? undefined}>{shortCommit(data.headSha)}</dd></div>
             </dl>
           </section>
           <section className="panel">
@@ -128,6 +143,68 @@ function MarkdownText({ value, className = "rich-text" }: { value: string; class
     if (part.kind === "link" && part.href) return <a href={part.href} target="_blank" rel="noreferrer" key={index}>{part.value}</a>;
     return <span key={index}>{part.value}</span>;
   })}</p>;
+}
+
+function FailureDiagnostics({ diagnostics }: { diagnostics: unknown }) {
+  const [copied, setCopied] = useState(false);
+  const view = normalizeDiagnostics(diagnostics);
+
+  if (!view) {
+    return (
+      <>
+        <SectionHeading title="Technical details" description="No structured execution diagnostics were captured for this failed attempt." />
+        <div className="outcome-message" data-tone="danger"><CircleAlert size={19} aria-hidden="true" /><div><h3>Diagnostics unavailable</h3><MarkdownText value="This failed job predates structured diagnostics or the worker could not record evidence. The timeline and error evidence above are the only records; nothing is fabricated." /></div></div>
+      </>
+    );
+  }
+
+  const copyDiagnostics = async () => {
+    try {
+      await navigator.clipboard.writeText(diagnosticsBundle(view));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2_000);
+    } catch {
+      // clipboard access can be blocked; leave the action silent
+    }
+  };
+
+  return (
+    <>
+      <SectionHeading
+        title="Technical details"
+        description="Sanitized execution evidence for this failed attempt."
+        action={<button className="button secondary" type="button" onClick={() => void copyDiagnostics()}><Copy size={16} aria-hidden="true" />{copied ? "Copied" : "Copy diagnostics"}</button>}
+      />
+      <dl className="facts">
+        <div className="fact"><dt>Failed stage</dt><dd>{statusLabel(view.stage)}</dd></div>
+        <div className="fact"><dt>Role</dt><dd>{view.role ? statusLabel(view.role) : "Not recorded"}</dd></div>
+        <div className="fact"><dt>Provider</dt><dd>{statusLabel(view.provider)}</dd></div>
+        <div className="fact"><dt>Model</dt><dd>{view.model}</dd></div>
+        <div className="fact"><dt>Session</dt><dd className="mono">{view.sessionId ?? "Not recorded"}</dd></div>
+        <div className="fact"><dt>Exit code</dt><dd>{view.exitCode ?? "Not recorded"}</dd></div>
+      </dl>
+      <details className="diagnostics-details">
+        <summary><ChevronDown size={16} aria-hidden="true" />Show technical details</summary>
+        <DiagnosticBlock title="Error" text={view.error} />
+        {view.causeChain.length ? <DiagnosticBlock title="Cause chain" lines={view.causeChain} /> : null}
+        <DiagnosticBlock title="Stderr" text={view.stderr} />
+        <DiagnosticBlock title="Final provider output" text={view.finalOutput} />
+        <div className="diagnostics-block">
+          <h3>Agent/tool timeline</h3>
+          {view.events.length
+            ? <ol className="diagnostics-timeline">{view.events.map((event) => <li key={`${event.timestamp}:${event.type}`}><span className="diagnostics-event-time mono">{event.timestamp || "No timestamp"}</span><span><strong>{statusLabel(event.type)}</strong>{event.tool ? <span className="list-meta"> · {event.tool}</span> : null}</span>{event.message ? <MarkdownText value={event.message} /> : null}</li>)}</ol>
+            : <p className="muted">No agent or tool events were recorded for this attempt.</p>}
+        </div>
+      </details>
+    </>
+  );
+}
+
+function DiagnosticBlock({ title, text, lines }: { title: string; text?: string | null; lines?: string[] }) {
+  if (lines) {
+    return <div className="diagnostics-block"><h3>{title}</h3><pre className="diagnostics-pre">{lines.join("\n")}</pre></div>;
+  }
+  return <div className="diagnostics-block"><h3>{title}</h3>{text ? <pre className="diagnostics-pre">{text}</pre> : <p className="muted">Not recorded</p>}</div>;
 }
 
 function ReviewEvidence({ review, response }: { review: NonNullable<import("@/hooks/api").Job["review"]>; response: string | null }) {

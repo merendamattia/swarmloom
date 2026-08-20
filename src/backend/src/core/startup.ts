@@ -8,6 +8,7 @@ import { createGitHubClient } from "../github/client.ts";
 import { agentLabelDefinitions } from "../github/labels.ts";
 import { loadAgentInstructions } from "../runtime/instructions.ts";
 import { providerLoginCommand } from "./provider-auth.ts";
+import { readApplicationVersion } from "./version.ts";
 
 export async function validateStartup(config: Config) {
   const repositories = resolve(config.DATA_DIR, "repositories");
@@ -19,10 +20,11 @@ export async function validateStartup(config: Config) {
     prisma.$queryRaw`SELECT 1`,
   ]);
 
-  const [gitVersion, ghVersion, providerVersion] = await Promise.all([
+  const [gitVersion, ghVersion, providerVersion, version] = await Promise.all([
     command(["git", "--version"]),
     command(["gh", "--version"]),
     command([config.AGENT_PROVIDER, "--version"]),
+    readApplicationVersion(),
   ]);
   await command(["gh", "auth", "status"], { ...process.env, GH_TOKEN: config.GITHUB_TOKEN });
   const github = createGitHubClient({ token: config.GITHUB_TOKEN, apiUrl: config.GITHUB_API_URL });
@@ -36,6 +38,7 @@ export async function validateStartup(config: Config) {
     ghVersion: firstLine(ghVersion),
     provider: config.AGENT_PROVIDER,
     providerVersion: firstLine(providerVersion),
+    version,
   };
 }
 

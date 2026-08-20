@@ -11,25 +11,27 @@ import { prisma } from "../core/db.ts";
 import { buildHealthServices } from "./health.ts";
 import { logger } from "../core/logger.ts";
 import { redactSecrets } from "../core/secrets.ts";
-import { checkProviderAuthentication } from "../core/startup.ts";
+import { checkProviderAuthentication, validateStartup } from "../core/startup.ts";
 import type { EventService } from "../events/service.ts";
 import type { GitHubClient } from "../github/client.ts";
-import { replaceWorkerLabels } from "../github/labels.ts";
+import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import { repositoryRepository } from "../repositories/repositories.ts";
 import { finishScanIfComplete } from "../scans/finalize.ts";
 import type { JobQueue } from "../queue/service.ts";
 
 type Scanner = { run(source: "SCHEDULED" | "MANUAL"): Promise<{ id: string; status: string }> };
-type ApiGitHub = Pick<GitHubClient, "getIssue" | "setIssueLabels" | "addIssueComment">;
+type ApiGitHub = Pick<GitHubClient,
+  "getIssue" | "setIssueLabels" | "addIssueComment" | "getPullRequestLabels" | "setPullRequestLabels">;
 type Scheduler = { restart(): void };
+type Startup = Awaited<ReturnType<typeof validateStartup>>;
 
 type Dependencies = {
   config: Config;
   scanner: Scanner;
   github: ApiGitHub;
   events: EventService;
-  startup: Record<string, unknown>;
+  startup: Startup;
   queue: Pick<JobQueue, "health" | "remove">;
   settings: SettingsService;
   scheduler: Scheduler;
@@ -37,6 +39,8 @@ type Dependencies = {
 
 const jobQuery = z.object({
   status: z.enum(["QUEUED", "RUNNING", "COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"]).optional(),
+  jobType: z.enum(["IMPLEMENTATION", "FIX", "REVIEW", "DECOMPOSITION"]).optional(),
+  subjectType: z.enum(["ISSUE", "PULL_REQUEST"]).optional(),
   provider: z.enum(["CODEX", "OPENCODE"]).optional(),
   repositoryId: z.string().optional(),
   q: z.string().trim().min(1).max(100).optional(),
@@ -44,6 +48,42 @@ const jobQuery = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
 });
 
+
+const jobSummaryFields = {
+  id: true,
+  jobType: true,
+  subjectType: true,
+  issueNumber: true,
+  issueTitle: true,
+  issueUrl: true,
+  status: true,
+  completedAt: true,
+  durationMs: true,
+  branchName: true,
+  baselineCommit: true,
+  pullRequestNumber: true,
+  pullRequestUrl: true,
+  headSha: true,
+  trigger: true,
+  provider: true,
+  model: true,
+  startedAt: true,
+  attempts: true,
+  errorMessage: true,
+  updatedAt: true,
+  createdAt: true,
+};
+
+const jobSummarySelect = {
+  ...jobSummaryFields,
+  repository: { select: { fullName: true } },
+  review: { select: { status: true } },
+} satisfies Prisma.JobSelect;
+
+const repositoryJobSummarySelect = {
+  ...jobSummaryFields,
+  review: { select: { status: true } },
+} satisfies Prisma.JobSelect;
 export function createApp({ config, scanner, github, events, startup, queue, settings, scheduler }: Dependencies) {
   const app = new Hono().basePath("/api");
   app.use("*", requestId(), secureHeaders(), cors({
@@ -139,13 +179,13 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         prisma.job.findMany({
           where: { environment: config.APP_ENV, status: "RUNNING" },
           orderBy: { startedAt: "asc" },
-          include: { repository: { select: { fullName: true } }, review: true },
+          select: jobSummarySelect,
         }),
         prisma.job.findMany({
           where: { environment: config.APP_ENV },
           orderBy: { createdAt: "desc" },
           take: 12,
-          include: { repository: { select: { fullName: true } }, review: true },
+          select: jobSummarySelect,
         }),
         prisma.scanRun.findMany({
           where: { environment: config.APP_ENV }, orderBy: { startedAt: "desc" }, take: 10,
@@ -180,7 +220,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         ...(q ? { OR: [
           { issueTitle: { contains: q, mode: "insensitive" } },
           { repository: { fullName: { contains: q, mode: "insensitive" } } },
-          ...(issueNumber ? [{ issueNumber }] : []),
+          ...(issueNumber ? [{ issueNumber }, { pullRequestNumber: issueNumber }] : []),
         ] } : {}),
       };
       const [items, total] = await Promise.all([
@@ -189,7 +229,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
           orderBy: { createdAt: "desc" },
           skip: (page - 1) * pageSize,
           take: pageSize,
-          include: { repository: { select: { fullName: true } }, review: true },
+          select: jobSummarySelect,
         }),
         prisma.job.count({ where }),
       ]);
@@ -201,6 +241,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         include: {
           repository: true,
           review: true,
+          pullRequest: true,
           events: { orderBy: { createdAt: "asc" } },
         },
       });
@@ -215,7 +256,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
           where: { environment: config.APP_ENV },
           orderBy: { createdAt: "desc" },
           take: 5,
-          include: { review: true },
+          select: repositoryJobSummarySelect,
         },
       },
     })))
@@ -253,13 +294,25 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       await queue.remove(job.queueJobId);
       await events.record({
         type: "JOB_CANCELLED",
-        message: `Cancelled ${job.repository.fullName}#${job.issueNumber}`,
+        message: `Cancelled ${job.jobType} job for ${job.repository.fullName}#${job.issueNumber}`,
         jobId: job.id,
         repositoryId: job.repositoryId,
         scanRunId: job.scanRunId ?? undefined,
-        metadata: { issueUrl: job.issueUrl },
+        metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber ?? undefined },
       });
-      await reconcileIssue(job, [], "Worker job cancelled by an operator.");
+      if (job.subjectType === "PULL_REQUEST" && job.pullRequestNumber) {
+        try {
+          await github.addIssueComment(
+            job.repository.fullName,
+            job.pullRequestNumber,
+            "Worker job cancelled by an operator. The next scan will reschedule the work.",
+          );
+        } catch {
+          // the event above already carries the durable evidence
+        }
+      } else {
+        await reconcileIssue(job, [], "Worker job cancelled by an operator.");
+      }
       await finishScanIfComplete(job.scanRunId, job.environment, events);
       return context.json({ status: "CANCELLED" });
     })
@@ -271,16 +324,39 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       if (!["FAILED", "BLOCKED", "CANCELLED", "STALE"].includes(job.status)) {
         return context.json({ error: "Only failed, blocked, cancelled, or stale jobs can be retried" }, 409);
       }
-      if (!await reconcileIssue(job, [config.ISSUE_READY_LABEL],
-        `Retry requested for prior worker job ${job.id}.`)) {
-        return context.json({ error: "Could not restore the GitHub ready label" }, 502);
+      if (job.subjectType === "PULL_REQUEST" && job.pullRequestNumber) {
+        try {
+          const labels = await github.getPullRequestLabels(job.repository.fullName, job.pullRequestNumber);
+          const nextLabels = job.jobType === "REVIEW"
+            ? [config.PR_REVIEW_REQUESTED_LABEL]
+            : [config.PR_FIX_REQUESTED_LABEL];
+          await github.setPullRequestLabels(
+            job.repository.fullName,
+            job.pullRequestNumber,
+            replacePullRequestLabels(labels, config, nextLabels),
+          );
+        } catch (error) {
+          await events.record({
+            type: "GITHUB_RECONCILIATION_REQUIRED",
+            level: "ERROR",
+            message: `Could not restore the pull request label for ${job.repository.fullName}#${job.pullRequestNumber}: ${redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
+            jobId: job.id,
+            repositoryId: job.repositoryId,
+            metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber },
+          });
+        }
+      } else {
+        if (!await reconcileIssue(job, [config.ISSUE_READY_LABEL],
+          `Retry requested for prior worker job ${job.id}.`)) {
+          return context.json({ error: "Could not restore the GitHub ready label" }, 502);
+        }
       }
       await events.record({
         type: "JOB_RETRY_REQUESTED",
-        message: `Retry requested for ${job.repository.fullName}#${job.issueNumber}`,
+        message: `Retry requested for ${job.jobType} job on ${job.repository.fullName}#${job.issueNumber}`,
         jobId: job.id,
         repositoryId: job.repositoryId,
-        metadata: { issueUrl: job.issueUrl },
+        metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber ?? undefined },
       });
       const scan = await scanner.run("MANUAL");
       return context.json({ scanId: scan.id, scanStatus: scan.status }, 202);

@@ -67,6 +67,7 @@ async function remove(id: string, fullName: string, configuration?: RemoveConfig
   await prisma.$transaction([
     prisma.jobEvent.deleteMany({ where: { repositoryId: id } }),
     prisma.job.deleteMany({ where: { repositoryId: id } }),
+    prisma.managedPullRequest.deleteMany({ where: { repositoryId: id } }),
     prisma.repository.delete({ where: { id } }),
     ...(settingsWrite ? [settingsWrite] : []),
   ]);

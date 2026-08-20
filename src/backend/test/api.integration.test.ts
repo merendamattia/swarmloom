@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { parseConfig } from "../src/core/config-schema.ts";
+import { readApplicationVersion } from "../src/core/version.ts";
 
 const integration = process.env.RUN_INTEGRATION === "1" ? describe : describe.skip;
 
@@ -10,6 +11,7 @@ integration("operations API", () => {
   let jobId = "";
   let scanCalls = 0;
   let restartCalls = 0;
+  let version = "";
   const unique = crypto.randomUUID();
   const apiJobId = crypto.randomUUID();
   const labels = ["bug", "agent:working"];
@@ -29,6 +31,7 @@ integration("operations API", () => {
     const { createApp } = await import("../src/api/app.ts");
     const { createEventService } = await import("../src/events/service.ts");
     const { createSettingsService } = await import("../src/core/settings-service.ts");
+    version = await readApplicationVersion();
     const repository = await prisma.repository.create({
       data: {
         fullName: `acme/api-${unique}`,
@@ -59,7 +62,16 @@ integration("operations API", () => {
     jobId = job.id;
     app = createApp({
       config,
-      startup: { providerVersion: "test" },
+      startup: {
+        database: "ok",
+        dataDirectory: "/data",
+        runtimeDirectory: "/app/agent-runtime",
+        gitVersion: "git version 2.43.0",
+        ghVersion: "gh version 2.45.0",
+        provider: "codex",
+        providerVersion: "test",
+        version,
+      },
       events: createEventService(),
       scanner: {
         run: async () => ({ id: `scan-${++scanCalls}`, status: "COMPLETED" }),
@@ -76,6 +88,8 @@ integration("operations API", () => {
           labels.splice(0, labels.length, ...next);
         },
         addIssueComment: async () => {},
+        getPullRequestLabels: async () => [],
+        setPullRequestLabels: async () => {},
       },
       queue: { health: async () => "PONG", remove: async () => true },
       settings: createSettingsService(config),
@@ -107,7 +121,9 @@ integration("operations API", () => {
     });
 
     const status = await app.request("/api/status");
-    expect(JSON.stringify(await status.json())).not.toContain("test-token");
+    const statusBody = await status.json();
+    expect(statusBody).toMatchObject({ version });
+    expect(JSON.stringify(statusBody)).not.toContain("test-token");
 
     await prisma.job.update({ where: { id: jobId }, data: { status: "RUNNING", startedAt: new Date() } });
     expect(await (await app.request("/api/dashboard")).json())
@@ -135,6 +151,7 @@ integration("operations API", () => {
       body: JSON.stringify({
         scheduleCron: "*/30 * * * *",
         maxParallelJobs: 2,
+        createDiagnosticIssues: true,
         telegramEnabled: false,
         telegramBotToken: "telegram-secret-token",
         telegramChatId: "telegram-chat-id",
@@ -144,6 +161,7 @@ integration("operations API", () => {
     const body = await response.text();
     expect(body).not.toContain("telegram-secret-token");
     expect(body).not.toContain("telegram-chat-id");
+    expect(JSON.parse(body)).toMatchObject({ createDiagnosticIssues: true });
     expect(await prisma.runtimeSetting.findMany({ where: { environment: "test" } }))
       .toEqual(expect.arrayContaining([
         expect.objectContaining({ key: "TELEGRAM_BOT_TOKEN", secret: true }),
@@ -168,6 +186,18 @@ integration("operations API", () => {
     expect((await app.request("/api/scans/run", { method: "POST" })).status).toBe(202);
     expect(scanCalls).toBe(2);
     expect((await app.request("/api/notifications/test", { method: "POST" })).status).toBe(409);
+  });
+
+  test("retry after a terminal failure restores the ready label", async () => {
+    await prisma.job.update({
+      where: { id: jobId },
+      data: { status: "FAILED", activeIssueKey: null },
+    });
+    labels.splice(0, labels.length, "bug", config.ISSUE_BLOCKED_LABEL);
+    const retry = await app.request(`/api/jobs/${jobId}/retry`, { method: "POST" });
+    expect(retry.status).toBe(202);
+    expect(await retry.json()).toEqual({ scanId: "scan-3", scanStatus: "COMPLETED" });
+    expect(labels).toEqual(["bug", config.ISSUE_READY_LABEL]);
   });
 
   test("removes an obsolete repository together with its events and job history", async () => {

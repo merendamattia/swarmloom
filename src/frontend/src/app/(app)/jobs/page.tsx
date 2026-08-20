@@ -7,6 +7,7 @@ import { type JobFilters, useJobs, useRepositories } from "@/hooks/api";
 
 const initialFilters: JobFilters = { page: 1, pageSize: 25 };
 const statuses = ["QUEUED", "RUNNING", "COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"];
+const jobTypes = ["IMPLEMENTATION", "FIX", "REVIEW", "DECOMPOSITION"];
 
 export default function JobsPage() {
   const [filters, setFilters] = useState<JobFilters>(initialFilters);
@@ -30,7 +31,8 @@ export default function JobsPage() {
       <PageHeader eyebrow="Durable history" title="Jobs" description="Search and filter every worker attempt without losing prior outcomes." />
       <form className="filters" onSubmit={submit} role="search">
         <div className="filter-grid">
-          <div className="field"><label htmlFor="job-search">Issue, number, or repository</label><input className="input" id="job-search" name="q" type="search" value={query} onChange={(event) => setQuery(event.target.value)} maxLength={100} placeholder="Search job history" /></div>
+          <div className="field"><label htmlFor="job-search">Issue, PR number, or repository</label><input className="input" id="job-search" name="q" type="search" value={query} onChange={(event) => setQuery(event.target.value)} maxLength={100} placeholder="Search job history" /></div>
+          <div className="field"><label htmlFor="job-type">Job kind</label><select className="select" id="job-type" value={filters.jobType ?? ""} onChange={(event) => update({ jobType: event.target.value || undefined })}><option value="">All kinds</option>{jobTypes.map((value) => <option key={value} value={value}>{value.replaceAll("_", " ")}</option>)}</select></div>
           <div className="field"><label htmlFor="job-status">Status</label><select className="select" id="job-status" value={filters.status ?? ""} onChange={(event) => update({ status: event.target.value || undefined })}><option value="">All statuses</option>{statuses.map((value) => <option key={value} value={value}>{value.replaceAll("_", " ")}</option>)}</select></div>
           <div className="field"><label htmlFor="job-provider">Provider</label><select className="select" id="job-provider" value={filters.provider ?? ""} onChange={(event) => update({ provider: event.target.value || undefined })}><option value="">All providers</option><option value="CODEX">Codex</option><option value="OPENCODE">OpenCode</option></select></div>
           <div className="field"><label htmlFor="job-repository">Repository</label><select className="select" id="job-repository" value={filters.repositoryId ?? ""} onChange={(event) => update({ repositoryId: event.target.value || undefined })}><option value="">All repositories</option>{repositories.data?.map((repository) => <option key={repository.id} value={repository.id}>{repository.fullName}</option>)}</select></div>

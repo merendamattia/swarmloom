@@ -1,11 +1,18 @@
 # syntax=docker/dockerfile:1
 FROM oven/bun:1.3.14 AS dependencies
+USER root
+RUN --mount=type=cache,target=/var/cache/apt \
+  apt-get update \
+  && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates curl gh git nodejs npm pkg-config \
+      netcat-openbsd postgresql python3 python3-dev python3-venv redis-server \
+  && ln -s /usr/lib/postgresql/*/bin/* /usr/local/bin/ \
+  && rm -rf /var/lib/apt/lists/*
+ENV BUN_INSTALL_IGNORE_SCRIPTS=1
 WORKDIR /app
 COPY package.json bun.lock ./
 COPY src/backend/package.json src/backend/package.json
 COPY src/frontend/package.json src/frontend/package.json
-COPY AGENTS.md .pre-commit-config.yaml git-conventional-commits.yaml requirements.txt ./
-COPY scripts scripts
 RUN --mount=type=cache,target=/root/.bun/install/cache \
   for attempt in 1 2 3; do \
     bun install --frozen-lockfile && exit 0; \
@@ -13,18 +20,14 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
     sleep 5; \
   done; \
   bun install --frozen-lockfile
+# Bun arm64 cannot load msgpackr's optional NAPI extractor. Keep its JS fallback even
+# when an earlier BuildKit cache contains a compiled artifact.
+RUN find node_modules -type f -path '*/msgpackr-extract/build/Release/*.node' -delete
 
 FROM dependencies AS runtime-tools
 ARG CODEX_CLI_VERSION=0.147.0
 ARG OPENCODE_CLI_VERSION=1.18.18
 USER root
-RUN --mount=type=cache,target=/var/cache/apt \
-  apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl gh git nodejs npm python3 python3-venv \
-  && rm -rf /var/lib/apt/lists/*
-RUN --mount=type=cache,target=/root/.cache/pip \
-  python3 -m venv /opt/pre-commit \
-  && /opt/pre-commit/bin/pip install --no-cache-dir -r requirements.txt
 ENV npm_config_cache=/root/.npm
 RUN --mount=type=cache,target=/root/.npm \
   timeout 300 npm install --global --no-audit --no-fund --fetch-retries=2 --fetch-timeout=60000 \
@@ -32,19 +35,36 @@ RUN --mount=type=cache,target=/root/.npm \
   && node --version \
   && codex --version \
   && opencode --version
+COPY requirements.txt /tmp/swarmloom-requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+  python3 -m venv /opt/pre-commit \
+  && /opt/pre-commit/bin/pip install --no-cache-dir -r /tmp/swarmloom-requirements.txt \
+  && ln -sf /opt/pre-commit/bin/pre-commit /usr/local/bin/pre-commit \
+  && ln -sf /opt/pre-commit/bin/pip /usr/local/bin/pip \
+  && ln -sf /opt/pre-commit/bin/pip3 /usr/local/bin/pip3 \
+  && printf '%s\n' '#!/bin/sh' 'exec /opt/pre-commit/bin/python "$@"' > /usr/local/bin/python \
+  && printf '%s\n' '#!/bin/sh' 'exec /opt/pre-commit/bin/python3 "$@"' > /usr/local/bin/python3 \
+  && chmod +x /usr/local/bin/python /usr/local/bin/python3 \
+  && chown -R bun:bun /opt/pre-commit
 ENV PATH="/opt/pre-commit/bin:$PATH"
 
 FROM runtime-tools AS dev
 # Local development target: node_modules, toolchain (codex/opencode/pre-commit),
 # generated Prisma client — no skills, no production frontend build. Source is
 # mounted at runtime by docker-compose.yaml.
+ENV BUN_INSTALL_CACHE_DIR=/data/bun-cache \
+    PIP_CACHE_DIR=/data/pip-cache \
+    PRE_COMMIT_HOME=/data/pre-commit-cache
 USER root
 COPY src/backend/prisma src/backend/prisma
 COPY src/backend/prisma.config.ts src/backend/prisma.config.ts
-RUN bun run db:generate \
-  && mkdir -p /data/codex-home /data/opencode-data /data/opencode-config \
+RUN bun run db:generate
+COPY AGENTS.md .pre-commit-config.yaml git-conventional-commits.yaml requirements.txt ./
+COPY scripts scripts
+RUN mkdir -p /data/bun-cache /data/pip-cache /data/pre-commit-cache /data/codex-home /data/opencode-data /data/opencode-config \
   && ln -s /app/scripts/verify-before-commit.sh /usr/local/bin/verify-before-commit \
-  && chown -R bun:bun /data /app
+  && ln -s /app/scripts/swarm-test-services.sh /usr/local/bin/swarm-test-services \
+  && chown -R bun:bun /data /app/node_modules/.bun/@prisma+client*
 USER bun
 WORKDIR /app
 EXPOSE 18420 18421
@@ -98,12 +118,19 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 COPY src/backend src/backend
 COPY src/frontend src/frontend
 COPY agent-runtime agent-runtime
+COPY CHANGELOG.md ./
 RUN bun run db:generate && bun run build
 
 FROM build AS runtime
-RUN mkdir -p /data/codex-home /data/opencode-data /data/opencode-config \
+ENV BUN_INSTALL_CACHE_DIR=/data/bun-cache \
+    PIP_CACHE_DIR=/data/pip-cache \
+    PRE_COMMIT_HOME=/data/pre-commit-cache
+COPY AGENTS.md .pre-commit-config.yaml git-conventional-commits.yaml requirements.txt ./
+COPY scripts scripts
+RUN mkdir -p /data/bun-cache /data/pip-cache /data/pre-commit-cache /data/codex-home /data/opencode-data /data/opencode-config \
   && ln -s /app/scripts/verify-before-commit.sh /usr/local/bin/verify-before-commit \
-  && chown -R bun:bun /data /app
+  && ln -s /app/scripts/swarm-test-services.sh /usr/local/bin/swarm-test-services \
+  && chown -R bun:bun /data /app/node_modules/.bun/@prisma+client*
 USER bun
 WORKDIR /app
 EXPOSE 18420 18421

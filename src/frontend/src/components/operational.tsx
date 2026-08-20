@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import type { Jobs } from "@/hooks/api";
-import { dateTime, duration, statusLabel } from "@/lib/format";
+import { dateTime, duration, shortCommit, statusLabel, subjectLabel, triggerLabel } from "@/lib/format";
 
 type Tone = "neutral" | "active" | "success" | "warning" | "danger";
 const states: Record<string, { tone: Tone; icon: LucideIcon }> = {
@@ -124,24 +124,31 @@ export function ActionMessage({ pending, error, success, pendingText, successTex
 
 type JobSummary = Jobs["items"][number];
 
+export function JobKindPill({ jobType }: { jobType: string }) {
+  return <span className="kind-pill" data-kind={jobType.toLowerCase()}>{statusLabel(jobType)}</span>;
+}
+
 export function JobTable({ jobs, compact = false }: { jobs: JobSummary[]; compact?: boolean }) {
   if (jobs.length === 0) return <EmptyState title="No jobs found" description="Run a scan or adjust the filters to find durable job history." />;
   return (
     <div className="table-wrap">
       <table className="data-table">
-        <thead><tr><th>Status</th><th>Issue</th><th>Repository</th><th>Provider</th>{compact ? null : <th>Duration</th>}<th>Created</th><th><span className="sr-only">Details</span></th></tr></thead>
+        <thead><tr><th>Status</th><th>Subject</th><th>Repository</th><th>Provider</th>{compact ? null : <th>Duration</th>}<th>Created</th><th><span className="sr-only">Details</span></th></tr></thead>
         <tbody>
-          {jobs.map((job) => (
-            <tr key={job.id}>
-              <td data-label="Status"><StatusPill status={job.status} /></td>
-              <td data-label="Issue"><Link className="row-title" href={`/jobs/${job.id}`}>#{job.issueNumber} {job.issueTitle}</Link>{job.pullRequestUrl ? <a className="inline-meta" href={job.pullRequestUrl} target="_blank" rel="noreferrer"><GitPullRequest size={13} aria-hidden="true" />PR {job.pullRequestNumber}</a> : null}</td>
-              <td data-label="Repository">{job.repository.fullName}</td>
-              <td data-label="Provider">{statusLabel(job.provider)} · {job.model}</td>
-              {compact ? null : <td data-label="Duration" className="numeric">{duration(job.durationMs)}</td>}
-              <td data-label="Created" className="numeric">{dateTime(job.createdAt)}</td>
-              <td data-label="Details"><Link className="text-link" href={`/jobs/${job.id}`} aria-label={`Open job ${job.repository.fullName} issue ${job.issueNumber}`}>Inspect</Link></td>
-            </tr>
-          ))}
+          {jobs.map((job) => {
+            const trigger = triggerLabel(job.trigger);
+            return (
+              <tr key={job.id}>
+                <td data-label="Status"><StatusPill status={job.status} /></td>
+                <td data-label="Subject"><JobKindPill jobType={job.jobType} /><Link className="row-title" href={`/jobs/${job.id}`}>{subjectLabel(job.subjectType, job.issueNumber, job.pullRequestNumber)} {job.issueTitle}</Link>{job.pullRequestUrl ? <a className="inline-meta" href={job.pullRequestUrl} target="_blank" rel="noreferrer"><GitPullRequest size={13} aria-hidden="true" />PR {job.pullRequestNumber}</a> : null}<p className="list-meta">{job.headSha ? `head ${shortCommit(job.headSha)} · ` : ""}{trigger ?? ""}{job.review?.status && job.jobType === "REVIEW" ? `${trigger ? " · " : ""}${statusLabel(job.review.status)}` : ""}</p></td>
+                <td data-label="Repository">{job.repository.fullName}</td>
+                <td data-label="Provider">{statusLabel(job.provider)} · {job.model}</td>
+                {compact ? null : <td data-label="Duration" className="numeric">{duration(job.durationMs)}</td>}
+                <td data-label="Created" className="numeric">{dateTime(job.createdAt)}</td>
+                <td data-label="Details"><Link className="text-link" href={`/jobs/${job.id}`} aria-label={`Open job ${job.repository.fullName} ${subjectLabel(job.subjectType, job.issueNumber, job.pullRequestNumber)}`}>Inspect</Link></td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

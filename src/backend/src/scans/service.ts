@@ -3,22 +3,22 @@ import { redactSecrets } from "../core/secrets.ts";
 import type { EventService, QueuedJobInfo } from "../events/service.ts";
 import type { GitHubClient } from "../github/client.ts";
 import { githubGitEnvironment } from "../github/git-auth.ts";
-import { agentLabelDefinitions, acquireIssueLabels } from "../github/labels.ts";
+import { agentLabelDefinitions } from "../github/labels.ts";
 import { MissingDevelopBranchError, syncRepository as syncTargetRepository } from "../git/repositories.ts";
 import { eventRepository } from "../repositories/events.ts";
-import { jobRepository } from "../repositories/jobs.ts";
 import { repositoryRepository } from "../repositories/repositories.ts";
 import { scanRunRepository } from "../repositories/scan-runs.ts";
-import { configuredAgent } from "../providers/index.ts";
 import type { JobQueue } from "../queue/service.ts";
 import { finishScanIfComplete } from "./finalize.ts";
+import { createIssueScanner } from "./issue-scanner.ts";
+import { createPullRequestScanner } from "./pr-scanner.ts";
+import type { ScannerShared } from "./common.ts";
 
 type SyncRepository = typeof syncTargetRepository;
 
 type ScanServiceDependencies = {
   config: Config;
-  github: Pick<GitHubClient, "getRepository" | "listReadyIssues" | "setIssueLabels"> &
-    Partial<Pick<GitHubClient, "ensureLabels">>;
+  github: ScannerShared["github"];
   events?: EventService;
   queue?: Pick<JobQueue, "enqueue">;
   syncRepository?: SyncRepository;
@@ -31,12 +31,20 @@ export function createScanService({
   queue = { enqueue: async () => {} },
   syncRepository = syncTargetRepository,
 }: ScanServiceDependencies) {
+  const shared: ScannerShared = {
+    config,
+    github,
+    events,
+    queue,
+  };
+  const issueScanner = createIssueScanner(shared);
+  const pullRequestScanner = createPullRequestScanner(shared);
+
   async function run(source: "SCHEDULED" | "MANUAL") {
     const scan = await scanRunRepository.start(config.APP_ENV, source, config.githubRepositories.length);
     if (scan.status === "SKIPPED") return scan;
     let queuedCount = 0;
     const queuedJobs: QueuedJobInfo[] = [];
-    const agent = configuredAgent(config);
     try {
       await events.record({
         type: "SCAN_STARTED",
@@ -56,62 +64,13 @@ export function createScanService({
             gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, cloneUrl),
           });
           await repositoryRepository.markReady(repository.id, synced.localPath, synced.baselineCommit);
+          repository = { ...repository, localPath: synced.localPath, baselineCommit: synced.baselineCommit };
           await github.ensureLabels?.(fullName, agentLabelDefinitions(config));
-          const issues = [
-            ...await github.listReadyIssues(fullName, config.ISSUE_READY_LABEL),
-            ...await github.listReadyIssues(fullName, config.ISSUE_REVIEW_REQUESTED_LABEL),
-          ];
-          for (const issue of issues) {
-            const job = await jobRepository.tryCreateQueued({
-              repositoryId: repository.id,
-              scanRunId: scan.id,
-              environment: config.APP_ENV,
-              issueNumber: issue.number,
-              issueTitle: issue.title,
-              issueUrl: issue.url,
-              issueBody: issue.body,
-              branchName: `agent/issue-${issue.number}-${crypto.randomUUID().slice(0, 8)}`,
-              baselineCommit: synced.baselineCommit,
-              provider: agent.provider,
-              model: agent.model,
-              reasoningEffort: agent.reasoningEffort,
-            });
-            if (!job) continue;
-            try {
-              await github.setIssueLabels(
-                fullName,
-                issue.number,
-                acquireIssueLabels(issue.labels, config),
-              );
-              await queue.enqueue(job.id);
-              queuedCount += 1;
-              queuedJobs.push({
-                repository: fullName,
-                issueNumber: issue.number,
-                issueTitle: issue.title,
-                issueUrl: issue.url,
-                jobId: job.id,
-              });
-              await events.record({
-                type: "JOB_QUEUED",
-                message: `Queued ${fullName}#${issue.number} · ${issue.title}`,
-                jobId: job.id,
-                repositoryId: repository.id,
-                scanRunId: scan.id,
-                metadata: { issueUrl: issue.url, issueNumber: issue.number },
-              });
-            } catch (error) {
-              await jobRepository.failQueued(job.id, safeError(error));
-              await events.record({
-                type: "JOB_FAILED",
-                level: "ERROR",
-                message: `Could not acquire ${fullName}#${issue.number} on GitHub`,
-                jobId: job.id,
-                repositoryId: repository.id,
-                scanRunId: scan.id,
-                metadata: { issueUrl: issue.url, issueNumber: issue.number },
-              });
-            }
+          const pullRequestQueued = await pullRequestScanner.run(repository, fullName, scan.id);
+          const issueQueued = await issueScanner.run(repository, fullName, scan.id);
+          for (const queued of [...pullRequestQueued, ...issueQueued]) {
+            queuedCount += 1;
+            queuedJobs.push(queued.info);
           }
         } catch (error) {
           const message = safeError(error);

@@ -23,6 +23,13 @@ describe("canonical agent runtime", () => {
     expect(instructions).not.toContain("Review Agent");
     expect(instructions).toContain("gh issue view");
     expect(instructions).toContain("gh pr view");
+    expect(instructions).toContain("headRefOid");
+    expect(instructions).toContain("repos/<owner>/<repo>/pulls/<pr-number>/reviews");
+    expect(instructions).toContain("-f head_sha=<head-sha>");
+    expect(instructions).toContain("repos/<owner>/<repo>/actions/runs/<run-id>/jobs");
+    expect(instructions).toContain("gh run view <run-id>");
+    expect(instructions).toContain("--log-failed");
+    expect(instructions).toContain("do not require `Checks: read`");
   });
 
   test("forbids pushing to main or develop and resolves pull request conflicts", async () => {
@@ -32,6 +39,36 @@ describe("canonical agent runtime", () => {
     expect(instructions).toContain("conflicting files");
     expect(instructions).toContain("resolve");
     expect(instructions).toContain("mergeable");
+  });
+
+  test("requires running every ci.yaml command before committing", async () => {
+    const instructions = await loadAgentInstructions(runtime);
+    for (const cmd of [
+      "bun install --frozen-lockfile",
+      "pip install -r requirements.txt",
+      "pre-commit run --all-files",
+      "bun run db:generate",
+      "bun run db:deploy",
+      "bun run typecheck",
+      "bun run lint",
+      "bun run test",
+      "bun run build",
+    ]) expect(instructions).toContain(cmd);
+    expect(instructions).toContain("Do not skip any of them");
+    expect(instructions).toContain("RUN_INTEGRATION=1");
+    expect(instructions).toContain("CHANGELOG.md");
+    expect(instructions).toContain("swarm-test-services start");
+    expect(instructions).toContain("swarm-test-services stop");
+    expect(instructions).toContain("no Docker inside the worker");
+    for (const cache of ["BUN_INSTALL_CACHE_DIR", "PIP_CACHE_DIR", "PRE_COMMIT_HOME"]) {
+      expect(instructions).toContain(cache);
+    }
+    expect(instructions).toContain("BUN_INSTALL_IGNORE_SCRIPTS=1");
+    expect(instructions).toContain("msgpackr");
+    expect(instructions).toContain("do not reinstall it");
+    for (const tool of ["bun", "python3", "pip", "pre-commit", "gcc", "g++", "make", "pkg-config", "git", "gh", "psql", "redis-cli"]) {
+      expect(instructions).toContain(`\`${tool}\``);
+    }
   });
 
   test("tells agents to finish simple requests directly", async () => {
