@@ -2,6 +2,18 @@ import { redactSecrets } from "../core/secrets.ts";
 
 type ProcessResult = { exitCode: number; stderr: string };
 
+export class ProviderProcessError extends Error {
+  constructor(
+    message: string,
+    readonly exitCode: number,
+    readonly stderr: string,
+    cause?: unknown,
+  ) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = "ProviderProcessError";
+  }
+}
+
 export function providerEnvironment(environment: Record<string, string | undefined>) {
   return Object.fromEntries(Object.entries(environment).filter(([key]) => !key.endsWith("_API_KEY")));
 }
@@ -56,6 +68,6 @@ export async function runJsonlProcess(
   const [exitCode, errorText] = await Promise.all([process.exited, stderr, stdout])
     .then(([code, error]) => [code, error] as const)
     .finally(() => signal?.removeEventListener("abort", abort));
-  if (parseError) throw new Error("Provider emitted invalid JSONL", { cause: parseError });
-  return { exitCode, stderr: redactSecrets(errorText.slice(-8_000)) };
+  if (parseError) throw new ProviderProcessError("Provider emitted invalid JSONL", exitCode, redactSecrets(errorText.slice(-8_000), environment), parseError);
+  return { exitCode, stderr: redactSecrets(errorText.slice(-8_000), environment) };
 }

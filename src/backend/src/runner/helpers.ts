@@ -6,6 +6,8 @@ import type { Config } from "../core/config-schema.ts";
 import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.ts";
 import { loadAgentInstructions } from "../runtime/instructions.ts";
 import type { AgentRole } from "../providers/index.ts";
+import { ProviderProcessError } from "../providers/process.ts";
+import { AgentExecutionError, causeChain, type DiagnosticEvent, type JobDiagnostics } from "./diagnostics.ts";
 import type { GitHubIssueContext } from "../github/client.ts";
 import type { RunningJob, RunnerContext, RunnerGitHub } from "./types.ts";
 import { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome } from "./response.ts";
@@ -32,7 +34,6 @@ export async function readResponseFile(path: string) {
 export async function removeResponseFile(path: string) {
   await rm(path, { force: true });
 }
-
 export async function executeRole(
   context: Pick<RunnerContext, "config" | "provider" | "events">,
   role: AgentRole,
@@ -44,29 +45,63 @@ export async function executeRole(
 ) {
   const responseFilePath = responseFilePathFor(context.config.DATA_DIR, job.id, role);
   await mkdir(dirname(responseFilePath), { recursive: true });
-  const result = await context.provider.execute({
-    role,
-    workingDirectory,
-    task,
-    context: contextText,
-    instructions: await loadAgentInstructions(context.config.AGENT_RUNTIME_DIR),
-    model: job.model,
-    reasoningEffort: job.reasoningEffort as Config["CODEX_REASONING_EFFORT"] | undefined,
-    responseFilePath,
-    signal: abortSignal,
-    onEvent: async (agentEvent) => {
-      await context.events.record({
-        type: agentEvent.type === "AGENT_OUTPUT" ? "AGENT_OUTPUT" : `AGENT_${agentEvent.type}`,
-        message: (agentEvent.message || agentEvent.type).slice(0, 8_000),
-        jobId: job.id,
-        repositoryId: job.repositoryId,
-        scanRunId: job.scanRunId ?? undefined,
-        metadata: agentEvent.metadata as Prisma.InputJsonValue | undefined,
-      });
-    },
-  });
-  return { ...result, responseFilePath, response: "" };
+  const diagnosticEvents: DiagnosticEvent[] = [];
+  let sessionId: string | null = null;
+  try {
+    const result = await context.provider.execute({
+      role,
+      workingDirectory,
+      task,
+      context: contextText,
+      instructions: await loadAgentInstructions(context.config.AGENT_RUNTIME_DIR),
+      model: job.model,
+      reasoningEffort: job.reasoningEffort as Config["CODEX_REASONING_EFFORT"] | undefined,
+      responseFilePath,
+      signal: abortSignal,
+      onEvent: async (agentEvent) => {
+        if (agentEvent.type === "SESSION_STARTED" && typeof agentEvent.metadata?.sessionId === "string") {
+          sessionId = agentEvent.metadata.sessionId;
+        }
+        diagnosticEvents.push({
+          type: agentEvent.type,
+          timestamp: agentEvent.timestamp,
+          message: agentEvent.message ? redactSecrets(agentEvent.message).slice(0, 8_000) : undefined,
+          tool: agentEvent.tool,
+        });
+        await context.events.record({
+          type: agentEvent.type === "AGENT_OUTPUT" ? "AGENT_OUTPUT" : `AGENT_${agentEvent.type}`,
+          message: (agentEvent.message || agentEvent.type).slice(0, 8_000),
+          jobId: job.id,
+          repositoryId: job.repositoryId,
+          scanRunId: job.scanRunId ?? undefined,
+          metadata: agentEvent.metadata as Prisma.InputJsonValue | undefined,
+        });
+      },
+    });
+    return {
+      ...result,
+      role,
+      sessionId: sessionId ?? result.sessionId,
+      responseFilePath,
+      response: "",
+      events: diagnosticEvents,
+    };
+  } catch (error) {
+    throw new AgentExecutionError(safeError(error), {
+      stage: error instanceof ProviderProcessError ? "provider_process" : roleStage(role),
+      role,
+      provider: context.provider.name,
+      model: job.model,
+      sessionId,
+      exitCode: error instanceof ProviderProcessError ? error.exitCode : null,
+      error: safeError(error),
+      causeChain: causeChain(error),
+      stderr: error instanceof ProviderProcessError ? error.stderr : undefined,
+      events: diagnosticEvents,
+    });
+  }
 }
+
 
 export function implementationContext(
   job: RunningJob,
@@ -252,7 +287,12 @@ export function terminalEvent(
   };
 }
 
+function roleStage(role: AgentRole): JobDiagnostics["stage"] {
+  return role === "issue-worker" ? "implementation" : role === "decomposer" ? "decomposition" : "review";
+}
+
 export function safeError(error: unknown) {
+
   return redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000);
 }
 

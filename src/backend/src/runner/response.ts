@@ -13,10 +13,16 @@ function markerLine(text: string, field: "Outcome" | "Review" | "PR"): string | 
   return null;
 }
 
+function evidence(text: string) {
+  return text.length > 2_000 ? text.slice(-2_000) : text;
+}
+
 export function parseJobOutcome(text: string): JobOutcome {
   const outcome = markerLine(text, "Outcome");
   if (!outcome || !JOB_OUTCOMES.has(outcome as JobOutcome)) {
-    throw new Error('Agent response must start with "Outcome: implemented" | "blocked" | "decomposed" | "requires_decomposition"');
+    throw new Error('Agent response must start with "Outcome: implemented" | "blocked" | "decomposed" | "requires_decomposition"', {
+      cause: evidence(text),
+    });
   }
   return outcome as JobOutcome;
 }
@@ -24,7 +30,9 @@ export function parseJobOutcome(text: string): JobOutcome {
 export function parseReviewOutcome(text: string): ReviewOutcome {
   const review = markerLine(text, "Review");
   if (review !== "pass" && review !== "changes_requested") {
-    throw new Error('Agent review must start with "Review: pass" | "changes_requested"');
+    throw new Error('Agent review must start with "Review: pass" | "changes_requested"', {
+      cause: evidence(text),
+    });
   }
   return review;
 }

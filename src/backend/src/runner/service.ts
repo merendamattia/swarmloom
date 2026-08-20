@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import type { Config } from "../core/config-schema.ts";
 import type { EventService } from "../events/service.ts";
 import {
@@ -26,6 +27,7 @@ import {
 } from "./helpers.ts";
 import { runImplementation } from "./implementation.ts";
 import { runReview } from "./review.ts";
+import { AgentExecutionError, executionFailure, minimalDiagnostics, type JobDiagnostics, type RoleExecution } from "./diagnostics.ts";
 import type { RunnerContext, RunnerGitHub, RunningJob, SessionState } from "./types.ts";
 
 type RunnerDependencies = {
@@ -92,7 +94,9 @@ export function createJobRunner({
         provider,
         signal,
         state,
-        executeRoleWithRetry: createExecuteRoleWithRetry(events, config, provider),
+        executeRoleWithRetry: createExecuteRoleWithRetry(events, config, provider, (execution) => {
+          state.lastExecution = execution;
+        }),
         finalizeIssue: createFinalizeIssue(github, config, events),
         commentOnPullRequest: createCommentOnPullRequest(github, events),
       };
@@ -106,7 +110,22 @@ export function createJobRunner({
       reachedTerminalState = true;
     } catch (error) {
       const message = safeError(error);
-      reachedTerminalState = await jobRepository.finishRunning(job.id, "FAILED", { errorMessage: message });
+      const diagnostics = error instanceof AgentExecutionError
+        ? error.diagnostics
+        : state.lastExecution
+          ? executionFailure(
+            roleStage(state.lastExecution.role),
+            state.lastExecution.role,
+            job,
+            provider,
+            state.lastExecution,
+            error,
+          ).diagnostics
+          : minimalDiagnostics(error, { provider: provider?.name ?? "unconfigured", model: job.model });
+      reachedTerminalState = await jobRepository.finishRunning(job.id, "FAILED", {
+        errorMessage: message,
+        diagnostics: diagnostics as Prisma.InputJsonValue,
+      });
       if (reachedTerminalState) {
         await events.record({
           ...terminalEvent(job, "JOB_FAILED", message),
@@ -175,7 +194,7 @@ export function createJobRunner({
   return { run };
 }
 
-function createExecuteRoleWithRetry(events: EventService, config: Config, provider: AgentProvider) {
+function createExecuteRoleWithRetry(events: EventService, config: Config, provider: AgentProvider, onExecution: (execution: RoleExecution) => void) {
   return async function executeRoleWithRetry(
     role: Parameters<typeof executeRole>[1],
     task: string,
@@ -196,17 +215,26 @@ function createExecuteRoleWithRetry(events: EventService, config: Config, provid
         abortSignal,
         currentJob,
       );
-      if (result.exitCode !== 0) return { ...result, response: "" };
+      onExecution(result);
+      if (result.exitCode !== 0) return result;
+      let response = "";
       try {
-        const response = await readResponseFile(result.responseFilePath);
+        response = await readResponseFile(result.responseFilePath);
         parse(response);
-        return { ...result, response };
+        const completed = { ...result, response };
+        onExecution(completed);
+        return completed;
       } catch (error) {
-        if (attempt >= 1) throw error;
-        guidance = `\n\nYour previous response was not accepted: ${error instanceof Error ? error.message : String(error)}`;
+        if (attempt >= 1) {
+          throw executionFailure("parser", role, currentJob, provider, result, error, { finalOutput: response || result.finalOutput });
+        }
+        guidance = `\n\nYour previous response was not accepted: ${safeError(error)}`;
       } finally {
         await removeResponseFile(result.responseFilePath);
       }
     }
   };
+}
+function roleStage(role: RoleExecution["role"]): JobDiagnostics["stage"] {
+  return role === "issue-worker" ? "implementation" : role === "decomposer" ? "decomposition" : "review";
 }

@@ -118,6 +118,7 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 COPY src/backend src/backend
 COPY src/frontend src/frontend
 COPY agent-runtime agent-runtime
+COPY CHANGELOG.md ./
 RUN bun run db:generate && bun run build
 
 FROM build AS runtime
