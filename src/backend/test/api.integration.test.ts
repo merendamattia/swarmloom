@@ -17,9 +17,11 @@ integration("operations API", () => {
   const labels = ["bug", "agent:working"];
   const createdIssues: Array<{ title: string; body: string; labels: string[] }> = [];
   let createIssueError: Error | undefined;
+  let throwAfterIssueCreation = false;
   let beforeCreateIssue: (() => Promise<void>) | undefined;
   let afterCreateIssue: (() => Promise<void>) | undefined;
   let reconciledIssue: { number: number; url: string } | undefined;
+  let findIssueCalls = 0;
   const config = parseConfig({
     APP_ENV: "test",
     NODE_ENV: "test",
@@ -97,10 +99,14 @@ integration("operations API", () => {
           await beforeCreateIssue?.();
           const issue = { number: 123, url: "https://github.com/acme/api-test/issues/123" };
           createdIssues.push({ title, body, labels: issueLabels });
+          if (throwAfterIssueCreation) throw new Error("GitHub response was lost");
           await afterCreateIssue?.();
           return issue;
         },
-        findIssueByMarker: async () => reconciledIssue,
+        findIssueByMarker: async () => {
+          findIssueCalls += 1;
+          return reconciledIssue;
+        },
         addIssueComment: async () => {},
         getPullRequestLabels: async () => [],
         setPullRequestLabels: async () => {},
@@ -341,7 +347,49 @@ integration("operations API", () => {
     expect(failedCreation.status).toBe(502);
     expect(await failedCreation.json()).toEqual({ error: "Could not create support issue: GitHub is unavailable" });
     expect(await prisma.job.findUniqueOrThrow({ where: { id: jobId } }))
-      .toMatchObject({ status: "FAILED", supportIssueNumber: null, supportIssueUrl: null, supportIssueCreating: false });
+      .toMatchObject({ status: "FAILED", supportIssueNumber: null, supportIssueUrl: null, supportIssueCreating: true, supportIssueReconcileRequired: true });
+  });
+
+  test("reconciles an issue when GitHub commits before the create response fails", async () => {
+    await prisma.job.update({
+      where: { id: jobId },
+      data: {
+        status: "FAILED",
+        supportIssueNumber: null,
+        supportIssueUrl: null,
+        supportIssueCreating: false,
+        supportIssueReconcileRequired: false,
+        errorMessage: "Ambiguous GitHub failure",
+      },
+    });
+    createdIssues.splice(0);
+    createIssueError = undefined;
+    throwAfterIssueCreation = true;
+    reconciledIssue = undefined;
+    findIssueCalls = 0;
+
+    try {
+      const failedCreation = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+      expect(failedCreation.status).toBe(502);
+      expect(createdIssues).toHaveLength(1);
+
+      throwAfterIssueCreation = false;
+      reconciledIssue = { number: 123, url: "https://github.com/acme/api-test/issues/123" };
+      const retry = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+      expect(retry.status).toBe(200);
+      expect(await retry.json()).toEqual({
+        status: "existing",
+        issueNumber: 123,
+        issueUrl: "https://github.com/acme/api-test/issues/123",
+      });
+      expect(findIssueCalls).toBe(1);
+      expect(createdIssues).toHaveLength(1);
+    } finally {
+      createIssueError = undefined;
+      throwAfterIssueCreation = false;
+      reconciledIssue = undefined;
+      findIssueCalls = 0;
+    }
   });
 
   test("serializes automatic support orchestration with the manual endpoint", async () => {
