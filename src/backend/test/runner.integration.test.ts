@@ -54,6 +54,7 @@ integration("job runner", () => {
     const implementationResponse = [
       `Outcome: implemented`,
       `PR: https://github.com/acme/runner/pull/${job.issueNumber}`,
+      `TL;DR: Implemented the requested change and ran the checks.`,
       `Implemented the requested change and ran the checks.`,
     ].join("\n");
     const provider = new FakeProvider([success(implementationResponse, `implementation-1`)]);
@@ -93,7 +94,7 @@ integration("job runner", () => {
 
   test("implementation with requires_decomposition queues a DECOMPOSITION job and never opens a PR", async () => {
     const job = await claimed(issueBase + 1, "IMPLEMENTATION", "ISSUE");
-    const provider = new FakeProvider([success("Outcome: requires_decomposition\nToo broad to fit one PR.", "triage")]);
+    const provider = new FakeProvider([success("Outcome: requires_decomposition\nTL;DR: The issue is too broad for one pull request.\nToo broad to fit one PR.", "triage")]);
     const enqueued: string[] = [];
     const state = fakeGitHub(job.issueNumber, job.branchName, "c".repeat(40));
     const runner = createJobRunner({
@@ -119,7 +120,7 @@ integration("job runner", () => {
 
   test("decomposition runs a fresh decomposer session and records native child references", async () => {
     const job = await claimed(issueBase + 2, "DECOMPOSITION", "ISSUE");
-    const provider = new FakeProvider([success("Outcome: decomposed\nSplit into two children.", "decomposer")]);
+    const provider = new FakeProvider([success("Outcome: decomposed\nTL;DR: Split the issue into two children.\nSplit into two children.", "decomposer")]);
     const github = fakeGitHub(job.issueNumber, job.branchName, "d".repeat(40));
     const runner = createJobRunner({ config, provider, github, createWorktree: async (input) => input.worktreePath });
 
@@ -135,7 +136,7 @@ integration("job runner", () => {
     const blockedGitHub = fakeGitHub(blocked.issueNumber, blocked.branchName, "e".repeat(40));
     const blockedRunner = createJobRunner({
       config,
-      provider: new FakeProvider([success("Outcome: blocked\nNeed the response contract.", "blocked")]),
+      provider: new FakeProvider([success("Outcome: blocked\nTL;DR: Blocked pending the response contract.\nNeed the response contract.", "blocked")]),
       github: blockedGitHub,
       createWorktree: async (input) => input.worktreePath,
     });
@@ -331,7 +332,7 @@ integration("job runner", () => {
     const state = fixGitHub(config, issueBase + 7, prHead, managed.prNumber);
     const reviewWorktrees: string[] = [];
 
-    const fixedResponse = "Outcome: implemented\nFixed the failing test and pushed to the same branch.";
+    const fixedResponse = "Outcome: implemented\nTL;DR: Fixed the failing test and pushed the branch.\nFixed the failing test and pushed to the same branch.";
     const provider = new FakeProvider([success(fixedResponse, "fix-session")]);
     const runner = createJobRunner({
       config,
@@ -368,7 +369,7 @@ integration("job runner", () => {
     });
     const unchangedRunner = createJobRunner({
       config,
-      provider: new FakeProvider([success("Outcome: implemented\nNothing changed.", "fix-noop")]),
+      provider: new FakeProvider([success("Outcome: implemented\nTL;DR: No implementation changes were needed.\nNothing changed.", "fix-noop")]),
       github: fixGitHub(config, issueBase + 7, prHead, managed.prNumber, "2".repeat(40)),
       createReviewWorktree: async () => "agent/fix-local",
     });
@@ -402,7 +403,7 @@ integration("job runner", () => {
       headSha: managed.headSha,
       trigger: "REVIEW_CHANGES_REQUESTED",
     });
-    const response = "Outcome: blocked\nThe requested change needs a product decision.";
+    const response = "Outcome: blocked\nTL;DR: Blocked pending a product decision.\nThe requested change needs a product decision.";
     const runner = createJobRunner({
       config,
       provider: new FakeProvider([success(response, "fix-blocked")]),
@@ -448,7 +449,7 @@ integration("job runner", () => {
     });
     const runner = createJobRunner({
       config,
-      provider: new FakeProvider([success("Outcome: implemented\nFixed again.", "fix-loop")]),
+      provider: new FakeProvider([success("Outcome: implemented\nTL;DR: Fixed the issue and pushed the branch again.\nFixed again.", "fix-loop")]),
       github: state,
       createReviewWorktree: async () => "agent/fix-local",
     });
@@ -489,7 +490,8 @@ integration("job runner", () => {
       pullRequestUrl: "https://github.com/acme/runner/pull/902",
       headSha: "4".repeat(40),
     });
-    const provider = new FakeProvider([success("Review: pass\nLooks good.", "review-pass")]);
+    const reviewResponse = "Review: pass\nTL;DR: The review passed.\nLooks good.";
+    const provider = new FakeProvider([success(reviewResponse, "review-pass")]);
     const runner = createJobRunner({
       config,
       provider,
@@ -508,6 +510,11 @@ integration("job runner", () => {
     expect(await prisma.managedPullRequest.findUniqueOrThrow({ where: { id: managed.id } }))
       .toMatchObject({ workflow: "REVIEW_PASSED", fixCycleCount: 0 });
     expect((await prisma.job.findUniqueOrThrow({ where: { id: implementation.id } })).status).toBe("COMPLETED");
+    const pullRequestCommentBody = state.comments.find((comment) => comment.issue === managed.prNumber)?.body ?? "";
+    const issueCommentBody = state.comments.find((comment) => comment.issue === job.issueNumber)?.body ?? "";
+    expect(pullRequestCommentBody).toBe(reviewResponse);
+    expect(issueCommentBody.startsWith(`${reviewResponse}\n\n`)).toBe(true);
+    expect(issueCommentBody.indexOf("## Automated review passed")).toBeGreaterThan(issueCommentBody.indexOf("TL;DR:"));
     expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "READY_TO_MERGE" } })).not.toBeNull();
   });
 
@@ -534,7 +541,7 @@ integration("job runner", () => {
       pullRequestUrl: "https://github.com/acme/runner/pull/903",
       headSha: "5".repeat(40),
     });
-    const feedback = "Review: changes_requested\nAdd a guard.";
+    const feedback = "Review: changes_requested\nTL;DR: Changes are required; add the guard.\nAdd a guard.";
     const runner = createJobRunner({
       config,
       provider: new FakeProvider([success(feedback, "review-changes")]),
@@ -578,7 +585,7 @@ integration("job runner", () => {
     });
     const runner = createJobRunner({
       config,
-      provider: new FakeProvider([success("Review: pass\nReady.", "review-label-failure")]),
+      provider: new FakeProvider([success("Review: pass\nTL;DR: The review passed and is ready.\nReady.", "review-label-failure")]),
       github: state,
       createReviewWorktree: async () => "agent/review-local",
     });
@@ -617,7 +624,7 @@ integration("job runner", () => {
     });
     const runner = createJobRunner({
       config,
-      provider: new FakeProvider([success("Review: pass\nLooks good.", "review-stale")]),
+      provider: new FakeProvider([success("Review: pass\nTL;DR: The review passed.\nLooks good.", "review-stale")]),
       github: state,
       createReviewWorktree: async () => "agent/review-local",
     });
@@ -713,7 +720,7 @@ integration("job runner", () => {
     });
     const retriedRunner = createJobRunner({
       config,
-      provider: new FakeProvider([success("Review: pass\nReady now.", "review-retry")]),
+      provider: new FakeProvider([success("Review: pass\nTL;DR: The review passed and is ready now.\nReady now.", "review-retry")]),
       github: state,
       createReviewWorktree: async () => "agent/review-local",
     });

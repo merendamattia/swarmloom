@@ -167,7 +167,7 @@ export const runReview: JobFlow = async (context) => {
       await context.finalizeIssue(
         job,
         [config.ISSUE_READY_TO_MERGE_LABEL],
-        `## Automated review passed\n\nThe pull request #${pullRequest.prNumber} passed the automated review. Merge it manually when ready.\n\n${result.response}`,
+        `${result.response}\n\n## Automated review passed\n\nThe pull request #${pullRequest.prNumber} passed the automated review. Merge it manually when ready.`,
       );
       await events.record({
         type: "READY_TO_MERGE",
