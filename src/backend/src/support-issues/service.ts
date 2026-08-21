@@ -131,11 +131,7 @@ export async function createSupportIssue({
     { jobId, environment, renewalIntervalMs: leaseRenewalIntervalMs, requestTimeoutMs: SUPPORT_ISSUE_REQUEST_TIMEOUT_MS },
   );
   if (!creation.ok || creation.leaseLost || creation.aborted) {
-    if (creation.leaseLost || creation.aborted) {
-      await markForReconciliation(jobId, environment, creation.claimedAt);
-    } else {
-      await releaseClaim(jobId, environment, creation.claimedAt);
-    }
+    await markForReconciliation(jobId, environment, creation.claimedAt);
     return { kind: "failed", reason: "github", error: creation.ok ? undefined : creation.error };
   }
 
@@ -151,14 +147,6 @@ export async function createSupportIssue({
   }
   await markForReconciliation(jobId, environment, creation.claimedAt);
   return { kind: "failed", reason: "persistence" };
-}
-
-async function releaseClaim(id: string, environment: string, claimedAt: Date) {
-  try {
-    await jobRepository.releaseSupportIssue(id, environment, claimedAt);
-  } catch {
-    // The lease remains recoverable when the release itself cannot be persisted.
-  }
 }
 
 async function markForReconciliation(id: string, environment: string, claimedAt: Date) {
