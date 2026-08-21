@@ -1,3 +1,22 @@
+# [1.9.0](https://github.com/merendamattia/swarmloom/compare/v1.8.0...v1.9.0) (2026-08-21)
+
+
+### Bug Fixes
+
+* **jobs:** preserve stack traces in support issues ([f84176c](https://github.com/merendamattia/swarmloom/commit/f84176cc1a7cbe71f864407119a00373d50684a2))
+* **jobs:** reconcile failed support issue creates ([d32ea98](https://github.com/merendamattia/swarmloom/commit/d32ea98f3360a286ad8a145fd7b8a03895fa0ff7))
+* **jobs:** recover and serialize support issue creation ([f8b134d](https://github.com/merendamattia/swarmloom/commit/f8b134d41b76703d912ac914ff96c2f058bf5768))
+* **jobs:** renew support issue claims during requests ([682c415](https://github.com/merendamattia/swarmloom/commit/682c415e96663c2a85d7d88ac0d10af4f2ec9210))
+* **runner:** reject duplicate TL;DR markers ([ddde668](https://github.com/merendamattia/swarmloom/commit/ddde66868f43798d8dd13ce1ca690f8b5b7c47ef))
+* **runner:** use canonical issue references in PRs ([d48ecb3](https://github.com/merendamattia/swarmloom/commit/d48ecb3ab5a4eeadd769f3d045bef430c97514d8))
+
+
+### Features
+
+* **dashboard:** clear resolved overview exceptions ([338015a](https://github.com/merendamattia/swarmloom/commit/338015aa35ed13b13b3d63e5f2d0d9e056ccc904))
+* **jobs:** create support issues from failed jobs ([1c4b4bd](https://github.com/merendamattia/swarmloom/commit/1c4b4bd256657c49943e51c4a5126c8f725794d0))
+* **runner:** require TL;DR in agent comments ([80e3a7e](https://github.com/merendamattia/swarmloom/commit/80e3a7e48804272021a2179ce0eec3116e19eab8))
+
 # [1.8.0](https://github.com/merendamattia/swarmloom/compare/v1.7.0...v1.8.0) (2026-08-20)
 
 
