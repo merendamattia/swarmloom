@@ -15,6 +15,13 @@ integration("operations API", () => {
   const unique = crypto.randomUUID();
   const apiJobId = crypto.randomUUID();
   const labels = ["bug", "agent:working"];
+  const createdIssues: Array<{ title: string; body: string; labels: string[] }> = [];
+  let createIssueError: Error | undefined;
+  let throwAfterIssueCreation = false;
+  let beforeCreateIssue: (() => Promise<void>) | undefined;
+  let afterCreateIssue: (() => Promise<void>) | undefined;
+  let reconciledIssue: { number: number; url: string } | undefined;
+  let findIssueCalls = 0;
   const config = parseConfig({
     APP_ENV: "test",
     NODE_ENV: "test",
@@ -86,6 +93,19 @@ integration("operations API", () => {
         }),
         setIssueLabels: async (_repository, _issue, next) => {
           labels.splice(0, labels.length, ...next);
+        },
+        createIssue: async (_repository, title, body, issueLabels) => {
+          if (createIssueError) throw createIssueError;
+          await beforeCreateIssue?.();
+          const issue = { number: 123, url: "https://github.com/acme/api-test/issues/123" };
+          createdIssues.push({ title, body, labels: issueLabels });
+          if (throwAfterIssueCreation) throw new Error("GitHub response was lost");
+          await afterCreateIssue?.();
+          return issue;
+        },
+        findIssueByMarker: async () => {
+          findIssueCalls += 1;
+          return reconciledIssue;
         },
         addIssueComment: async () => {},
         getPullRequestLabels: async () => [],
@@ -264,6 +284,248 @@ integration("operations API", () => {
     expect(labels).toEqual(["bug", config.ISSUE_READY_LABEL]);
   });
 
+  test("creates one sanitized support issue for a failed job and rejects non-failed jobs", async () => {
+    await prisma.job.update({
+      where: { id: jobId },
+      data: {
+        status: "FAILED",
+        errorMessage: "Provider failed with test-token",
+        diagnostics: {
+          stage: "provider_process",
+          role: "issue-worker",
+          provider: "codex",
+          model: "test-model",
+          sessionId: "session-1",
+          exitCode: 1,
+          error: "Provider failed with test-token",
+          causeChain: ["Provider failed with test-token"],
+          stderr: "command --token test-token",
+          stack: "Error: Provider failed with test-token\n    at runProvider (worker.ts:42:7)",
+          events: [{ type: "COMMAND_FAILED", timestamp: "2026-08-20T12:00:00Z", message: "bun test" }],
+        },
+      },
+    });
+
+    const created = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+    expect(created.status).toBe(201);
+    expect(await created.json()).toEqual({
+      status: "created",
+      issueNumber: 123,
+      issueUrl: "https://github.com/acme/api-test/issues/123",
+    });
+    expect(createdIssues).toHaveLength(1);
+    expect(createdIssues[0]).toMatchObject({
+      title: expect.stringContaining("Provider failed"),
+      labels: [config.ISSUE_READY_LABEL],
+    });
+    expect(createdIssues[0]?.body).toContain("Provider failed with [REDACTED]");
+    expect(createdIssues[0]?.body).toContain("at runProvider (worker.ts:42:7)");
+    expect(createdIssues[0]?.body).toContain("Job ID");
+    expect(createdIssues[0]?.body).toContain("COMMAND_FAILED");
+    expect(createdIssues[0]?.body).not.toContain("test-token");
+
+    const duplicate = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+    expect(duplicate.status).toBe(200);
+    expect(await duplicate.json()).toEqual({
+      status: "existing",
+      issueNumber: 123,
+      issueUrl: "https://github.com/acme/api-test/issues/123",
+    });
+    expect(createdIssues).toHaveLength(1);
+
+    await prisma.job.update({ where: { id: jobId }, data: { status: "COMPLETED" } });
+    const notFailed = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+    expect(notFailed.status).toBe(409);
+    expect(await notFailed.json()).toEqual({ error: "Only failed jobs can create support issues" });
+
+    await prisma.job.update({
+      where: { id: jobId },
+      data: { status: "FAILED", supportIssueNumber: null, supportIssueUrl: null, supportIssueCreating: false },
+    });
+    createIssueError = new Error("GitHub is unavailable");
+    const failedCreation = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+    expect(failedCreation.status).toBe(502);
+    expect(await failedCreation.json()).toEqual({ error: "Could not create support issue: GitHub is unavailable" });
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: jobId } }))
+      .toMatchObject({ status: "FAILED", supportIssueNumber: null, supportIssueUrl: null, supportIssueCreating: true, supportIssueReconcileRequired: true });
+  });
+
+  test("reconciles an issue when GitHub commits before the create response fails", async () => {
+    await prisma.job.update({
+      where: { id: jobId },
+      data: {
+        status: "FAILED",
+        supportIssueNumber: null,
+        supportIssueUrl: null,
+        supportIssueCreating: false,
+        supportIssueReconcileRequired: false,
+        errorMessage: "Ambiguous GitHub failure",
+      },
+    });
+    createdIssues.splice(0);
+    createIssueError = undefined;
+    throwAfterIssueCreation = true;
+    reconciledIssue = undefined;
+    findIssueCalls = 0;
+
+    try {
+      const failedCreation = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+      expect(failedCreation.status).toBe(502);
+      expect(createdIssues).toHaveLength(1);
+
+      throwAfterIssueCreation = false;
+      reconciledIssue = { number: 123, url: "https://github.com/acme/api-test/issues/123" };
+      const retry = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+      expect(retry.status).toBe(200);
+      expect(await retry.json()).toEqual({
+        status: "existing",
+        issueNumber: 123,
+        issueUrl: "https://github.com/acme/api-test/issues/123",
+      });
+      expect(findIssueCalls).toBe(1);
+      expect(createdIssues).toHaveLength(1);
+    } finally {
+      createIssueError = undefined;
+      throwAfterIssueCreation = false;
+      reconciledIssue = undefined;
+      findIssueCalls = 0;
+    }
+  });
+
+  test("serializes automatic support orchestration with the manual endpoint", async () => {
+    const { createSupportIssue } = await import("../src/support-issues/service.ts");
+    await prisma.job.update({
+      where: { id: jobId },
+      data: {
+        status: "FAILED",
+        supportIssueNumber: null,
+        supportIssueUrl: null,
+        supportIssueCreating: false,
+        errorMessage: "Automatic failure",
+      },
+    });
+    config.CREATE_DIAGNOSTIC_ISSUES = true;
+    createIssueError = undefined;
+    createdIssues.splice(0);
+    let started!: () => void;
+    const automaticStarted = new Promise<void>((resolve) => { started = resolve; });
+    let release!: () => void;
+    const releaseAutomatic = new Promise<void>((resolve) => { release = resolve; });
+    beforeCreateIssue = async () => {
+      started();
+      await releaseAutomatic;
+    };
+    const github = {
+      createIssue: async (_repository: string, title: string, body: string, issueLabels: string[]) => {
+        await beforeCreateIssue?.();
+        createdIssues.push({ title, body, labels: issueLabels });
+        return { number: 123, url: "https://github.com/acme/api-test/issues/123" };
+      },
+      findIssueByMarker: async () => undefined,
+    };
+
+    try {
+      const automatic = createSupportIssue({ config, github, jobId });
+      await automaticStarted;
+      const manual = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+      expect(manual.status).toBe(409);
+      release();
+      expect(await automatic).toMatchObject({ kind: "created" });
+      expect(createdIssues).toHaveLength(1);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: jobId } }))
+        .toMatchObject({ status: "FAILED", supportIssueNumber: 123, supportIssueUrl: "https://github.com/acme/api-test/issues/123", supportIssueCreating: false });
+    } finally {
+      beforeCreateIssue = undefined;
+      afterCreateIssue = undefined;
+      config.CREATE_DIAGNOSTIC_ISSUES = false;
+    }
+  });
+
+  test("renews a live support issue claim during a long GitHub request", async () => {
+    const { createSupportIssue } = await import("../src/support-issues/service.ts");
+    await prisma.job.update({
+      where: { id: jobId },
+      data: {
+        status: "FAILED",
+        supportIssueNumber: null,
+        supportIssueUrl: null,
+        supportIssueCreating: false,
+        errorMessage: "Long-running failure",
+      },
+    });
+    createdIssues.splice(0);
+    let started!: () => void;
+    const creationStarted = new Promise<void>((resolve) => { started = resolve; });
+    let finish!: () => void;
+    const creationFinished = new Promise<void>((resolve) => { finish = resolve; });
+    const github = {
+      createIssue: async () => {
+        started();
+        await creationFinished;
+        createdIssues.push({ title: "long request", body: "body", labels: [] });
+        return { number: 123, url: "https://github.com/acme/api-test/issues/123" };
+      },
+      findIssueByMarker: async () => undefined,
+    };
+
+    const creating = createSupportIssue({
+      config,
+      github,
+      jobId,
+      leaseMs: 100,
+      leaseRenewalIntervalMs: 10,
+    });
+    await creationStarted;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const concurrent = await createSupportIssue({ config, github, jobId, leaseMs: 100, leaseRenewalIntervalMs: 10 });
+    expect(concurrent).toMatchObject({ kind: "in_progress" });
+    finish();
+    expect(await creating).toMatchObject({ kind: "created" });
+    expect(createdIssues).toHaveLength(1);
+  });
+
+  test("reconciles a created issue when persistence fails", async () => {
+    await prisma.job.update({
+      where: { id: jobId },
+      data: {
+        status: "FAILED",
+        supportIssueNumber: null,
+        supportIssueUrl: null,
+        supportIssueCreating: false,
+      },
+    });
+    createdIssues.splice(0);
+    reconciledIssue = undefined;
+    afterCreateIssue = async () => {
+      await prisma.job.update({ where: { id: jobId }, data: { status: "COMPLETED" } });
+    };
+
+    try {
+      const failed = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+      expect(failed.status).toBe(500);
+      expect(await failed.json()).toEqual({ error: "Support issue was created but could not be recorded" });
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: jobId } }))
+        .toMatchObject({ status: "COMPLETED", supportIssueNumber: null, supportIssueUrl: null, supportIssueCreating: true });
+
+      reconciledIssue = { number: 123, url: "https://github.com/acme/api-test/issues/123" };
+      await prisma.job.update({ where: { id: jobId }, data: { status: "FAILED" } });
+      afterCreateIssue = undefined;
+      const recovered = await app.request(`/api/jobs/${jobId}/support-issue`, { method: "POST" });
+      expect(recovered.status).toBe(200);
+      expect(await recovered.json()).toEqual({
+        status: "existing",
+        issueNumber: 123,
+        issueUrl: "https://github.com/acme/api-test/issues/123",
+      });
+      expect(createdIssues).toHaveLength(1);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: jobId } }))
+        .toMatchObject({ status: "FAILED", supportIssueNumber: 123, supportIssueUrl: "https://github.com/acme/api-test/issues/123", supportIssueCreating: false });
+    } finally {
+      beforeCreateIssue = undefined;
+      afterCreateIssue = undefined;
+      reconciledIssue = undefined;
+    }
+  });
   test("removes an obsolete repository together with its events and job history", async () => {
     const obsolete = await prisma.repository.create({
       data: { fullName: `acme/obsolete-${unique}`, cloneUrl: `https://github.com/acme/obsolete-${unique}.git` },

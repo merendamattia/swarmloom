@@ -16,7 +16,6 @@ import { runDecomposition } from "./decomposition.ts";
 import { runFix } from "./fix.ts";
 import {
   createCommentOnPullRequest,
-  createDiagnosticIssue,
   createFinalizeIssue,
   executeRole,
   readResponseFile,
@@ -26,6 +25,7 @@ import {
 } from "./helpers.ts";
 import { runImplementation } from "./implementation.ts";
 import { runReview } from "./review.ts";
+import { createSupportIssue } from "../support-issues/service.ts";
 import { AgentExecutionError, executionFailure, minimalDiagnostics, type JobDiagnostics, type RoleExecution } from "./diagnostics.ts";
 import type { RunnerContext, RunnerGitHub, RunningJob, SessionState } from "./types.ts";
 
@@ -56,6 +56,8 @@ export function createJobRunner({
   gcRepository: gc = gcRepository,
   heartbeatIntervalMs,
 }: RunnerDependencies) {
+  const diagnosticEnvironment = { ...globalThis.process.env, SWARMLOOM_GITHUB_TOKEN: config.GITHUB_TOKEN };
+
   async function run(jobId: string, workerId: string) {
     const job = await jobRepository.findRunning(jobId, workerId);
     if (!job) return false;
@@ -119,8 +121,9 @@ export function createJobRunner({
             provider,
             state.lastExecution,
             error,
+            { environment: diagnosticEnvironment },
           ).diagnostics
-          : minimalDiagnostics(error, { provider: provider?.name ?? "unconfigured", model: job.model });
+          : minimalDiagnostics(error, { provider: provider?.name ?? "unconfigured", model: job.model }, diagnosticEnvironment);
       reachedTerminalState = await jobRepository.finishRunning(job.id, "FAILED", {
         errorMessage: message,
         diagnostics: diagnostics as Prisma.InputJsonValue,
@@ -166,9 +169,10 @@ export function createJobRunner({
   }
 
   async function reportFailure(job: RunningJob, error: unknown, state: SessionState) {
-    const diagnosticIssue = config.CREATE_DIAGNOSTIC_ISSUES
-      ? await createDiagnosticIssue(github, config, job, error, state.activePullRequest)
+    const diagnosticResult = config.CREATE_DIAGNOSTIC_ISSUES
+      ? await createSupportIssue({ config, github, jobId: job.id, environment: job.environment, origin: "automatic" })
       : undefined;
+    const diagnosticIssue = diagnosticResult?.kind === "created" || diagnosticResult?.kind === "existing" ? diagnosticResult.issue : undefined;
     const comment = [
       `Worker failed: ${safeError(error)}`,
       config.CREATE_DIAGNOSTIC_ISSUES
@@ -224,7 +228,7 @@ function createExecuteRoleWithRetry(events: EventService, config: Config, provid
         return completed;
       } catch (error) {
         if (attempt >= 1) {
-          throw executionFailure("parser", role, currentJob, provider, result, error, { finalOutput: response || result.finalOutput });
+          throw executionFailure("parser", role, currentJob, provider, result, error, { finalOutput: response || result.finalOutput, environment: { ...globalThis.process.env, SWARMLOOM_GITHUB_TOKEN: config.GITHUB_TOKEN } });
         }
         guidance = `\n\nYour previous response was not accepted: ${safeError(error)}`;
       } finally {

@@ -116,6 +116,148 @@ async function finishRunning(
   return updated.count === 1;
 }
 
+type SupportIssueClaim =
+  | { kind: "missing" }
+  | { kind: "not_failed" }
+  | { kind: "existing"; issueNumber: number; issueUrl: string; repositoryId: string }
+  | { kind: "in_progress" }
+  | {
+    kind: "claimed";
+    job: NonNullable<Awaited<ReturnType<typeof findSupportIssueJob>>>;
+    claimedAt: Date;
+    reconcile: boolean;
+  };
+
+export const SUPPORT_ISSUE_LEASE_MS = 5 * 60_000;
+
+async function findSupportIssueJob(id: string, environment: string) {
+  return prisma.job.findFirst({
+    where: { id, environment },
+    include: { repository: true },
+  });
+}
+
+async function claimSupportIssue(id: string, environment: string, leaseMs = SUPPORT_ISSUE_LEASE_MS): Promise<SupportIssueClaim> {
+  const job = await findSupportIssueJob(id, environment);
+  if (!job) return { kind: "missing" };
+  if (job.status !== "FAILED") return { kind: "not_failed" };
+  if (job.supportIssueNumber !== null && job.supportIssueUrl !== null) {
+    return { kind: "existing", issueNumber: job.supportIssueNumber, issueUrl: job.supportIssueUrl, repositoryId: job.repositoryId };
+  }
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - leaseMs);
+  const reclaimable = !job.supportIssueCreating
+    || job.supportIssueReconcileRequired
+    || !job.supportIssueCreatingAt
+    || job.supportIssueCreatingAt < staleBefore;
+  if (!reclaimable) return { kind: "in_progress" };
+
+  const claimed = await prisma.job.updateMany({
+    where: {
+      id,
+      environment,
+      status: "FAILED",
+      supportIssueNumber: null,
+      supportIssueUrl: null,
+      OR: [
+        { supportIssueCreating: false },
+        { supportIssueCreating: true, supportIssueReconcileRequired: true },
+        { supportIssueCreating: true, supportIssueCreatingAt: null },
+        { supportIssueCreating: true, supportIssueCreatingAt: { lt: staleBefore } },
+      ],
+    },
+    data: {
+      supportIssueCreating: true,
+      supportIssueCreatingAt: now,
+      supportIssueReconcileRequired: false,
+    },
+  });
+  if (claimed.count !== 1) {
+    const concurrent = await findSupportIssueJob(id, environment);
+    if (!concurrent) return { kind: "missing" };
+    if (concurrent.status !== "FAILED") return { kind: "not_failed" };
+    if (concurrent.supportIssueNumber !== null && concurrent.supportIssueUrl !== null) {
+      return { kind: "existing", issueNumber: concurrent.supportIssueNumber, issueUrl: concurrent.supportIssueUrl, repositoryId: concurrent.repositoryId };
+    }
+    return { kind: "in_progress" };
+  }
+
+  const claimedJob = await findSupportIssueJob(id, environment);
+  return claimedJob
+    ? {
+      kind: "claimed",
+      job: claimedJob,
+      claimedAt: claimedJob.supportIssueCreatingAt ?? now,
+      reconcile: job.supportIssueCreating
+        && (job.supportIssueReconcileRequired || !job.supportIssueCreatingAt || job.supportIssueCreatingAt < staleBefore),
+    }
+    : { kind: "missing" };
+}
+
+async function findSupportIssue(id: string, environment: string) {
+  const job = await prisma.job.findFirst({
+    where: { id, environment },
+    select: { supportIssueNumber: true, supportIssueUrl: true },
+  });
+  if (!job || job.supportIssueNumber === null || job.supportIssueUrl === null) return null;
+  return { issueNumber: job.supportIssueNumber, issueUrl: job.supportIssueUrl };
+}
+
+async function renewSupportIssue(id: string, environment: string, claimedAt: Date) {
+  const renewedAt = new Date();
+  const updated = await prisma.job.updateMany({
+    where: {
+      id,
+      environment,
+      status: "FAILED",
+      supportIssueCreating: true,
+      supportIssueCreatingAt: claimedAt,
+      supportIssueNumber: null,
+      supportIssueUrl: null,
+    },
+    data: { supportIssueCreatingAt: renewedAt },
+  });
+  return updated.count === 1 ? renewedAt : null;
+}
+
+async function saveSupportIssue(id: string, environment: string, claimedAt: Date, issue: { number: number; url: string }) {
+  const updated = await prisma.job.updateMany({
+    where: { id, environment, status: "FAILED", supportIssueCreating: true, supportIssueCreatingAt: claimedAt },
+    data: {
+      supportIssueNumber: issue.number,
+      supportIssueUrl: issue.url,
+      supportIssueCreating: false,
+      supportIssueCreatingAt: null,
+      supportIssueReconcileRequired: false,
+    },
+  });
+  return updated.count === 1;
+}
+
+async function releaseSupportIssue(id: string, environment: string, claimedAt: Date) {
+  const updated = await prisma.job.updateMany({
+    where: { id, environment, supportIssueCreating: true, supportIssueCreatingAt: claimedAt },
+    data: {
+      supportIssueCreating: false,
+      supportIssueCreatingAt: null,
+      supportIssueReconcileRequired: false,
+    },
+  });
+  return updated.count === 1;
+}
+
+async function markSupportIssueForReconciliation(id: string, environment: string, claimedAt: Date) {
+  const updated = await prisma.job.updateMany({
+    where: { id, environment, supportIssueCreating: true, supportIssueCreatingAt: claimedAt },
+    data: {
+      supportIssueCreating: true,
+      supportIssueCreatingAt: new Date(0),
+      supportIssueReconcileRequired: true,
+    },
+  });
+  return updated.count === 1;
+}
+
 async function findRunning(id: string, workerId: string) {
   return prisma.job.findFirst({
     where: { id, status: "RUNNING", workerId },
@@ -213,4 +355,10 @@ export const jobRepository = {
   setWorktree,
   setImplementationResult,
   finishRunning,
+  claimSupportIssue,
+  findSupportIssue,
+  saveSupportIssue,
+  renewSupportIssue,
+  releaseSupportIssue,
+  markSupportIssueForReconciliation,
 };
