@@ -123,6 +123,9 @@ integration("job runner", () => {
       subjectType: "ISSUE",
       issueNumber: job.issueNumber,
       status: "QUEUED",
+      provider: job.provider,
+      model: job.model,
+      reasoningEffort: job.reasoningEffort,
     });
     expect(state.labels).toEqual(["bug", config.ISSUE_WORKING_LABEL]);
     expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "JOB_COMPLETED" } })).toMatchObject({

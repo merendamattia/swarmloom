@@ -7,14 +7,30 @@ export function createAgentProvider(name: "codex" | "opencode"): AgentProvider {
   return name === "codex" ? new CodexProvider() : new OpenCodeProvider();
 }
 
-export function configuredAgent(config: Config) {
+export type AgentProfile = "coding" | "review";
+export type AgentJobType = "IMPLEMENTATION" | "FIX" | "REVIEW" | "DECOMPOSITION";
+
+const profileByJobType: Record<AgentJobType, AgentProfile> = {
+  IMPLEMENTATION: "coding",
+  FIX: "coding",
+  REVIEW: "review",
+  DECOMPOSITION: "coding",
+};
+
+export function agentProfileForJobType(jobType: AgentJobType) {
+  return profileByJobType[jobType];
+}
+
+export function configuredAgent(config: Config, profile: AgentProfile) {
   return config.AGENT_PROVIDER === "codex" ? {
     provider: "CODEX" as const,
-    model: config.CODEX_MODEL,
-    reasoningEffort: config.CODEX_REASONING_EFFORT,
+    model: profile === "coding" ? config.CODEX_CODING_MODEL : config.CODEX_REVIEW_MODEL,
+    reasoningEffort: profile === "coding"
+      ? config.CODEX_CODING_REASONING_EFFORT
+      : config.CODEX_REVIEW_REASONING_EFFORT,
   } : {
     provider: "OPENCODE" as const,
-    model: config.OPENCODE_MODEL,
+    model: profile === "coding" ? config.OPENCODE_CODING_MODEL : config.OPENCODE_REVIEW_MODEL,
     reasoningEffort: undefined,
   };
 }

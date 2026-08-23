@@ -24,7 +24,11 @@ describe("runtime settings", () => {
       SCHEDULE_CRON: "*/5 * * * *",
       MAX_PARALLEL_JOBS: "3",
       AGENT_PROVIDER: "opencode",
-      OPENCODE_MODEL: "opencode-go/test-model",
+      OPENCODE_REVIEW_MODEL: "opencode-go/review-model",
+      CODEX_CODING_MODEL: "gpt-5.6-coding",
+      CODEX_REVIEW_MODEL: "gpt-5.6-review",
+      CODEX_CODING_REASONING_EFFORT: "low",
+      CODEX_REVIEW_REASONING_EFFORT: "high",
       ISSUE_READY_LABEL: "ready-for-agent",
       PR_REVIEW_REQUESTED_LABEL: "review-requested",
       MAX_AUTOMATIC_FIX_CYCLES: "7",
@@ -34,7 +38,11 @@ describe("runtime settings", () => {
     expect(config.SCHEDULE_CRON).toBe("*/5 * * * *");
     expect(config.MAX_PARALLEL_JOBS).toBe(3);
     expect(config.AGENT_PROVIDER).toBe("opencode");
-    expect(config.OPENCODE_MODEL).toBe("opencode-go/test-model");
+    expect(config.OPENCODE_REVIEW_MODEL).toBe("opencode-go/review-model");
+    expect(config.CODEX_CODING_MODEL).toBe("gpt-5.6-coding");
+    expect(config.CODEX_REVIEW_MODEL).toBe("gpt-5.6-review");
+    expect(config.CODEX_CODING_REASONING_EFFORT).toBe("low");
+    expect(config.CODEX_REVIEW_REASONING_EFFORT).toBe("high");
     expect(config.ISSUE_READY_LABEL).toBe("ready-for-agent");
     expect(config.PR_REVIEW_REQUESTED_LABEL).toBe("review-requested");
     expect(config.MAX_AUTOMATIC_FIX_CYCLES).toBe(7);

@@ -119,8 +119,9 @@ docker compose stop
 `docker compose stop` preserves PostgreSQL, provider login caches, repositories, and worktrees.
 
 After the first start, operational values such as repositories, labels, schedule, concurrency,
-provider/model, and Telegram are managed from **Settings**. Telegram secrets are encrypted before
-being stored in PostgreSQL and never returned by the API.
+provider, coding/review models, and Telegram are managed from **Settings**. Coding is used for
+implementation, fixes, and decomposition; review is used for independent pull request reviews.
+Telegram secrets are encrypted before being stored in PostgreSQL and never returned by the API.
 
 ## Provider login
 
@@ -156,8 +157,9 @@ docker compose exec worker opencode auth login
 ```
 
 Select **OpenCode Go** and paste the API key. The session is stored in the `opencode_data` volume
-mounted at `XDG_DATA_HOME`. Set `OPENCODE_MODEL` to a `provider/model` id exposed by the
-authenticated provider, for example `opencode-go/deepseek-v4-flash`. Verify:
+mounted at `XDG_DATA_HOME`. Set `OPENCODE_CODING_MODEL` and `OPENCODE_REVIEW_MODEL` to
+`provider/model` ids exposed by the authenticated provider, for example
+`opencode-go/deepseek-v4-flash`. Verify:
 
 ```bash
 docker compose exec worker opencode auth list

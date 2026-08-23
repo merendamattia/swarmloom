@@ -14,6 +14,7 @@ import { redactSecrets } from "../core/secrets.ts";
 import { checkProviderAuthentication, validateStartup } from "../core/startup.ts";
 import type { EventService } from "../events/service.ts";
 import type { GitHubClient } from "../github/client.ts";
+import { configuredAgent } from "../providers/index.ts";
 import { createSupportIssue } from "../support-issues/service.ts";
 import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.ts";
 import { dashboardExceptionRepository } from "../repositories/dashboard-exceptions.ts";
@@ -37,6 +38,15 @@ type Dependencies = {
   settings: SettingsService;
   scheduler: Scheduler;
 };
+
+function configuredAgentProfiles(config: Config) {
+  const coding = configuredAgent(config, "coding");
+  const review = configuredAgent(config, "review");
+  return {
+    coding: { model: coding.model, reasoningEffort: coding.reasoningEffort ?? null },
+    review: { model: review.model, reasoningEffort: review.reasoningEffort ?? null },
+  };
+}
 
 const jobQuery = z.object({
   status: z.enum(["QUEUED", "RUNNING", "COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"]).optional(),
@@ -145,8 +155,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         providerAuth,
         schedule: { cron: config.SCHEDULE_CRON, timezone: config.SCHEDULE_TIMEZONE },
         provider: config.AGENT_PROVIDER,
-        model: config.AGENT_PROVIDER === "codex" ? config.CODEX_MODEL : config.OPENCODE_MODEL,
-        reasoningEffort: config.AGENT_PROVIDER === "codex" ? config.CODEX_REASONING_EFFORT : null,
+        agentProfiles: configuredAgentProfiles(config),
         maxParallelJobs: config.MAX_PARALLEL_JOBS,
         telegram: {
           configured: config.TELEGRAM_ENABLED,
@@ -214,8 +223,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         jobs: Object.fromEntries(statusCounts.map((row) => [row.status, row._count])),
         configuration: {
           provider: config.AGENT_PROVIDER,
-          model: config.AGENT_PROVIDER === "codex" ? config.CODEX_MODEL : config.OPENCODE_MODEL,
-          reasoningEffort: config.AGENT_PROVIDER === "codex" ? config.CODEX_REASONING_EFFORT : null,
+          agentProfiles: configuredAgentProfiles(config),
           telegramConfigured: config.TELEGRAM_ENABLED,
         },
         repositories,
