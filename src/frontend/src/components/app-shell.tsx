@@ -1,69 +1,50 @@
 "use client";
 
-import { CircleAlert, GitBranch, LayoutDashboard, ListChecks, Settings } from "lucide-react";
-import Image from "next/image";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { AppTopbar } from "@/components/ui/app-topbar";
+import { CommandMenu } from "@/components/ui/command-menu";
+import { SidebarNav } from "@/components/ui/dashboard-sidebar";
+import { ProviderAuthBanner } from "@/components/ui/provider-auth-banner";
 import { useStatus } from "@/hooks/api";
 
-const links = [
-  { href: "/", label: "Overview", icon: LayoutDashboard },
-  { href: "/jobs", label: "Jobs", icon: ListChecks },
-  { href: "/repositories", label: "Repositories", icon: GitBranch },
-  { href: "/settings", label: "Settings", icon: Settings },
-];
-
-function ProviderAuthBanner() {
-  const status = useStatus();
-  const data = status.data;
-  const providerAuth = data?.providerAuth;
-  if (!data || !providerAuth || providerAuth.status !== "required") return null;
-
-  const provider = data.provider === "codex" ? "Codex" : "OpenCode";
-  return (
-    <aside className="provider-auth-banner" role="alert" aria-labelledby="provider-auth-title">
-      <div className="provider-auth-inner">
-        <span className="provider-auth-icon" aria-hidden="true"><CircleAlert size={20} /></span>
-        <div className="provider-auth-copy">
-          <div className="provider-auth-heading">
-            <p className="eyebrow">Action required</p>
-            <h2 id="provider-auth-title">{provider} login required</h2>
-          </div>
-          <p>The containers are online, but jobs will not run until the configured provider is authenticated.</p>
-          <p>Open the worker container terminal and run:</p>
-          <code className="provider-auth-command">{providerAuth.loginCommand}</code>
-        </div>
-      </div>
-    </aside>
-  );
-}
-
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
+  const status = useStatus();
+  const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   return (
-    <div className="app-frame">
+    <div className="app-frame" data-sidebar-collapsed={collapsed}>
       <a href="#main-content" className="skip-link">Skip to main content</a>
-      <ProviderAuthBanner />
-      <header className="app-header">
-        <div className="header-inner">
-          <Link href="/" className="brand" aria-label="Swarmloom overview">
-            <Image className="brand-logo" src="/brand/logo.png" alt="Swarmloom" width={132} height={34} priority />
-          </Link>
-          <nav className="primary-nav" aria-label="Primary navigation">
-            {links.map(({ href, label, icon: Icon }) => {
-              const active = href === "/" ? pathname === href : pathname.startsWith(href);
-              return (
-                <Link key={href} href={href} className="nav-link" aria-current={active ? "page" : undefined}>
-                  <Icon size={16} aria-hidden="true" />
-                  <span>{label}</span>
-                </Link>
-              );
-            })}
-          </nav>
-        </div>
-      </header>
-      <main id="main-content" className="page-shell">{children}</main>
+      <SidebarNav
+        collapsed={collapsed}
+        mobileOpen={mobileOpen}
+        onCloseMobile={() => setMobileOpen(false)}
+        onCollapse={() => setCollapsed((value) => !value)}
+        onSearch={() => setSearchOpen(true)}
+      />
+      <div className="app-workspace">
+        <AppTopbar
+          collapsed={collapsed}
+          onToggleSidebar={() => setCollapsed(false)}
+          onOpenMobile={() => setMobileOpen(true)}
+          onSearch={() => setSearchOpen(true)}
+        />
+        <ProviderAuthBanner status={status.data} />
+        <main id="main-content" className="page-shell">{children}</main>
+      </div>
+      <CommandMenu open={searchOpen} onOpenChange={setSearchOpen} />
     </div>
   );
 }
