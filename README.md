@@ -76,7 +76,7 @@ pre-commit run --all-files
 Pull requests target `develop` and use the commit types in `git-conventional-commits.yaml`.
 Before a commit, run `scripts/verify-before-commit.sh` (or
 `/usr/local/bin/verify-before-commit` inside the application containers); it runs pre-commit,
-typecheck, lint, and tests. Pushes to `main` run Semantic Release.
+Prisma generation and migrations, typecheck, lint, and tests. Pushes to `main` run Semantic Release.
 
 ## Run locally
 

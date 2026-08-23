@@ -1,8 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { mkdtemp, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { buildCodexCommand, normalizeCodexEvent, provisionExecPolicy } from "../src/providers/codex.ts";
+import { buildCodexCommand, CodexProvider, normalizeCodexEvent } from "../src/providers/codex.ts";
 import {
   buildOpenCodeCommand, normalizeOpenCodeEvent, openCodeEnvironment, OpenCodeProvider,
 } from "../src/providers/opencode.ts";
@@ -23,18 +20,9 @@ describe("Codex provider", () => {
   test("builds a fresh, noninteractive command", () => {
     expect(buildCodexCommand(request)).toEqual([
       "codex", "exec", "--json", "--ignore-user-config", "--model", "test-model",
-      "--approve-for-me", "--config",
+      "--dangerously-bypass-approvals-and-sandbox", "--config",
       'model_reasoning_effort="max"', "--cd", "/work/repository", "-",
     ]);
-  });
-
-  test("provisions the git-push exec policy into the codex home", async () => {
-    const home = await mkdtemp(join(tmpdir(), "codex-home-"));
-    await provisionExecPolicy(home);
-    const rules = await readFile(join(home, "rules", "default.rules"), "utf8");
-    expect(rules).toContain('pattern = ["git", "push"');
-    expect(rules).toContain('decision = "allow"');
-    expect(rules).toContain("origin");
   });
 
   test("normalizes session, output, tool and completion events", () => {
@@ -65,6 +53,43 @@ describe("Codex provider", () => {
     expect(normalizeCodexEvent({ type: "error" })).toMatchObject({
       event: { type: "SESSION_FAILED", message: "Codex session failed" },
     });
+  });
+
+  test("redacts request-scoped credentials from output", async () => {
+    const original = Bun.spawn;
+    const credential = "AUTHORIZATION: basic derived-credential";
+    const events: AgentEvent[] = [];
+    const stdout = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(encoder.encode(`${JSON.stringify({
+          type: "item.completed",
+          item: { type: "agent_message", text: `leaked ${credential}` },
+        })}\n`));
+        controller.close();
+      },
+    });
+    const stderr = new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+    const fake = mock((_args: unknown) => ({
+      stdin: { write() {}, end() {} },
+      stdout,
+      stderr,
+      exited: Promise.resolve(0),
+      kill() {},
+    }));
+    // @ts-expect-error test-only substitution of the spawn implementation
+    Bun.spawn = fake;
+    try {
+      const result = await new CodexProvider().execute({
+        ...request,
+        environment: { GIT_CONFIG_VALUE_0: credential },
+        onEvent: (event) => { events.push(event); },
+      });
+      expect(result.finalOutput).toBe("leaked [REDACTED]");
+      expect(events[0]?.message).toBe("leaked [REDACTED]");
+    } finally {
+      Bun.spawn = original;
+    }
   });
 });
 

@@ -26,7 +26,13 @@ The workflow modes are mutually exclusive and driven by GitHub state:
   native sub-issues and create them as GitHub sub-issues of the parent. Do not edit repository files
   or open Pull Requests.
 - **Review**: review sessions run as separate jobs; an implementation or fix session must never
-  perform the review itself.
+  perform the review itself. Do not submit GitHub reviews, comments, or labels from a review job;
+  the coordinator publishes the response and workflow labels after validating the verdict.
+
+Starting a job is explicit authorization for the repository and GitHub changes required by its
+mode, including commits, an assigned-branch push, Pull Request creation or update, review feedback,
+and native sub-issues. Do not ask for separate approval. The branch, worktree, verification,
+credential, no-merge, and no-force-push restrictions below remain mandatory.
 
 Only redo work from scratch when the context proves it is incomplete or invalid.
 
@@ -63,14 +69,13 @@ when the change is non-trivial or the repository provides them. Do not claim a c
 it was actually run.
 
 The repository's GitHub Actions CI workflow (`.github/workflows/ci.yaml` in the worktree) is the
-definition of "everything works". Before creating a commit, you must explicitly run every command the
-`quality` job of `ci.yaml` runs, in the order it runs them, directly in the worktree:
+definition of "everything works". Before creating a commit, run its `quality` commands in order:
 `bun install --frozen-lockfile`, `pip install -r requirements.txt` when that file contains Python
-dependencies beyond the preinstalled `pre-commit`, then `pre-commit run --all-files`,
-`bun run db:generate`, `bun run db:deploy`, `bun run typecheck`, `bun run lint`, `bun run test`,
-`bun run build`. Do not skip any of them, do not decide on your own that a step is unnecessary, and
-do not claim a step passed without running it and seeing it exit zero. Replicate the CI environment
-the job configures. The container provides ephemeral local
+dependencies beyond the preinstalled `pre-commit`, `/usr/local/bin/verify-before-commit`, then
+`bun run build`. The verifier runs `pre-commit run --all-files`, `bun run db:generate`,
+`bun run db:deploy`, `bun run typecheck`, `bun run lint`, and `bun run test`; do not rerun those
+commands separately. Do not skip a command or claim it passed without seeing it exit zero. Replicate
+the CI environment the job configures. The container provides ephemeral local
 Postgres and Redis servers for exactly this purpose (no Docker inside the worker). It also provides
 the complete CI toolchain: `bun`, `python3`, `pip`, `pre-commit`, `gcc`, `g++`, `make`, `pkg-config`,
 `git`, `gh`, `psql`, and `redis-cli`. Do not spend time installing OS tools inside the worktree;
@@ -96,6 +101,10 @@ environment variables the CI job sets — `APP_ENV=test`, `RUN_INTEGRATION=1`, `
 `REDIS_URL`, `SETTINGS_ENCRYPTION_KEY`, and the rest — so integration tests actually run and pass
 locally. Never reuse Swarmloom's own PostgreSQL/Redis connection values for repository
 verification. Stop the services when the verification finishes: `swarm-test-services stop`.
+
+In a fresh worktree, run `bun install --frozen-lockfile`, any required Python dependency install,
+and `bun run db:generate` before the first test, typecheck, lint, or build. Do not use a failed
+verification command to discover missing setup.
 
 Every failure the CI workflow can hit, you can hit before it does. A failing test, typecheck, lint,
 build, or pre-commit check in the Pull Request is an unacceptable outcome: treat it as a hard
@@ -211,9 +220,7 @@ configuration, or new dependencies when the existing code or installed tools sol
 Write the smallest regression test for non-trivial behavior. Commit and push only the assigned
 branch when the task workflow requires it; never merge or force-push.
 
-Before creating a commit, run `/usr/local/bin/verify-before-commit` from the assigned worktree when
-the container provides it, or run `pre-commit run --all-files` followed by the repository's test,
-lint, and typecheck commands. Use only the Conventional Commit types declared in
+Before creating a commit, use only the Conventional Commit types declared in
 `git-conventional-commits.yaml`: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`,
 `ci`, `build`, `perf`, `ops`, `merge`, and `revert`.
 
