@@ -13,12 +13,13 @@ describe("brand assets", () => {
     await expect(Bun.file(resolve(appRoot, "manifest.ts")).exists()).resolves.toBe(true);
   });
 
-  test("uses the logo in the README and application header", async () => {
-    const [readme, shell] = await Promise.all([
+  test("uses the full and compact logos in the canonical sidebar", async () => {
+    const [readme, sidebar] = await Promise.all([
       Bun.file(resolve(frontendRoot, "../../README.md")).text(),
-      Bun.file(resolve(frontendRoot, "src/components/app-shell.tsx")).text(),
+      Bun.file(resolve(frontendRoot, "src/components/ui/dashboard-sidebar.tsx")).text(),
     ]);
     expect(readme).toContain("src/frontend/public/brand/logo.png");
-    expect(shell).toContain('src="/brand/logo.png"');
+    expect(sidebar).toContain('src="/brand/logo.png"');
+    expect(sidebar).toContain('src="/brand/logo-no-name.png"');
   });
 });
