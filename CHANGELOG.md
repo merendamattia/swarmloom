@@ -1,3 +1,11 @@
+# [1.12.0](https://github.com/merendamattia/swarmloom/compare/v1.11.0...v1.12.0) (2026-08-23)
+
+
+### Features
+
+* **frontend:** add confirmation dialogs ([0615563](https://github.com/merendamattia/swarmloom/commit/0615563dfbb7717c57d262c2e246a7677a68a2fd))
+* **frontend:** unify dashboard interface ([4d8a4cd](https://github.com/merendamattia/swarmloom/commit/4d8a4cd47da19683dbd963625909177423e7f142))
+
 # [1.11.0](https://github.com/merendamattia/swarmloom/compare/v1.10.0...v1.11.0) (2026-08-23)
 
 
