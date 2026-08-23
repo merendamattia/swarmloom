@@ -97,13 +97,21 @@ export function formatTelegramEvent(event: TelegramEvent, dashboardUrl?: string)
     link(metadata.pullRequestUrl, "Pull request"),
     dashboardLink(dashboardUrl, event.jobId),
   ].filter(Boolean);
-  const message = escapeHtmlWithLimit(event.message, 3_200);
+  const detail = typeof metadata.tldr === "string" && metadata.tldr.trim()
+    ? metadata.tldr.trim()
+    : event.message;
   const pullRequest = pullRequestDetails(metadata);
-  return [
-    `${emoji} <b>${escapeHtml(title)}</b>`,
-    message,
+  const suffix = [
     pullRequest ? `\n${pullRequest}` : "",
     links.length ? `\n🔗 ${links.join(" · ")}` : "",
+  ].filter(Boolean).join("");
+  const heading = `${emoji} <b>${escapeHtml(title)}</b>`;
+  const detailLimit = Math.min(3_200, Math.max(0, MAX_TELEGRAM_LENGTH - heading.length - suffix.length - 1));
+  const message = escapeHtmlWithLimit(detail, detailLimit);
+  return [
+    heading,
+    message,
+    suffix,
   ].filter(Boolean).join("\n");
 }
 
@@ -150,9 +158,6 @@ function pullRequestDetails(metadata: Record<string, unknown>) {
   ];
   const stats = pullRequestStats(metadata);
   if (stats) lines.push(stats);
-  if (typeof metadata.pullRequestBody === "string" && metadata.pullRequestBody.trim()) {
-    lines.push(escapeHtmlWithLimit(metadata.pullRequestBody.replace(/\s+/g, " ").trim(), 300));
-  }
   return lines.join("\n");
 }
 
@@ -192,10 +197,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function escapeHtmlWithLimit(value: string, max: number) {
+  if (max <= 0) return "";
   let escaped = "";
   for (const character of value) {
     const next = escapeHtml(character);
-    if (escaped.length + next.length > max) return `${escaped}…`;
+    if (escaped.length + next.length > max) return escaped.length < max ? `${escaped}…` : escaped;
     escaped += next;
   }
   return escaped;

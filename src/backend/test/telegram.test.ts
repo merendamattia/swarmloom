@@ -50,6 +50,7 @@ describe("Telegram notifier", () => {
         pullRequestUrl: "https://github.com/acme/api/pull/8",
         pullRequestNumber: 8,
         pullRequestTitle: "Fix queue <durability>",
+        tldr: "Implemented <durability> safely.",
         pullRequestBody: "Closes #7.\n\nMakes the queue durable in PostgreSQL.",
         filesChanged: 2,
         additions: 120,
@@ -63,11 +64,30 @@ describe("Telegram notifier", () => {
       disable_web_page_preview: true,
     });
     expect(request.text).toContain("✅ <b>Job completed</b>");
+    expect(request.text).toContain("Implemented &lt;durability&gt; safely.");
+    expect(request.text).not.toContain("Completed acme/api#7");
     expect(request.text).toContain("<b>PR #8:</b> Fix queue &lt;durability&gt;");
     expect(request.text).toContain("+120 · -45 · 2 files");
-    expect(request.text).toContain("Closes #7. Makes the queue durable in PostgreSQL.");
+    expect(request.text).not.toContain("Closes #7. Makes the queue durable in PostgreSQL.");
     expect(request.text).toContain("<a href=\"https://github.com/acme/api/issues/7\">Issue</a>");
     expect(request.text).toContain("<a href=\"https://github.com/acme/api/pull/8\">Pull request</a>");
+  });
+
+  test("keeps TL;DR notifications within Telegram's message limit", async () => {
+    const request = await telegramRequest({
+      type: "JOB_COMPLETED",
+      message: "Generic lifecycle message",
+      id: "event-5",
+      metadata: {
+        tldr: "<summary>".repeat(1_000),
+        issueUrl: "https://github.com/acme/api/issues/7",
+      },
+    });
+
+    expect(request.text.length).toBeLessThanOrEqual(4_000);
+    expect(request.text).toContain("&lt;summary&gt;");
+    expect(request.text).not.toContain("Generic lifecycle message");
+    expect(request.text).toContain("<a href=\"https://github.com/acme/api/issues/7\">Issue</a>");
   });
 
   test("omits pull request details when metadata lacks a title", async () => {

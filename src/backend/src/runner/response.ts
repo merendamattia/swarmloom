@@ -18,6 +18,21 @@ function nextContentIndex(lines: string[], start: number): number {
   return lines.findIndex((line, index) => index >= start && line.trim().length > 0);
 }
 
+function tldrLine(lines: string[]) {
+  const index = lines.findIndex((line) => line.trim().toLowerCase().startsWith("tl;dr:"));
+  if (index < 0) return null;
+  return {
+    index,
+    value: lines[index].trim().slice("TL;DR:".length).trim(),
+  };
+}
+
+export function parseTldr(text: string): string {
+  const summary = tldrLine(text.split(/\r?\n/));
+  if (!summary?.value) throw new Error('Agent response must include "TL;DR: <brief summary>"');
+  return summary.value;
+}
+
 function validateSummary(text: string, field: "Outcome" | "Review") {
   const lines = text.split(/\r?\n/);
   const resultIndex = markerIndex(lines, field);
@@ -45,10 +60,11 @@ function validateSummary(text: string, field: "Outcome" | "Review") {
     throw new Error('Agent response must place the "PR:" line before "TL;DR:"');
   }
 
-  const summary = summaryIndex >= 0 ? lines[summaryIndex].trim() : "";
-  if (!summary.toLowerCase().startsWith("tl;dr:") || !summary.slice("TL;DR:".length).trim()) {
+  const summary = summaryIndex >= 0 ? tldrLine(lines) : null;
+  if (!summary || summary.index !== summaryIndex || !summary.value) {
     throw new Error(`Agent response must include "TL;DR: <brief summary>" immediately after the ${field}: marker`);
   }
+  return summary.value;
 }
 
 function evidence(text: string) {

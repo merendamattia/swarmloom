@@ -6,6 +6,7 @@ import {
   applyPullRequestLabels,
   fixContext,
   parseJobOutcome,
+  parseTldr,
   safeError,
 } from "./helpers.ts";
 import type { JobFlow } from "./types.ts";
@@ -52,6 +53,7 @@ export const runFix: JobFlow = async (context) => {
   });
 
   const reason = job.trigger ?? "PR_FIX_REQUESTED";
+  let resultTldr: string | undefined;
   try {
     const result = await context.executeRoleWithRetry(
       "issue-worker",
@@ -68,6 +70,7 @@ export const runFix: JobFlow = async (context) => {
     await jobRepository.setImplementationResult(job.id, result.sessionId, result.exitCode);
 
     const blockedOutcome = parseJobOutcome(result.response) === "blocked";
+    resultTldr = parseTldr(result.response);
     if (blockedOutcome) {
       await managedPullRequestRepository.block(job.repositoryId, pullRequest.prNumber);
       await applyPullRequestLabels(github, config, job, pullRequest.prNumber, [config.ISSUE_HUMAN_REVIEW_LABEL]);
@@ -82,7 +85,7 @@ export const runFix: JobFlow = async (context) => {
         jobId: job.id,
         repositoryId: job.repositoryId,
         scanRunId: job.scanRunId ?? undefined,
-        metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl },
+        metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl, tldr: resultTldr },
       });
       await context.finalizeIssue(job, [config.ISSUE_BLOCKED_LABEL, config.ISSUE_HUMAN_REVIEW_LABEL], result.response);
       await context.commentOnPullRequest(job, pullRequest.prNumber, result.response);
@@ -99,7 +102,7 @@ export const runFix: JobFlow = async (context) => {
     const loopExceeded = fixCycleCount !== null && fixCycleCount >= config.MAX_AUTOMATIC_FIX_CYCLES;
 
     if (loopExceeded) {
-      await blockWorkflow(result.response, current.number, current.url, current.headSha, fixCycleCount);
+      await blockWorkflow(result.response, resultTldr, current.number, current.url, current.headSha, fixCycleCount);
       return;
     }
 
@@ -115,7 +118,7 @@ export const runFix: JobFlow = async (context) => {
         jobId: job.id,
         repositoryId: job.repositoryId,
         scanRunId: job.scanRunId ?? undefined,
-        metadata: { issueUrl: job.issueUrl, pullRequestUrl: current.url, headSha: current.headSha },
+        metadata: { issueUrl: job.issueUrl, pullRequestUrl: current.url, headSha: current.headSha, tldr: resultTldr },
       });
     } catch (error) {
       await events.record({
@@ -150,6 +153,7 @@ export const runFix: JobFlow = async (context) => {
         trigger: reason,
         provider: provider.name,
         model: job.model,
+        tldr: resultTldr,
       },
     });
     await context.commentOnPullRequest(job, pullRequest.prNumber, result.response);
@@ -182,7 +186,7 @@ export const runFix: JobFlow = async (context) => {
       jobId: job.id,
       repositoryId: job.repositoryId,
       scanRunId: job.scanRunId ?? undefined,
-      metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl, fixCycleCount },
+      metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl, fixCycleCount, tldr: resultTldr },
     });
     await context.finalizeIssue(
       job,
@@ -198,6 +202,7 @@ export const runFix: JobFlow = async (context) => {
 
   async function blockWorkflow(
     response: string,
+    tldr: string,
     prNumber: number,
     pullRequestUrl: string | undefined,
     headSha: string | undefined,
@@ -231,7 +236,7 @@ export const runFix: JobFlow = async (context) => {
       jobId: job.id,
       repositoryId: job.repositoryId,
       scanRunId: job.scanRunId ?? undefined,
-      metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl, fixCycleCount },
+      metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl, fixCycleCount, tldr },
     });
     await context.finalizeIssue(
       job,
