@@ -93,8 +93,12 @@ integration("job runner", () => {
     expect(state.prLabelWrites.every((labels) => labels.every((label) => label !== config.PR_REVIEW_PASSED_LABEL))).toBe(true);
     expect(state.comments.some((comment) => comment.issue === job.issueNumber && comment.body === implementationResponse))
       .toBe(true);
-    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "PR_REVIEW_REQUESTED" } })).not.toBeNull();
-    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "PR_OPENED" } })).not.toBeNull();
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "PR_REVIEW_REQUESTED" } })).toMatchObject({
+      metadata: expect.objectContaining({ tldr: "Implemented the requested change and ran the checks." }),
+    });
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "PR_OPENED" } })).toMatchObject({
+      metadata: expect.objectContaining({ tldr: "Implemented the requested change and ran the checks." }),
+    });
   });
 
   test("implementation with requires_decomposition queues a DECOMPOSITION job and never opens a PR", async () => {
@@ -121,6 +125,9 @@ integration("job runner", () => {
       status: "QUEUED",
     });
     expect(state.labels).toEqual(["bug", config.ISSUE_WORKING_LABEL]);
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "JOB_COMPLETED" } })).toMatchObject({
+      metadata: expect.objectContaining({ tldr: "The issue is too broad for one pull request." }),
+    });
   });
 
   test("decomposition runs a fresh decomposer session and records native child references", async () => {
@@ -134,6 +141,9 @@ integration("job runner", () => {
     expect(provider.calls.map((call) => call.role)).toEqual(["decomposer"]);
     expect(provider.calls[0]?.context).toContain(`Queue-ready label for actionable children: ${config.ISSUE_READY_LABEL}`);
     expect(github.labels).toContain(config.ISSUE_DECOMPOSED_LABEL);
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "JOB_DECOMPOSED" } })).toMatchObject({
+      metadata: expect.objectContaining({ tldr: "Split the issue into two children." }),
+    });
   });
 
   test("records blocked and failed outcomes without leaving an active issue key", async () => {
@@ -149,6 +159,9 @@ integration("job runner", () => {
     expect((await prisma.job.findUniqueOrThrow({ where: { id: blocked.id } })).status).toBe("BLOCKED");
     expect(blockedGitHub.labels).toContain(config.ISSUE_BLOCKED_LABEL);
     expect(blockedGitHub.labels).toContain(config.ISSUE_HUMAN_REVIEW_LABEL);
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: blocked.id, type: "JOB_BLOCKED" } })).toMatchObject({
+      metadata: expect.objectContaining({ tldr: "Blocked pending the response contract." }),
+    });
 
     const failed = await claimed(issueBase + 4, "IMPLEMENTATION", "ISSUE");
     const failedGitHub = fakeGitHub(failed.issueNumber, failed.branchName, "f".repeat(40));
@@ -362,6 +375,9 @@ integration("job runner", () => {
       .toMatchObject({ headSha: "2".repeat(40), workflow: "REVIEW_REQUESTED", fixReason: null, fixCycleCount: 1 });
     expect(state.prLabels).toEqual([config.PR_REVIEW_REQUESTED_LABEL]);
     expect(state.comments.some((comment) => comment.issue === managed.prNumber && comment.body === fixedResponse)).toBe(true);
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "JOB_COMPLETED" } })).toMatchObject({
+      metadata: expect.objectContaining({ tldr: "Fixed the failing test and pushed the branch." }),
+    });
     expect(provider.calls[0]?.context).toContain("Fix reason: REVIEW_CHANGES_REQUESTED");
     expect(provider.calls[0]?.context).toContain("bun test failed");
 
@@ -424,6 +440,9 @@ integration("job runner", () => {
     expect(state.prLabels).toEqual([config.ISSUE_HUMAN_REVIEW_LABEL]);
     expect(state.labels).toEqual(["bug", config.ISSUE_BLOCKED_LABEL, config.ISSUE_HUMAN_REVIEW_LABEL]);
     expect(state.comments.some((comment) => comment.issue === managed.prNumber && comment.body === response)).toBe(true);
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "JOB_BLOCKED" } })).toMatchObject({
+      metadata: expect.objectContaining({ tldr: "Blocked pending a product decision." }),
+    });
   });
 
   test("the loop guard blocks the workflow once the fix cycle limit is reached", async () => {
@@ -520,7 +539,9 @@ integration("job runner", () => {
     expect(pullRequestCommentBody).toBe(reviewResponse);
     expect(issueCommentBody.startsWith(`${reviewResponse}\n\n`)).toBe(true);
     expect(issueCommentBody.indexOf("## Automated review passed")).toBeGreaterThan(issueCommentBody.indexOf("TL;DR:"));
-    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "READY_TO_MERGE" } })).not.toBeNull();
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "READY_TO_MERGE" } })).toMatchObject({
+      metadata: expect.objectContaining({ tldr: "The review passed." }),
+    });
   });
 
   test("review changes-requested moves the PR to fix-requested with the reviewer feedback", async () => {
@@ -561,7 +582,9 @@ integration("job runner", () => {
     expect(state.prLabels).toEqual([config.PR_FIX_REQUESTED_LABEL]);
     expect(await prisma.managedPullRequest.findUniqueOrThrow({ where: { id: managed.id } }))
       .toMatchObject({ workflow: "FIX_REQUESTED", fixReason: "REVIEW_CHANGES_REQUESTED", fixDetails: feedback });
-    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "PR_FIX_REQUESTED" } })).not.toBeNull();
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "PR_FIX_REQUESTED" } })).toMatchObject({
+      metadata: expect.objectContaining({ tldr: "Changes are required; add the guard." }),
+    });
   });
 
   test("a review pass cannot finalize the issue when the PR label transition fails", async () => {

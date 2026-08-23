@@ -11,7 +11,7 @@ import { ProviderProcessError } from "../providers/process.ts";
 import { AgentExecutionError, causeChain, stackTrace, type DiagnosticEvent, type JobDiagnostics } from "./diagnostics.ts";
 import type { GitHubIssueContext } from "../github/client.ts";
 import type { RunningJob, RunnerContext, RunnerGitHub } from "./types.ts";
-import { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome } from "./response.ts";
+import { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome, parseTldr } from "./response.ts";
 
 export function responseFilePathFor(dataDirectory: string, jobId: string, role: AgentRole) {
   const root = resolve(dataDirectory, "outcomes");
@@ -276,4 +276,4 @@ export function duration(startedAt: Date | null) {
   return `${seconds}s`;
 }
 
-export { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome };
+export { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome, parseTldr };
