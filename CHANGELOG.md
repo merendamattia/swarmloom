@@ -1,3 +1,37 @@
+# [1.9.0](https://github.com/merendamattia/swarmloom/compare/v1.8.0...v1.9.0) (2026-08-21)
+
+
+### Bug Fixes
+
+* **jobs:** preserve stack traces in support issues ([f84176c](https://github.com/merendamattia/swarmloom/commit/f84176cc1a7cbe71f864407119a00373d50684a2))
+* **jobs:** reconcile failed support issue creates ([d32ea98](https://github.com/merendamattia/swarmloom/commit/d32ea98f3360a286ad8a145fd7b8a03895fa0ff7))
+* **jobs:** recover and serialize support issue creation ([f8b134d](https://github.com/merendamattia/swarmloom/commit/f8b134d41b76703d912ac914ff96c2f058bf5768))
+* **jobs:** renew support issue claims during requests ([682c415](https://github.com/merendamattia/swarmloom/commit/682c415e96663c2a85d7d88ac0d10af4f2ec9210))
+* **runner:** reject duplicate TL;DR markers ([ddde668](https://github.com/merendamattia/swarmloom/commit/ddde66868f43798d8dd13ce1ca690f8b5b7c47ef))
+* **runner:** use canonical issue references in PRs ([d48ecb3](https://github.com/merendamattia/swarmloom/commit/d48ecb3ab5a4eeadd769f3d045bef430c97514d8))
+
+
+### Features
+
+* **dashboard:** clear resolved overview exceptions ([338015a](https://github.com/merendamattia/swarmloom/commit/338015aa35ed13b13b3d63e5f2d0d9e056ccc904))
+* **jobs:** create support issues from failed jobs ([1c4b4bd](https://github.com/merendamattia/swarmloom/commit/1c4b4bd256657c49943e51c4a5126c8f725794d0))
+* **runner:** require TL;DR in agent comments ([80e3a7e](https://github.com/merendamattia/swarmloom/commit/80e3a7e48804272021a2179ce0eec3116e19eab8))
+
+# [1.8.0](https://github.com/merendamattia/swarmloom/compare/v1.7.0...v1.8.0) (2026-08-20)
+
+
+### Bug Fixes
+
+* **agent-runtime:** preserve Markdown newlines in PR bodies ([5cdfd86](https://github.com/merendamattia/swarmloom/commit/5cdfd8671b26eb173e01d563292faa1d72cb619e))
+* **backend:** release scan lock after discovery ([0fb2314](https://github.com/merendamattia/swarmloom/commit/0fb2314fb76b7d5c5cf0785aeb58f80e21537a47))
+* **settings:** accept sub-second timing values ([18a2d55](https://github.com/merendamattia/swarmloom/commit/18a2d55a0c9bba3052da9ae13b39de204f78a9d0))
+* **settings:** keep repository editor non-empty ([5a9a083](https://github.com/merendamattia/swarmloom/commit/5a9a0832378622acd684af635f72468ee15511f9))
+
+
+### Features
+
+* **settings:** improve runtime settings readability\n\nWhat: Add repository tag editing, cron descriptions, protected Telegram credential editing, and seconds-based worker timing inputs with info tooltips.\nWhy: Make runtime settings understandable and reduce accidental edits to deployment-oriented values and configured secrets.\nFiles: Update the Settings page and styles; add pure settings presentation helpers and regression tests.\nValidation: bun install --frozen-lockfile; pre-commit run --all-files; bun run db:generate; bun run db:deploy; bun run typecheck; bun run lint; bun run test; bun run build; /usr/local/bin/verify-before-commit. ([37f73df](https://github.com/merendamattia/swarmloom/commit/37f73df41eea19f71c48f4adf9f254350d079b1b))
+
 # [1.7.0](https://github.com/merendamattia/swarmloom/compare/v1.6.1...v1.7.0) (2026-08-20)
 
 
