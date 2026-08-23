@@ -34,11 +34,19 @@ describe("canonical agent runtime", () => {
 
   test("forbids pushing to main or develop and resolves pull request conflicts", async () => {
     const instructions = await loadAgentInstructions(runtime);
+    expect(instructions).toContain("explicit authorization");
+    expect(instructions).toContain("Do not ask for separate approval");
     expect(instructions).toContain("never push to `main` or `develop`");
     expect(instructions).toContain("Push only the current fix branch");
     expect(instructions).toContain("conflicting files");
     expect(instructions).toContain("resolve");
     expect(instructions).toContain("mergeable");
+  });
+
+  test("leaves review publication to the coordinator", async () => {
+    const instructions = await loadAgentInstructions(runtime);
+    expect(instructions).toContain("Do not submit GitHub reviews, comments, or labels from a review job");
+    expect(instructions).toContain("the coordinator publishes the response and workflow labels");
   });
 
   test("requires real newlines in GitHub Markdown bodies", async () => {
@@ -73,7 +81,9 @@ describe("canonical agent runtime", () => {
       "bun run test",
       "bun run build",
     ]) expect(instructions).toContain(cmd);
-    expect(instructions).toContain("Do not skip any of them");
+    expect(instructions).toContain("Do not skip a command");
+    expect(instructions).toContain("do not rerun those");
+    expect(instructions).toContain("before the first test, typecheck, lint, or build");
     expect(instructions).toContain("RUN_INTEGRATION=1");
     expect(instructions).toContain("CHANGELOG.md");
     expect(instructions).toContain("swarm-test-services start");
@@ -108,13 +118,25 @@ describe("canonical agent runtime", () => {
 
   test("uses the agent runtime baked into the production image", async () => {
     const root = resolve(runtime, "..");
-    const [dockerfile, compose] = await Promise.all([
+    const [dockerfile, compose, imageWorkflow] = await Promise.all([
       Bun.file(resolve(root, "Dockerfile")).text(),
       Bun.file(resolve(root, "docker-compose.production.yaml")).text(),
+      Bun.file(resolve(root, ".github/workflows/check-docker-image.yaml")).text(),
     ]);
 
     expect(dockerfile).toContain("COPY agent-runtime agent-runtime");
     expect(compose).not.toContain("AGENT_RUNTIME_HOST_PATH");
     expect(compose).not.toContain(":/app/agent-runtime");
+    expect(imageWorkflow).toContain("--dangerously-bypass-approvals-and-sandbox");
+  });
+
+  test("prepares the database before the commit verification suite", async () => {
+    const script = await Bun.file(resolve(runtime, "../scripts/verify-before-commit.sh")).text();
+    const generate = script.indexOf("bun run db:generate");
+    const deploy = script.indexOf("bun run db:deploy");
+    const verify = script.indexOf("bun run verify");
+    expect(generate).toBeGreaterThan(-1);
+    expect(deploy).toBeGreaterThan(generate);
+    expect(verify).toBeGreaterThan(deploy);
   });
 });

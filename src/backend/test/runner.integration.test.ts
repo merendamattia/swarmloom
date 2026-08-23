@@ -68,6 +68,11 @@ integration("job runner", () => {
 
     expect(await runner.run(job.id, "runner-worker")).toBe(true);
     expect(provider.calls.map((call) => call.role)).toEqual(["issue-worker"]);
+    expect(provider.calls[0]?.environment).toMatchObject({
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+    });
+    expect(provider.calls[0]?.environment?.GIT_CONFIG_VALUE_0).toStartWith("AUTHORIZATION: basic ");
     const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
     expect(stored.status).toBe("COMPLETED");
     expect(stored.pullRequestNumber).toBe(job.issueNumber);

@@ -3,6 +3,7 @@ import { dirname, resolve, sep } from "node:path";
 import { mkdir, rm } from "node:fs/promises";
 import { redactSecrets } from "../core/secrets.ts";
 import type { Config } from "../core/config-schema.ts";
+import { githubGitEnvironment } from "../github/git-auth.ts";
 import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.ts";
 import { loadAgentInstructions } from "../runtime/instructions.ts";
 import type { AgentRole } from "../providers/index.ts";
@@ -56,6 +57,7 @@ export async function executeRole(
       instructions: await loadAgentInstructions(context.config.AGENT_RUNTIME_DIR),
       model: job.model,
       reasoningEffort: job.reasoningEffort as Config["CODEX_REASONING_EFFORT"] | undefined,
+      environment: githubGitEnvironment(context.config.GITHUB_TOKEN, job.repository.cloneUrl),
       responseFilePath,
       signal: abortSignal,
       onEvent: async (agentEvent) => {

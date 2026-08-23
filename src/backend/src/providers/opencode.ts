@@ -80,6 +80,7 @@ export class OpenCodeProvider implements AgentProvider {
     let sessionId: string | null = null;
     let sessionError: string | undefined;
     const output: string[] = [];
+    const environment = openCodeEnvironment({ ...globalThis.process.env, ...request.environment });
     const result = await runJsonlProcess(
       buildOpenCodeCommand(request),
       buildAgentPrompt(request),
@@ -87,16 +88,16 @@ export class OpenCodeProvider implements AgentProvider {
       async (raw) => {
         const normalized = normalizeOpenCodeEvent(raw);
         if (normalized.sessionId) sessionId = normalized.sessionId;
-        if (normalized.output) output.push(redactSecrets(normalized.output));
+        if (normalized.output) output.push(redactSecrets(normalized.output, environment));
         if (normalized.event) {
           if (normalized.event.type === "SESSION_FAILED") sessionError = normalized.event.message;
           await request.onEvent?.({
             ...normalized.event,
-            message: normalized.event.message && redactSecrets(normalized.event.message),
+            message: normalized.event.message && redactSecrets(normalized.event.message, environment),
           });
         }
       },
-      openCodeEnvironment(process.env),
+      environment,
     );
     if (result.exitCode !== 0 && !sessionError) {
       await request.onEvent?.(event("SESSION_FAILED", { message: result.stderr || "OpenCode exited unsuccessfully" }));
@@ -107,7 +108,7 @@ export class OpenCodeProvider implements AgentProvider {
       finalOutput: output.join("\n"),
       exitCode: result.exitCode !== 0 ? result.exitCode : sessionError ? 1 : 0,
       stderr: sessionError
-        ? `${redactSecrets(sessionError)}${result.stderr ? `\n${result.stderr}` : ""}`
+        ? `${redactSecrets(sessionError, environment)}${result.stderr ? `\n${result.stderr}` : ""}`
         : result.stderr,
     };
   }

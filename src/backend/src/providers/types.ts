@@ -24,6 +24,7 @@ export type AgentRequest = {
   instructions?: string;
   model: string;
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  environment?: Record<string, string | undefined>;
   responseFilePath?: string;
   signal?: AbortSignal;
   onEvent?: (event: AgentEvent) => void | Promise<void>;

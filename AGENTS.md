@@ -41,7 +41,8 @@ an approach from scratch.
 
 ## Workflow
 
-Read `.agent-work/TODO.md` before and after each macro activity and keep it current. Write the
+When `.agent-work/TODO.md` exists, read it before and after each macro activity and keep it current.
+Do not create it in an automated target worktree when absent. Write the
 smallest failing test before non-trivial logic. Keep the browser behind the Hono API and Prisma
 behind repositories. Do not force-push or merge automated pull requests.
 
