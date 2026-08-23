@@ -1,3 +1,10 @@
+# [1.11.0](https://github.com/merendamattia/swarmloom/compare/v1.10.0...v1.11.0) (2026-08-23)
+
+
+### Features
+
+* **notifications:** use agent TLDR in Telegram details ([292636f](https://github.com/merendamattia/swarmloom/commit/292636fbd7361e9a64e6b8d7fd5a86bfa51a372e))
+
 # [1.10.0](https://github.com/merendamattia/swarmloom/compare/v1.9.0...v1.10.0) (2026-08-23)
 
 
