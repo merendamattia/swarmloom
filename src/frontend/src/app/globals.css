@@ -130,6 +130,15 @@ h3 { font-size: 1rem; line-height: 1.35; font-weight: 650; }
 .command-footer { display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--border); padding: 8px var(--space-lg); color: var(--ink-muted); font-size: .6875rem; }
 .command-footer kbd { border: 1px solid var(--border); border-radius: 4px; background: var(--surface-subtle); padding: 1px 4px; font-family: var(--font-mono); }
 
+.confirm-dialog { position: fixed; inset: 0; width: min(28rem, calc(100vw - 2 * var(--space-lg))); max-width: none; margin: auto; border: 0; background: transparent; padding: 0; color: var(--ink); }
+.confirm-dialog::backdrop { background: color-mix(in oklch, var(--ink) 28%, transparent); backdrop-filter: blur(2px); }
+.confirm-dialog-card { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-md); border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: var(--space-xl); box-shadow: 0 24px 64px color-mix(in oklch, var(--ink) 20%, transparent); }
+.confirm-dialog-icon { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 50%; background: var(--danger-soft); color: var(--danger); }
+.confirm-dialog-icon svg { width: 19px; height: 19px; }
+.confirm-dialog-copy { display: grid; min-width: 0; gap: var(--space-sm); }
+.confirm-dialog-copy p { color: var(--ink-muted); overflow-wrap: anywhere; }
+.confirm-dialog-actions { display: flex; grid-column: 1 / -1; justify-content: flex-end; gap: var(--space-sm); margin-top: var(--space-sm); }
+
 .page-header { display: flex; align-items: end; justify-content: space-between; gap: var(--space-xl); }
 .page-header > div:first-child { display: grid; min-width: 0; gap: 6px; max-width: 50rem; }
 .page-description, .section-heading p { max-width: 68ch; color: var(--ink-muted); }
@@ -253,6 +262,9 @@ h3 { font-size: 1rem; line-height: 1.35; font-weight: 650; }
 
 @media (max-width: 560px) {
   .action-message-toast { inset-inline: var(--space-md); inset-block-end: var(--space-md); max-width: none; }
+  .confirm-dialog-card { grid-template-columns: 1fr; }
+  .confirm-dialog-actions { display: grid; grid-column: 1; }
+  .confirm-dialog-actions button { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {

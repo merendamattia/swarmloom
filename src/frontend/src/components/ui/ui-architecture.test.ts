@@ -9,6 +9,7 @@ describe("shared UI architecture", () => {
     const components = [
       "src/components/ui/button.tsx",
       "src/components/ui/command-menu.tsx",
+      "src/components/ui/confirm-dialog.tsx",
       "src/components/ui/dashboard-sidebar.tsx",
       "src/components/ui/empty-state.tsx",
       "src/components/ui/fact-list.tsx",
@@ -64,5 +65,18 @@ describe("shared UI architecture", () => {
   test("the app shell uses the reusable dashboard sidebar", async () => {
     const contents = await source("src/components/app-shell.tsx");
     expect(contents).toContain("@/components/ui/dashboard-sidebar");
+  });
+
+  test("important actions use the shared confirmation dialog", async () => {
+    const consumers = [
+      "src/app/(app)/page.tsx",
+      "src/components/repositories/repository-card.tsx",
+    ];
+
+    for (const consumer of consumers) {
+      const contents = await source(consumer);
+      expect(contents, consumer).toContain("@/components/ui/confirm-dialog");
+      expect(contents, consumer).not.toContain("window.confirm");
+    }
   });
 });

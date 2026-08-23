@@ -2,7 +2,9 @@
 
 import { CircleAlert, Trash2 } from "lucide-react";
 import Link from "next/link";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FactList } from "@/components/ui/fact-list";
 import { ActionMessage } from "@/components/ui/feedback";
@@ -11,17 +13,13 @@ import { useRemoveRepository, type Repositories } from "@/hooks/api";
 import { dateTime, shortCommit } from "@/lib/format";
 
 export function RepositoryCard({ repository }: { repository: Repositories[number] }) {
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const remove = useRemoveRepository();
-  const confirmRemove = () => {
-    if (window.confirm(`Remove ${repository.fullName} from configured repositories? Its persisted record, events, and job history will be deleted. Cancel or finish any active jobs first.`)) {
-      remove.mutate(repository.id);
-    }
-  };
   return (
     <article className="repository-card">
       <div className="repository-head">
         <div><h2>{repository.fullName}</h2><p className="muted">{repository.developAvailable ? "origin/develop is available and synchronized during scans." : "origin/develop is not available for worker jobs."}</p></div>
-        <div className="repository-actions"><StatusPill status={repository.status} /><Button variant="danger" onClick={confirmRemove} disabled={remove.isPending}><Trash2 aria-hidden="true" />{remove.isPending ? "Removing…" : "Remove"}</Button></div>
+        <div className="repository-actions"><StatusPill status={repository.status} /><Button variant="danger" onClick={() => setConfirmingRemove(true)} disabled={remove.isPending}><Trash2 aria-hidden="true" />{remove.isPending ? "Removing…" : "Remove"}</Button></div>
       </div>
       {repository.errorMessage ? <div className="notice" role="alert"><CircleAlert aria-hidden="true" /><div><strong>Repository cannot be processed</strong><p>{repository.errorMessage}</p></div></div> : null}
       <FactList className="repository-facts" items={[
@@ -37,6 +35,17 @@ export function RepositoryCard({ repository }: { repository: Repositories[number
           : <EmptyState title="No jobs recorded" description="A ready-labelled issue will appear after the next successful scan." />}
       </div>
       <ActionMessage pending={remove.isPending} error={remove.error} success={remove.isSuccess} pendingText={`Removing ${repository.fullName}…`} successText="Repository removed." />
+      <ConfirmDialog
+        open={confirmingRemove}
+        title={`Remove ${repository.fullName}?`}
+        description="Its persisted record, events, and job history will be deleted. Cancel or finish any active jobs first."
+        confirmLabel="Remove repository"
+        onCancel={() => setConfirmingRemove(false)}
+        onConfirm={() => {
+          setConfirmingRemove(false);
+          remove.mutate(repository.id);
+        }}
+      />
     </article>
   );
 }
