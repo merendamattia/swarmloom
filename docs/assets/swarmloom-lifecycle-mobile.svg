@@ -47,6 +47,8 @@
     <text x="24" y="662" fill="#b91c1c" font-size="12" font-weight="700" letter-spacing="1.4">OPTIONAL FIX LOOP</text>
     <text x="192" y="684" fill="#7f1d1d" font-size="15">changes requested</text>
 
+    <text x="205" y="646" fill="#166534" font-size="15">review passes</text>
+    <path d="M180 624 H344 V1050 H336" fill="none" stroke="#15803d" stroke-width="2.5" marker-end="url(#lifecycle-mobile-green-arrow)"/>
     <path d="M180 624 V692" fill="none" stroke="#dc2626" stroke-width="2.5" marker-end="url(#lifecycle-mobile-red-arrow)"/>
     <rect x="24" y="700" width="312" height="96" rx="14" fill="#fef2f2" stroke="#dc2626" stroke-width="2"/>
     <text x="180" y="727" text-anchor="middle" fill="#b91c1c" font-size="13" font-weight="700">PULL REQUEST STATE</text>
