@@ -6,6 +6,7 @@ import { safeWorktreePath } from "./paths.ts";
 import {
   applyPullRequestLabels,
   parseReviewOutcome,
+  parseTldr,
   reviewContext,
   safeError,
 } from "./helpers.ts";
@@ -101,6 +102,7 @@ export const runReview: JobFlow = async (context) => {
     );
     if (result.exitCode !== 0) throw new Error(result.stderr || "Automated review failed");
     const verdict = parseReviewOutcome(result.response);
+    const tldr = parseTldr(result.response);
     await reviewRepository.finish(
       reviewRow.id,
       verdict === "pass" ? "PASSED" : "CHANGES_REQUESTED",
@@ -122,6 +124,7 @@ export const runReview: JobFlow = async (context) => {
         pullRequestNumber: pullRequest.prNumber,
         headSha: job.headSha,
         verdict,
+        tldr,
       },
     });
     const current = await github.getPullRequest(fullName, pullRequest.prNumber);
@@ -142,7 +145,7 @@ export const runReview: JobFlow = async (context) => {
           jobId: job.id,
           repositoryId: job.repositoryId,
           scanRunId: job.scanRunId ?? undefined,
-          metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl ?? undefined, headSha: job.headSha },
+          metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl ?? undefined, headSha: job.headSha, tldr },
         });
       } catch (error) {
         await events.record({
@@ -175,7 +178,7 @@ export const runReview: JobFlow = async (context) => {
         jobId: job.id,
         repositoryId: job.repositoryId,
         scanRunId: job.scanRunId ?? undefined,
-        metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl },
+        metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl, tldr },
       });
       await events.record({
         type: "JOB_COMPLETED",
@@ -186,6 +189,7 @@ export const runReview: JobFlow = async (context) => {
         metadata: {
           issueUrl: job.issueUrl,
           pullRequestUrl: job.pullRequestUrl,
+          tldr,
           headSha: job.headSha,
           verdict: "pass",
         },
@@ -212,6 +216,7 @@ export const runReview: JobFlow = async (context) => {
           pullRequestUrl: job.pullRequestUrl ?? undefined,
           headSha: job.headSha,
           fixReason: "REVIEW_CHANGES_REQUESTED",
+          tldr,
         },
       });
     } catch (error) {
@@ -245,6 +250,7 @@ export const runReview: JobFlow = async (context) => {
         pullRequestUrl: job.pullRequestUrl ?? undefined,
         headSha: job.headSha,
         verdict: "changes_requested",
+        tldr,
       },
     });
     return;

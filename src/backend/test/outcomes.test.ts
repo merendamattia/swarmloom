@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome } from "../src/runner/response.ts";
+import { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome, parseTldr } from "../src/runner/response.ts";
 
 describe("agent responses", () => {
   test("parses the four explicit job outcomes from the first marker line", () => {
@@ -40,5 +40,11 @@ describe("agent responses", () => {
       .toBe("https://github.com/a/b/pull/42");
     expect(parsePullRequestUrl("Outcome: blocked\nTL;DR: Blocked without a pull request.\nNo PR.")).toBeNull();
     expect(parsePullRequestUrl("Outcome: implemented\nTL;DR: Implemented without a pull request.\nNo pull request.")).toBeNull();
+  });
+
+  test("extracts the canonical TL;DR from job and review responses", () => {
+    expect(parseTldr("Outcome: implemented\nPR: https://github.com/a/b/pull/42\nTL;DR:  Summary with <details>.\nDetails."))
+      .toBe("Summary with <details>.");
+    expect(parseTldr("Review: changes_requested\nTL;DR: Add the missing guard.\nDetails.")).toBe("Add the missing guard.");
   });
 });

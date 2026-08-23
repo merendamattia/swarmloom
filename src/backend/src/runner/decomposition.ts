@@ -4,6 +4,7 @@ import { safeWorktreePath } from "./paths.ts";
 import {
   decompositionContext,
   parseJobOutcome,
+  parseTldr,
 } from "./helpers.ts";
 import type { JobFlow } from "./types.ts";
 
@@ -56,6 +57,7 @@ export const runDecomposition: JobFlow = async (context) => {
     throw new Error(decomposition.stderr || `${provider.name} decomposer exited unsuccessfully`);
   }
   const outcome = parseJobOutcome(decomposition.response);
+  const tldr = parseTldr(decomposition.response);
 
   if (outcome === "decomposed") {
     const finished = await jobRepository.finishRunning(job.id, "DECOMPOSED", {
@@ -69,7 +71,7 @@ export const runDecomposition: JobFlow = async (context) => {
       jobId: job.id,
       repositoryId: job.repositoryId,
       scanRunId: job.scanRunId ?? undefined,
-      metadata: { issueUrl: job.issueUrl },
+      metadata: { issueUrl: job.issueUrl, tldr },
     });
     await context.finalizeIssue(job, [config.ISSUE_DECOMPOSED_LABEL], decomposition.response);
     return;
@@ -86,7 +88,7 @@ export const runDecomposition: JobFlow = async (context) => {
     jobId: job.id,
     repositoryId: job.repositoryId,
     scanRunId: job.scanRunId ?? undefined,
-    metadata: { issueUrl: job.issueUrl },
+    metadata: { issueUrl: job.issueUrl, tldr },
   });
   await context.finalizeIssue(job, [config.ISSUE_BLOCKED_LABEL, config.ISSUE_HUMAN_REVIEW_LABEL], decomposition.response);
 };

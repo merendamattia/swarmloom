@@ -8,6 +8,7 @@ import {
   implementationContext,
   parseJobOutcome,
   parsePullRequestUrl,
+  parseTldr,
   safeError,
 } from "./helpers.ts";
 import type { JobFlow } from "./types.ts";
@@ -57,6 +58,7 @@ export const runImplementation: JobFlow = async (context) => {
     throw new Error(implementation.stderr || `${provider.name} exited with ${implementation.exitCode}`);
   }
   const outcome = parseJobOutcome(implementation.response);
+  const tldr = parseTldr(implementation.response);
 
   if (outcome === "implemented") {
     const pullRequestUrl = parsePullRequestUrl(implementation.response);
@@ -107,6 +109,7 @@ export const runImplementation: JobFlow = async (context) => {
         pullRequestNumber: pullRequest.number,
         pullRequestTitle: pullRequest.title,
         pullRequestBody: pullRequest.body,
+        tldr,
         filesChanged: pullRequest.changedFiles,
         additions: pullRequest.additions,
         deletions: pullRequest.deletions,
@@ -122,7 +125,7 @@ export const runImplementation: JobFlow = async (context) => {
         jobId: job.id,
         repositoryId: job.repositoryId,
         scanRunId: job.scanRunId ?? undefined,
-        metadata: { issueUrl: job.issueUrl, pullRequestUrl: pullRequest.url, headSha: pullRequest.headSha },
+        metadata: { issueUrl: job.issueUrl, pullRequestUrl: pullRequest.url, headSha: pullRequest.headSha, tldr },
       });
     } catch (error) {
       await events.record({
@@ -147,6 +150,7 @@ export const runImplementation: JobFlow = async (context) => {
         pullRequestNumber: pullRequest.number,
         provider: provider.name,
         model: job.model,
+        tldr,
       },
     });
     await context.finalizeIssue(job, [config.ISSUE_WORKING_LABEL], implementation.response);
@@ -192,7 +196,7 @@ export const runImplementation: JobFlow = async (context) => {
       jobId: job.id,
       repositoryId: job.repositoryId,
       scanRunId: job.scanRunId ?? undefined,
-      metadata: { issueUrl: job.issueUrl },
+      metadata: { issueUrl: job.issueUrl, tldr },
     });
     await context.finalizeIssue(job, [config.ISSUE_WORKING_LABEL], implementation.response);
     return;
@@ -204,7 +208,7 @@ export const runImplementation: JobFlow = async (context) => {
       exitCode: implementation.exitCode,
     });
     if (!finished) return;
-    await events.record({ type: "JOB_BLOCKED", message: "Worker blocked", jobId: job.id, repositoryId: job.repositoryId, scanRunId: job.scanRunId ?? undefined, metadata: { issueUrl: job.issueUrl } });
+    await events.record({ type: "JOB_BLOCKED", message: "Worker blocked", jobId: job.id, repositoryId: job.repositoryId, scanRunId: job.scanRunId ?? undefined, metadata: { issueUrl: job.issueUrl, tldr } });
     await context.finalizeIssue(job, [config.ISSUE_BLOCKED_LABEL, config.ISSUE_HUMAN_REVIEW_LABEL], implementation.response);
     return;
   }
