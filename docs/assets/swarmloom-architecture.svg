@@ -1,87 +1,99 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 650" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 1710" role="img" aria-labelledby="title description">
   <title id="title">Swarmloom runtime architecture</title>
-  <desc id="description">GitHub connects to the Swarmloom API and scheduler, which records state in PostgreSQL and delivers jobs through BullMQ and Redis to workers. Workers use provider adapters and isolated repository worktrees; the dashboard and Telegram receive operational state.</desc>
+  <desc id="description">GitHub connects to the Swarmloom API and scheduler. The API records business state in PostgreSQL and enqueues jobs through BullMQ and Redis. BullMQ delivers jobs to workers, which guard state transitions in PostgreSQL, use repository worktrees and provider adapters, while the API serves a stateless dashboard and runtime events can reach optional Telegram notifications.</desc>
   <defs>
-    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <marker id="blue-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#93c5fd"/>
     </marker>
-    <marker id="green-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#86efac"/>
+    <marker id="purple-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#a5b4fc"/>
+    </marker>
+    <marker id="red-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#fb7185"/>
     </marker>
   </defs>
 
-  <rect width="1200" height="650" rx="24" fill="#0f172a"/>
-  <text x="48" y="54" fill="#f8fafc" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="26" font-weight="700">One workflow, clear ownership</text>
-  <text x="48" y="83" fill="#cbd5e1" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="15">GitHub is the visible protocol; PostgreSQL and BullMQ keep the system durable.</text>
-
-  <rect x="36" y="104" width="1128" height="510" rx="20" fill="#111827" stroke="#334155" stroke-width="2"/>
-  <text x="58" y="134" fill="#94a3b8" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="12" font-weight="700" letter-spacing="1.5">EXTERNAL SYSTEMS</text>
-  <text x="300" y="134" fill="#94a3b8" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="12" font-weight="700" letter-spacing="1.5">SWARMLOOM RUNTIME</text>
-
+  <rect width="760" height="1710" rx="28" fill="#0f172a"/>
   <g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
-    <rect x="58" y="176" width="190" height="176" rx="14" fill="#172554" stroke="#60a5fa" stroke-width="2"/>
-    <text x="153" y="211" text-anchor="middle" fill="#bfdbfe" font-size="13" font-weight="700">GITHUB</text>
-    <rect x="82" y="232" width="142" height="40" rx="9" fill="#1e3a8a"/>
-    <text x="153" y="257" text-anchor="middle" fill="#f8fafc" font-size="15" font-weight="700">Issues</text>
-    <rect x="82" y="286" width="142" height="40" rx="9" fill="#1e3a8a"/>
-    <text x="153" y="311" text-anchor="middle" fill="#f8fafc" font-size="15" font-weight="700">Pull Requests</text>
+    <text x="40" y="58" fill="#f8fafc" font-size="30" font-weight="700">One workflow, clear ownership</text>
+    <text x="40" y="91" fill="#cbd5e1" font-size="19">API produces jobs. BullMQ delivers them.</text>
+    <text x="40" y="119" fill="#cbd5e1" font-size="19">Workers execute; PostgreSQL keeps business state.</text>
 
-    <rect x="300" y="158" width="260" height="100" rx="14" fill="#172554" stroke="#60a5fa" stroke-width="2"/>
-    <text x="430" y="193" text-anchor="middle" fill="#bfdbfe" font-size="13" font-weight="700">API + SCHEDULER</text>
-    <text x="430" y="220" text-anchor="middle" fill="#f8fafc" font-size="18" font-weight="700">Hono + scanners</text>
-    <text x="430" y="241" text-anchor="middle" fill="#cbd5e1" font-size="13">Discover and reconcile state</text>
+    <text x="40" y="158" fill="#94a3b8" font-size="17" font-weight="700" letter-spacing="1.5">EXTERNAL INPUT</text>
+    <rect x="80" y="175" width="600" height="112" rx="16" fill="#172554" stroke="#60a5fa" stroke-width="3"/>
+    <text x="380" y="209" text-anchor="middle" fill="#bfdbfe" font-size="18" font-weight="700">GITHUB</text>
+    <text x="380" y="245" text-anchor="middle" fill="#f8fafc" font-size="27" font-weight="700">Issues + Pull Requests</text>
+    <text x="380" y="269" text-anchor="middle" fill="#cbd5e1" font-size="19">Visible state and review evidence</text>
 
-    <rect x="300" y="304" width="260" height="100" rx="14" fill="#172554" stroke="#60a5fa" stroke-width="2"/>
-    <text x="430" y="339" text-anchor="middle" fill="#bfdbfe" font-size="13" font-weight="700">DELIVERY</text>
-    <text x="430" y="366" text-anchor="middle" fill="#f8fafc" font-size="18" font-weight="700">BullMQ + Redis</text>
-    <text x="430" y="387" text-anchor="middle" fill="#cbd5e1" font-size="13">Jobs, retries, locks</text>
+    <line x1="380" y1="287" x2="380" y2="330" stroke="#93c5fd" stroke-width="4" marker-start="url(#blue-arrow)" marker-end="url(#blue-arrow)"/>
+    <text x="402" y="316" fill="#bfdbfe" font-size="17">read / write</text>
 
-    <rect x="300" y="450" width="260" height="100" rx="14" fill="#172554" stroke="#60a5fa" stroke-width="2"/>
-    <text x="430" y="485" text-anchor="middle" fill="#bfdbfe" font-size="13" font-weight="700">OPERATOR VIEW</text>
-    <text x="430" y="512" text-anchor="middle" fill="#f8fafc" font-size="18" font-weight="700">Next.js dashboard</text>
-    <text x="430" y="533" text-anchor="middle" fill="#cbd5e1" font-size="13">Health, jobs, evidence</text>
+    <text x="40" y="354" fill="#94a3b8" font-size="17" font-weight="700" letter-spacing="1.5">CONTROL PLANE</text>
+    <rect x="80" y="370" width="600" height="120" rx="16" fill="#172554" stroke="#60a5fa" stroke-width="3"/>
+    <text x="380" y="405" text-anchor="middle" fill="#bfdbfe" font-size="18" font-weight="700">API + SCHEDULER</text>
+    <text x="380" y="442" text-anchor="middle" fill="#f8fafc" font-size="27" font-weight="700">Hono + scanners</text>
+    <text x="380" y="466" text-anchor="middle" fill="#cbd5e1" font-size="19">Reconcile state; produce jobs</text>
 
-    <rect x="640" y="158" width="250" height="100" rx="14" fill="#14352a" stroke="#4ade80" stroke-width="2"/>
-    <text x="765" y="193" text-anchor="middle" fill="#bbf7d0" font-size="13" font-weight="700">EXECUTION</text>
-    <text x="765" y="220" text-anchor="middle" fill="#f8fafc" font-size="18" font-weight="700">Workers</text>
-    <text x="765" y="241" text-anchor="middle" fill="#cbd5e1" font-size="13">Claim, guard, execute</text>
+    <line x1="380" y1="490" x2="380" y2="525" stroke="#a5b4fc" stroke-width="4" marker-end="url(#purple-arrow)"/>
+    <text x="402" y="514" fill="#c7d2fe" font-size="17">write state</text>
 
-    <rect x="940" y="158" width="190" height="100" rx="14" fill="#3f1d2e" stroke="#fb7185" stroke-width="2"/>
-    <text x="1035" y="193" text-anchor="middle" fill="#fecdd3" font-size="13" font-weight="700">PROVIDER ADAPTERS</text>
-    <text x="1035" y="220" text-anchor="middle" fill="#f8fafc" font-size="17" font-weight="700">Codex / OpenCode</text>
-    <text x="1035" y="241" text-anchor="middle" fill="#cbd5e1" font-size="13">One common contract</text>
+    <rect x="80" y="545" width="600" height="120" rx="16" fill="#312e81" stroke="#a5b4fc" stroke-width="3"/>
+    <text x="380" y="580" text-anchor="middle" fill="#c7d2fe" font-size="18" font-weight="700">DURABLE BUSINESS STATE</text>
+    <text x="380" y="617" text-anchor="middle" fill="#f8fafc" font-size="27" font-weight="700">PostgreSQL</text>
+    <text x="380" y="641" text-anchor="middle" fill="#cbd5e1" font-size="19">Jobs, history, events, settings</text>
 
-    <rect x="640" y="304" width="250" height="100" rx="14" fill="#312e81" stroke="#a5b4fc" stroke-width="2"/>
-    <text x="765" y="339" text-anchor="middle" fill="#c7d2fe" font-size="13" font-weight="700">DURABLE STATE</text>
-    <text x="765" y="366" text-anchor="middle" fill="#f8fafc" font-size="18" font-weight="700">PostgreSQL</text>
-    <text x="765" y="387" text-anchor="middle" fill="#cbd5e1" font-size="13">Jobs, history, events, settings</text>
+    <path d="M 680 430 C 720 430, 720 725, 680 725" fill="none" stroke="#93c5fd" stroke-width="4" marker-end="url(#blue-arrow)"/>
+    <text x="570" y="512" fill="#bfdbfe" font-size="17">enqueue</text>
 
-    <rect x="640" y="450" width="250" height="100" rx="14" fill="#312e81" stroke="#a5b4fc" stroke-width="2"/>
-    <text x="765" y="485" text-anchor="middle" fill="#c7d2fe" font-size="13" font-weight="700">WORKER STORAGE</text>
-    <text x="765" y="512" text-anchor="middle" fill="#f8fafc" font-size="18" font-weight="700">Clones + worktrees</text>
-    <text x="765" y="533" text-anchor="middle" fill="#cbd5e1" font-size="13">Isolated repository state</text>
+    <rect x="80" y="705" width="600" height="120" rx="16" fill="#172554" stroke="#60a5fa" stroke-width="3"/>
+    <text x="380" y="740" text-anchor="middle" fill="#bfdbfe" font-size="18" font-weight="700">DELIVERY AUTHORITY</text>
+    <text x="380" y="777" text-anchor="middle" fill="#f8fafc" font-size="27" font-weight="700">BullMQ + Redis</text>
+    <text x="380" y="801" text-anchor="middle" fill="#cbd5e1" font-size="19">Jobs, retries, locks</text>
 
-    <rect x="940" y="304" width="190" height="100" rx="14" fill="#3f1d2e" stroke="#fb7185" stroke-width="2"/>
-    <text x="1035" y="339" text-anchor="middle" fill="#fecdd3" font-size="13" font-weight="700">OPTIONAL OUTPUT</text>
-    <text x="1035" y="366" text-anchor="middle" fill="#f8fafc" font-size="18" font-weight="700">Telegram</text>
-    <text x="1035" y="387" text-anchor="middle" fill="#cbd5e1" font-size="13">Selected notifications</text>
+    <line x1="380" y1="825" x2="380" y2="860" stroke="#93c5fd" stroke-width="4" marker-end="url(#blue-arrow)"/>
+    <text x="402" y="849" fill="#bfdbfe" font-size="17">deliver</text>
 
-    <line x1="248" y1="238" x2="296" y2="208" stroke="#93c5fd" stroke-width="3" marker-end="url(#arrow)"/>
-    <line x1="560" y1="208" x2="634" y2="208" stroke="#93c5fd" stroke-width="3" marker-end="url(#arrow)"/>
-    <line x1="430" y1="258" x2="430" y2="296" stroke="#93c5fd" stroke-width="3" marker-end="url(#arrow)"/>
-    <line x1="560" y1="354" x2="634" y2="208" stroke="#93c5fd" stroke-width="3" marker-end="url(#arrow)"/>
-    <line x1="890" y1="208" x2="934" y2="208" stroke="#fb7185" stroke-width="3" marker-end="url(#arrow)"/>
-    <line x1="765" y1="258" x2="765" y2="298" stroke="#a5b4fc" stroke-width="3" marker-end="url(#arrow)"/>
-    <line x1="765" y1="404" x2="765" y2="444" stroke="#a5b4fc" stroke-width="3" marker-end="url(#arrow)"/>
-    <line x1="560" y1="500" x2="470" y2="500" stroke="#93c5fd" stroke-width="3" marker-end="url(#arrow)"/>
-    <line x1="890" y1="354" x2="934" y2="354" stroke="#fb7185" stroke-width="3" marker-end="url(#arrow)"/>
-    <path d="M 640 354 C 590 354, 560 354, 560 354" fill="none" stroke="#a5b4fc" stroke-width="3" marker-end="url(#arrow)"/>
+    <text x="40" y="889" fill="#94a3b8" font-size="17" font-weight="700" letter-spacing="1.5">EXECUTION PLANE</text>
+    <rect x="80" y="905" width="600" height="125" rx="16" fill="#14352a" stroke="#4ade80" stroke-width="3"/>
+    <text x="380" y="940" text-anchor="middle" fill="#bbf7d0" font-size="18" font-weight="700">EXECUTION</text>
+    <text x="380" y="977" text-anchor="middle" fill="#f8fafc" font-size="27" font-weight="700">Workers</text>
+    <text x="380" y="1002" text-anchor="middle" fill="#cbd5e1" font-size="19">Only durable executor: claim, guard, execute</text>
 
-    <text x="256" y="195" fill="#93c5fd" font-size="12">read / write</text>
-    <text x="568" y="194" fill="#93c5fd" font-size="12">reconcile</text>
-    <text x="573" y="337" fill="#93c5fd" font-size="12">enqueue</text>
-    <text x="897" y="194" fill="#fb7185" font-size="12">run session</text>
-    <text x="792" y="292" fill="#a5b4fc" font-size="12">persist</text>
-    <text x="898" y="340" fill="#fb7185" font-size="12">notify</text>
+    <path d="M 80 968 C 42 968, 42 605, 80 605" fill="none" stroke="#a5b4fc" stroke-width="4" marker-end="url(#purple-arrow)"/>
+    <text x="50" y="750" fill="#c7d2fe" font-size="17" transform="rotate(-90 50 750)">guarded state</text>
+
+    <line x1="380" y1="1030" x2="380" y2="1065" stroke="#a5b4fc" stroke-width="4" marker-start="url(#purple-arrow)" marker-end="url(#purple-arrow)"/>
+    <text x="402" y="1054" fill="#c7d2fe" font-size="17">read / write</text>
+
+    <rect x="80" y="1085" width="600" height="115" rx="16" fill="#312e81" stroke="#a5b4fc" stroke-width="3"/>
+    <text x="380" y="1120" text-anchor="middle" fill="#c7d2fe" font-size="18" font-weight="700">WORKER STORAGE</text>
+    <text x="380" y="1157" text-anchor="middle" fill="#f8fafc" font-size="27" font-weight="700">Clones + worktrees</text>
+    <text x="380" y="1180" text-anchor="middle" fill="#cbd5e1" font-size="19">Isolated repository state</text>
+
+    <path d="M 680 968 C 720 968, 720 1312, 680 1312" fill="none" stroke="#fb7185" stroke-width="4" marker-end="url(#red-arrow)"/>
+    <text x="535" y="1054" fill="#fecdd3" font-size="17">run session</text>
+
+    <rect x="80" y="1255" width="600" height="115" rx="16" fill="#3f1d2e" stroke="#fb7185" stroke-width="3"/>
+    <text x="380" y="1290" text-anchor="middle" fill="#fecdd3" font-size="18" font-weight="700">PROVIDER ADAPTERS</text>
+    <text x="380" y="1327" text-anchor="middle" fill="#f8fafc" font-size="27" font-weight="700">Codex / OpenCode</text>
+    <text x="380" y="1350" text-anchor="middle" fill="#cbd5e1" font-size="19">One common contract</text>
+
+    <text x="40" y="1408" fill="#94a3b8" font-size="17" font-weight="700" letter-spacing="1.5">READ / NOTIFY SURFACES</text>
+    <rect x="80" y="1425" width="600" height="110" rx="16" fill="#172554" stroke="#60a5fa" stroke-width="3"/>
+    <text x="380" y="1459" text-anchor="middle" fill="#bfdbfe" font-size="18" font-weight="700">FRONTEND</text>
+    <text x="380" y="1496" text-anchor="middle" fill="#f8fafc" font-size="27" font-weight="700">Stateless dashboard</text>
+    <text x="380" y="1518" text-anchor="middle" fill="#cbd5e1" font-size="19">Reads the API; owns no durable state</text>
+
+    <path d="M 80 1480 C 42 1480, 42 430, 80 430" fill="none" stroke="#93c5fd" stroke-width="4" marker-end="url(#blue-arrow)"/>
+    <text x="51" y="1335" fill="#bfdbfe" font-size="17" transform="rotate(-90 51 1335)">read-only API</text>
+
+    <rect x="80" y="1560" width="600" height="110" rx="16" fill="#3f1d2e" stroke="#fb7185" stroke-width="3"/>
+    <text x="380" y="1594" text-anchor="middle" fill="#fecdd3" font-size="18" font-weight="700">OPTIONAL NOTIFICATIONS</text>
+    <text x="380" y="1631" text-anchor="middle" fill="#f8fafc" font-size="27" font-weight="700">Telegram</text>
+    <text x="380" y="1653" text-anchor="middle" fill="#cbd5e1" font-size="19">Selected runtime events; no workflow authority</text>
+
+    <path d="M 680 430 C 730 430, 730 1615, 680 1615" fill="none" stroke="#fb7185" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#red-arrow)"/>
+    <path d="M 680 968 C 710 968, 710 1615, 680 1615" fill="none" stroke="#fb7185" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#red-arrow)"/>
+    <text x="570" y="1385" fill="#fecdd3" font-size="17">selected events</text>
   </g>
 </svg>
