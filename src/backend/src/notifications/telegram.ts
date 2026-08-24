@@ -46,7 +46,7 @@ const eventTitles: Record<string, [string, string]> = {
   PR_FIX_REQUESTED: ["🛠️", "Fix requested"],
   REVIEW_COMPLETED: ["🧪", "Review completed"],
   REVIEW_PASSED: ["🎉", "Review passed"],
-  READY_TO_MERGE: ["🚦", "Ready to merge"],
+  READY_TO_MERGE: ["🎉", "Review passed · Ready to merge"],
   PR_MERGED: ["🎊", "Pull request merged"],
   ISSUE_DONE: ["✅", "Issue done"],
   LOOP_GUARD_TRIPPED: ["🛑", "Automatic fix limit reached"],

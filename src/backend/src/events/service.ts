@@ -4,7 +4,6 @@ import { eventRepository, type RecordEventInput } from "../repositories/events.t
 const notifiableTypes = new Set([
   "SCAN_FAILED",
   "JOB_STARTED",
-  "JOB_COMPLETED",
   "JOB_FAILED",
   "JOB_BLOCKED",
   "JOB_DECOMPOSED",
@@ -14,13 +13,9 @@ const notifiableTypes = new Set([
   "REPOSITORY_ERROR",
   "GITHUB_RECONCILIATION_REQUIRED",
   "PR_OPENED",
-  "PR_REVIEW_REQUESTED",
   "PR_FIX_REQUESTED",
-  "REVIEW_COMPLETED",
-  "REVIEW_PASSED",
   "READY_TO_MERGE",
   "PR_MERGED",
-  "ISSUE_DONE",
   "LOOP_GUARD_TRIPPED",
   "TELEGRAM_TEST",
 ]);
