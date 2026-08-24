@@ -10,6 +10,8 @@ import { TagInput } from "@/components/ui/tag-input";
 import { type Settings, type SettingsPatch, useTestNotification, useUpdateSettings } from "@/hooks/api";
 import { describeCron, millisecondsToSeconds, parseRepositoryList, removeRepository as removeRepositoryFromList, secondsToMilliseconds, timingStepSeconds } from "@/lib/settings";
 
+const reasoningEfforts = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
 type SettingsDraft = Omit<SettingsPatch, "githubRepositories" | "scheduleTimezone"> & {
   githubRepositories: string[];
   issueReadyLabel: string;
@@ -27,9 +29,12 @@ type SettingsDraft = Omit<SettingsPatch, "githubRepositories" | "scheduleTimezon
   scheduleCron: string;
   maxParallelJobs: number;
   agentProvider: "codex" | "opencode";
-  opencodeModel: string;
-  codexModel: string;
-  codexReasoningEffort: NonNullable<SettingsPatch["codexReasoningEffort"]>;
+  opencodeCodingModel: string;
+  opencodeReviewModel: string;
+  codexCodingModel: string;
+  codexReviewModel: string;
+  codexCodingReasoningEffort: NonNullable<SettingsPatch["codexCodingReasoningEffort"]>;
+  codexReviewReasoningEffort: NonNullable<SettingsPatch["codexReviewReasoningEffort"]>;
   telegramEnabled: boolean;
   heartbeatIntervalMs: number;
   staleJobThresholdMs: number;
@@ -56,9 +61,12 @@ function toDraft(settings: Settings): SettingsDraft {
     scheduleCron: settings.scheduleCron,
     maxParallelJobs: settings.maxParallelJobs,
     agentProvider: settings.agentProvider,
-    opencodeModel: settings.opencodeModel,
-    codexModel: settings.codexModel,
-    codexReasoningEffort: settings.codexReasoningEffort ?? "max",
+    opencodeCodingModel: settings.opencodeCodingModel,
+    opencodeReviewModel: settings.opencodeReviewModel,
+    codexCodingModel: settings.codexCodingModel,
+    codexReviewModel: settings.codexReviewModel,
+    codexCodingReasoningEffort: settings.codexCodingReasoningEffort ?? "max",
+    codexReviewReasoningEffort: settings.codexReviewReasoningEffort ?? "max",
     telegramEnabled: settings.telegramEnabled,
     heartbeatIntervalMs: settings.heartbeatIntervalMs,
     staleJobThresholdMs: settings.staleJobThresholdMs,
@@ -99,13 +107,23 @@ export function SettingsEditor({ settings }: { settings: Settings }) {
     <>
       <ActionMessage pending={save.isPending} error={save.error} success={save.isSuccess} pendingText="Saving runtime settings…" successText="Settings saved." variant="toast" />
       <form className="settings-form" onSubmit={submit}>
-        <SettingsSection title="Agent execution" description="New jobs take a snapshot of the selected provider and model.">
+        <SettingsSection title="Agent execution" description="Each queued job snapshots its role's provider, model, and reasoning. Coding covers implementation, fixes, and decomposition; review covers independent pull request reviews.">
           <div className="settings-grid">
             <Field htmlFor="agent-provider" label="Agent provider"><Select id="agent-provider" value={draft.agentProvider} onChange={(event) => set("agentProvider", event.target.value as SettingsDraft["agentProvider"])}><option value="codex">Codex</option><option value="opencode">OpenCode</option></Select></Field>
             <Field htmlFor="parallel-jobs" label="Parallel jobs"><Input id="parallel-jobs" type="number" min={1} max={20} value={draft.maxParallelJobs} onChange={(event) => set("maxParallelJobs", Number(event.target.value))} /></Field>
-            <Field htmlFor="codex-model" label="Codex model"><Input id="codex-model" value={draft.codexModel} onChange={(event) => set("codexModel", event.target.value)} /></Field>
-            <Field htmlFor="opencode-model" label="OpenCode model"><Input id="opencode-model" value={draft.opencodeModel} onChange={(event) => set("opencodeModel", event.target.value)} /></Field>
-            <Field htmlFor="reasoning" label="Codex reasoning"><Select id="reasoning" value={draft.codexReasoningEffort} onChange={(event) => set("codexReasoningEffort", event.target.value as SettingsDraft["codexReasoningEffort"])}>{["minimal", "low", "medium", "high", "xhigh", "max"].map((value) => <option key={value} value={value}>{value}</option>)}</Select></Field>
+            {draft.agentProvider === "codex" ? (
+              <>
+                <Field htmlFor="codex-coding-model" label="Coding agent model" description="Used for IMPLEMENTATION, FIX, and DECOMPOSITION jobs."><Input id="codex-coding-model" value={draft.codexCodingModel} onChange={(event) => set("codexCodingModel", event.target.value)} /></Field>
+                <Field htmlFor="codex-coding-reasoning" label="Coding reasoning" description="Reasoning effort captured on coding jobs."><Select id="codex-coding-reasoning" value={draft.codexCodingReasoningEffort} onChange={(event) => set("codexCodingReasoningEffort", event.target.value as SettingsDraft["codexCodingReasoningEffort"])}>{reasoningEfforts.map((value) => <option key={value} value={value}>{value}</option>)}</Select></Field>
+                <Field htmlFor="codex-review-model" label="Review agent model" description="Used for REVIEW jobs."><Input id="codex-review-model" value={draft.codexReviewModel} onChange={(event) => set("codexReviewModel", event.target.value)} /></Field>
+                <Field htmlFor="codex-review-reasoning" label="Review reasoning" description="Reasoning effort captured on review jobs."><Select id="codex-review-reasoning" value={draft.codexReviewReasoningEffort} onChange={(event) => set("codexReviewReasoningEffort", event.target.value as SettingsDraft["codexReviewReasoningEffort"])}>{reasoningEfforts.map((value) => <option key={value} value={value}>{value}</option>)}</Select></Field>
+              </>
+            ) : (
+              <>
+                <Field htmlFor="opencode-coding-model" label="Coding agent model" description="Used for IMPLEMENTATION, FIX, and DECOMPOSITION jobs."><Input id="opencode-coding-model" value={draft.opencodeCodingModel} onChange={(event) => set("opencodeCodingModel", event.target.value)} /></Field>
+                <Field htmlFor="opencode-review-model" label="Review agent model" description="Used for REVIEW jobs."><Input id="opencode-review-model" value={draft.opencodeReviewModel} onChange={(event) => set("opencodeReviewModel", event.target.value)} /></Field>
+              </>
+            )}
           </div>
         </SettingsSection>
 

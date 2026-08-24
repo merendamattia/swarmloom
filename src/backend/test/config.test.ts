@@ -16,9 +16,12 @@ describe("configuration", () => {
 
     expect(config.githubRepositories).toEqual(["acme/api", "acme/web"]);
     expect(config.AGENT_PROVIDER).toBe("codex");
-    expect(config.CODEX_MODEL).toBe("gpt-5.6-luna");
-    expect(config.CODEX_REASONING_EFFORT).toBe("max");
-    expect(config.OPENCODE_MODEL).toBe("opencode-go/deepseek-v4-flash");
+    expect(config.CODEX_CODING_MODEL).toBe("gpt-5.6-luna");
+    expect(config.CODEX_REVIEW_MODEL).toBe("gpt-5.6-luna");
+    expect(config.CODEX_CODING_REASONING_EFFORT).toBe("max");
+    expect(config.CODEX_REVIEW_REASONING_EFFORT).toBe("max");
+    expect(config.OPENCODE_CODING_MODEL).toBe("opencode-go/deepseek-v4-flash");
+    expect(config.OPENCODE_REVIEW_MODEL).toBe("opencode-go/deepseek-v4-flash");
     expect(config.ISSUE_READY_LABEL).toBe("agent:ready");
     expect(config.PR_REVIEW_REQUESTED_LABEL).toBe("agent:review-requested");
     expect(config.ISSUE_HUMAN_REVIEW_LABEL).toBe("agent:human-review");

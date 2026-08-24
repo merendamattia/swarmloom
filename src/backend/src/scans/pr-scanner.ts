@@ -1,7 +1,7 @@
 import type { ManagedPullRequest, Repository } from "@prisma/client";
 import { managedPullRequestRepository } from "../repositories/managed-prs.ts";
 import { replaceWorkerLabels } from "../github/labels.ts";
-import { configuredAgent } from "../providers/index.ts";
+import { agentProfileForJobType, configuredAgent } from "../providers/index.ts";
 import { queueJob, safeError, transitionPullRequestLabels, type ScannerShared } from "./common.ts";
 
 export type PullRequestScannerDependencies = ScannerShared;
@@ -240,7 +240,7 @@ export function createPullRequestScanner(shared: ScannerShared) {
     jobType: "FIX" | "REVIEW",
     trigger?: string,
   ) {
-    const agent = configuredAgent(config);
+    const agent = configuredAgent(config, agentProfileForJobType(jobType));
     const pullRequestUrl = `https://github.com/${fullName}/pull/${managed.prNumber}`;
     const queuedJob = await queueJob(shared, fullName, {
       repositoryId: repository.id,

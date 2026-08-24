@@ -4,7 +4,9 @@ import {
   buildOpenCodeCommand, normalizeOpenCodeEvent, openCodeEnvironment, OpenCodeProvider,
 } from "../src/providers/opencode.ts";
 import { redactSecrets } from "../src/core/secrets.ts";
+import { parseConfig } from "../src/core/config-schema.ts";
 import { ProviderProcessError, runJsonlProcess } from "../src/providers/process.ts";
+import { agentProfileForJobType, configuredAgent } from "../src/providers/index.ts";
 import { buildAgentPrompt, type AgentEvent, type AgentRequest } from "../src/providers/types.ts";
 
 const request: AgentRequest = {
@@ -15,6 +17,55 @@ const request: AgentRequest = {
   model: "test-model",
   reasoningEffort: "max",
 };
+
+const configured = parseConfig({
+  DATABASE_URL: "postgresql://worker:worker@localhost:17432/swarmloom",
+  REDIS_URL: "redis://localhost:18422",
+  SETTINGS_ENCRYPTION_KEY: "test-settings-encryption-key-0123456789",
+  GITHUB_TOKEN: "test-token",
+  GITHUB_REPOSITORIES: "acme/api",
+  AGENT_PROVIDER: "codex",
+  CODEX_CODING_MODEL: "gpt-5.6-coding",
+  CODEX_REVIEW_MODEL: "gpt-5.6-review",
+  CODEX_CODING_REASONING_EFFORT: "low",
+  CODEX_REVIEW_REASONING_EFFORT: "high",
+});
+const configuredOpenCode = parseConfig({
+  DATABASE_URL: "postgresql://worker:worker@localhost:17432/swarmloom",
+  REDIS_URL: "redis://localhost:18422",
+  SETTINGS_ENCRYPTION_KEY: "test-settings-encryption-key-0123456789",
+  GITHUB_TOKEN: "test-token",
+  GITHUB_REPOSITORIES: "acme/api",
+  AGENT_PROVIDER: "opencode",
+  OPENCODE_CODING_MODEL: "opencode-go/coding-model",
+  OPENCODE_REVIEW_MODEL: "opencode-go/review-model",
+});
+
+test("resolves explicit coding and review profiles for every job type", () => {
+  expect(configuredAgent(configured, "coding")).toMatchObject({
+    provider: "CODEX",
+    model: "gpt-5.6-coding",
+    reasoningEffort: "low",
+  });
+  expect(configuredAgent(configured, "review")).toMatchObject({
+    provider: "CODEX",
+    model: "gpt-5.6-review",
+    reasoningEffort: "high",
+  });
+  expect(([
+    "IMPLEMENTATION", "FIX", "REVIEW", "DECOMPOSITION",
+  ] as const).map(agentProfileForJobType)).toEqual(["coding", "coding", "review", "coding"]);
+  expect(configuredAgent(configuredOpenCode, "coding")).toMatchObject({
+    provider: "OPENCODE",
+    model: "opencode-go/coding-model",
+    reasoningEffort: undefined,
+  });
+  expect(configuredAgent(configuredOpenCode, "review")).toMatchObject({
+    provider: "OPENCODE",
+    model: "opencode-go/review-model",
+    reasoningEffort: undefined,
+  });
+});
 
 describe("Codex provider", () => {
   test("builds a fresh, noninteractive command", () => {

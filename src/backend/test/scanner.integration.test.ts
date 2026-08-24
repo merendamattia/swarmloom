@@ -23,6 +23,10 @@ integration("issue scanner", () => {
     GITHUB_TOKEN: "test-token",
     GITHUB_REPOSITORIES: "acme/app,acme/main-only",
     AGENT_PROVIDER: "codex",
+    CODEX_CODING_MODEL: "gpt-5.6-coding",
+    CODEX_REVIEW_MODEL: "gpt-5.6-review",
+    CODEX_CODING_REASONING_EFFORT: "low",
+    CODEX_REVIEW_REASONING_EFFORT: "high",
     APP_ENV: "test",
     AGENT_RUNTIME_DIR: resolve(import.meta.dir, "../../../agent-runtime"),
   });
@@ -133,8 +137,8 @@ integration("issue scanner", () => {
       issueBody: "Use PostgreSQL",
       baselineCommit: "b".repeat(40),
       provider: "CODEX",
-      model: "gpt-5.6-luna",
-      reasoningEffort: "max",
+      model: "gpt-5.6-coding",
+      reasoningEffort: "low",
       scanRunId: scan.id,
     });
     expect(await prisma.repository.findUniqueOrThrow({ where: { fullName: "acme/main-only" } }))
@@ -206,6 +210,10 @@ integration("pull request scanner", () => {
     GITHUB_TOKEN: "test-token",
     GITHUB_REPOSITORIES: "acme/app",
     AGENT_PROVIDER: "codex",
+    CODEX_CODING_MODEL: "gpt-5.6-coding",
+    CODEX_REVIEW_MODEL: "gpt-5.6-review",
+    CODEX_CODING_REASONING_EFFORT: "low",
+    CODEX_REVIEW_REASONING_EFFORT: "high",
     APP_ENV: "test",
     AGENT_RUNTIME_DIR: resolve(import.meta.dir, "../../../agent-runtime"),
   });
@@ -324,9 +332,64 @@ integration("pull request scanner", () => {
     expect(scan.queuedCount).toBe(1);
     expect(scanOrder.slice(0, 2)).toEqual(["pull-requests", "issues"]);
     const job = await prisma.job.findFirstOrThrow({ where: { environment } });
-    expect(job).toMatchObject({ jobType: "REVIEW", subjectType: "PULL_REQUEST", headSha: firstSha, trigger: "PR_REVIEW_REQUESTED" });
+    expect(job).toMatchObject({
+      jobType: "REVIEW",
+      subjectType: "PULL_REQUEST",
+      headSha: firstSha,
+      trigger: "PR_REVIEW_REQUESTED",
+      provider: "CODEX",
+      model: "gpt-5.6-review",
+      reasoningEffort: "high",
+    });
     expect(enqueuedJobs).toEqual([job.id]);
     expect(prLabels).toEqual([config.PR_REVIEW_REQUESTED_LABEL]);
+  });
+
+  test("snapshots coding and review profiles independently and keeps queued values stable", async () => {
+    await prisma.job.deleteMany({ where: { environment } });
+    await releaseScans();
+    enqueuedJobs.length = 0;
+    prState = { state: "open", merged: false, headSha: firstSha, head: "agent/issue-55" };
+    prLabels = [config.PR_REVIEW_REQUESTED_LABEL];
+    await prisma.managedPullRequest.update({
+      where: { id: managedPrId },
+      data: { workflow: "REVIEW_REQUESTED", fixReason: null, fixDetails: null },
+    });
+    await scanServiceConfig().run("MANUAL");
+
+    prLabels = [config.PR_FIX_REQUESTED_LABEL];
+    await prisma.managedPullRequest.update({
+      where: { id: managedPrId },
+      data: { workflow: "FIX_REQUESTED", fixReason: "REVIEW_CHANGES_REQUESTED", fixDetails: "Add a guard." },
+    });
+    await releaseScans();
+    await scanServiceConfig().run("MANUAL");
+
+    const beforeSettingsChange = await prisma.job.findMany({
+      where: { environment },
+      orderBy: { jobType: "asc" },
+      select: { jobType: true, provider: true, model: true, reasoningEffort: true },
+    });
+    expect(beforeSettingsChange).toEqual(expect.arrayContaining([
+      expect.objectContaining({ jobType: "FIX", provider: "CODEX", model: "gpt-5.6-coding", reasoningEffort: "low" }),
+      expect.objectContaining({ jobType: "REVIEW", provider: "CODEX", model: "gpt-5.6-review", reasoningEffort: "high" }),
+    ]));
+
+    config.CODEX_CODING_MODEL = "gpt-5.6-coding-changed";
+    config.CODEX_REVIEW_MODEL = "gpt-5.6-review-changed";
+    config.CODEX_CODING_REASONING_EFFORT = "minimal";
+    config.CODEX_REVIEW_REASONING_EFFORT = "max";
+    const afterSettingsChange = await prisma.job.findMany({
+      where: { environment },
+      orderBy: { jobType: "asc" },
+      select: { jobType: true, provider: true, model: true, reasoningEffort: true },
+    });
+    expect(afterSettingsChange).toEqual(beforeSettingsChange);
+
+    config.CODEX_CODING_MODEL = "gpt-5.6-coding";
+    config.CODEX_REVIEW_MODEL = "gpt-5.6-review";
+    config.CODEX_CODING_REASONING_EFFORT = "low";
+    config.CODEX_REVIEW_REASONING_EFFORT = "high";
   });
 
   test("imports a labeled open PR before reconciling it", async () => {

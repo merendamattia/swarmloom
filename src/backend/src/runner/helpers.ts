@@ -56,7 +56,7 @@ export async function executeRole(
       context: contextText,
       instructions: await loadAgentInstructions(context.config.AGENT_RUNTIME_DIR),
       model: job.model,
-      reasoningEffort: job.reasoningEffort as Config["CODEX_REASONING_EFFORT"] | undefined,
+      reasoningEffort: job.reasoningEffort as Config["CODEX_CODING_REASONING_EFFORT"] | undefined,
       environment: githubGitEnvironment(context.config.GITHUB_TOKEN, job.repository.cloneUrl),
       responseFilePath,
       signal: abortSignal,

@@ -236,6 +236,10 @@ integration("operations API", () => {
         scheduleCron: "*/30 * * * *",
         maxParallelJobs: 2,
         createDiagnosticIssues: true,
+        codexCodingModel: "gpt-5.6-api-coding",
+        codexReviewModel: "gpt-5.6-api-review",
+        codexCodingReasoningEffort: "low",
+        codexReviewReasoningEffort: "high",
         telegramEnabled: false,
         telegramBotToken: "telegram-secret-token",
         telegramChatId: "telegram-chat-id",
@@ -245,7 +249,20 @@ integration("operations API", () => {
     const body = await response.text();
     expect(body).not.toContain("telegram-secret-token");
     expect(body).not.toContain("telegram-chat-id");
-    expect(JSON.parse(body)).toMatchObject({ createDiagnosticIssues: true });
+    expect(JSON.parse(body)).toMatchObject({
+      createDiagnosticIssues: true,
+      codexCodingModel: "gpt-5.6-api-coding",
+      codexReviewModel: "gpt-5.6-api-review",
+      codexCodingReasoningEffort: "low",
+      codexReviewReasoningEffort: "high",
+    });
+    expect(await prisma.runtimeSetting.findMany({ where: { environment: "test" } }))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ key: "CODEX_CODING_MODEL", value: "gpt-5.6-api-coding" }),
+        expect.objectContaining({ key: "CODEX_REVIEW_MODEL", value: "gpt-5.6-api-review" }),
+        expect.objectContaining({ key: "CODEX_CODING_REASONING_EFFORT", value: "low" }),
+        expect.objectContaining({ key: "CODEX_REVIEW_REASONING_EFFORT", value: "high" }),
+      ]));
     expect(await prisma.runtimeSetting.findMany({ where: { environment: "test" } }))
       .toEqual(expect.arrayContaining([
         expect.objectContaining({ key: "TELEGRAM_BOT_TOKEN", secret: true }),
