@@ -163,6 +163,7 @@ export const runImplementation: JobFlow = async (context) => {
       exitCode: implementation.exitCode,
     });
     if (!finished) return;
+    // DECOMPOSITION deliberately inherits the coding profile snapshot from its implementation job.
     const decomposition = await jobRepository.tryCreateQueued({
       repositoryId: job.repositoryId,
       scanRunId: job.scanRunId ?? undefined,
