@@ -50,7 +50,8 @@ export function SystemHealthCard({ dashboard, health, status, needsAttention }: 
             {services.map((service) => <li key={service.name} className="service-state" data-state={service.state} aria-label={`${service.name}: ${serviceStateLabel[service.state]}. ${service.detail}`}>{service.name}<span className="service-state-label">{serviceStateLabel[service.state]}</span></li>)}
           </ul>
         </dd></div>
-        <div className="health-fact"><dt>Provider</dt><dd>{statusLabel(status.provider)} · {status.model}</dd></div>
+        <div className="health-fact"><dt>Provider</dt><dd>{statusLabel(status.provider)}</dd></div>
+        <div className="health-fact"><dt>Models</dt><dd>Coding: {status.agentProfiles.coding.model}<br />Review: {status.agentProfiles.review.model}</dd></div>
         <div className="health-fact"><dt>Version</dt><dd>{status.version}</dd></div>
         <div className="health-fact"><dt>Runtime</dt><dd>{providerVersion}</dd></div>
         <div className="health-fact"><dt>Schedule</dt><dd><span className="mono">{status.schedule.cron}</span> · {status.schedule.timezone}</dd></div>

@@ -1,7 +1,8 @@
 # Swarmloom — deployment and operations
 
-This is the operator guide for the implementation in this repository. Commands use Docker Compose
-v2 and the production file `docker-compose.production.yaml`. Run them from the repository root.
+This is the canonical operator guide for the implementation in this repository. For the product
+overview, see the [README](../README.md). Commands use Docker Compose v2 and the production file
+`docker-compose.production.yaml`; run them from the repository root.
 
 ## What the application does
 
@@ -219,9 +220,12 @@ validation.
 | `AGENT_RUNTIME_DIR` | `/app/agent-runtime` | Canonical runtime path inside the container |
 | `AGENT_RUNTIME_HOST_PATH` | `./agent-runtime`, local Compose only | Host directory mounted read-only at `AGENT_RUNTIME_DIR` during development |
 | `AGENT_PROVIDER` | required; `codex` example | Exactly `codex` or `opencode` |
-| `CODEX_MODEL` | `gpt-5.6-luna` | Codex model stored on each queued job |
-| `CODEX_REASONING_EFFORT` | `max` | Codex reasoning setting; supports validated CLI values |
-| `OPENCODE_MODEL` | `opencode-go/deepseek-v4-flash` | OpenCode `provider/model` stored on each queued job |
+| `CODEX_CODING_MODEL` | `gpt-5.6-luna` | Codex model stored on coding jobs (`IMPLEMENTATION`, `FIX`, and `DECOMPOSITION`) |
+| `CODEX_REVIEW_MODEL` | `gpt-5.6-luna` | Codex model stored on `REVIEW` jobs |
+| `CODEX_CODING_REASONING_EFFORT` | `max` | Codex reasoning setting stored on coding jobs; supports validated CLI values |
+| `CODEX_REVIEW_REASONING_EFFORT` | `max` | Codex reasoning setting stored on review jobs; supports validated CLI values |
+| `OPENCODE_CODING_MODEL` | `opencode-go/deepseek-v4-flash` | OpenCode `provider/model` stored on coding jobs |
+| `OPENCODE_REVIEW_MODEL` | `opencode-go/deepseek-v4-flash` | OpenCode `provider/model` stored on `REVIEW` jobs |
 | `CODEX_HOME` | `/data/codex-home` | Persistent Codex auth/config directory |
 | `XDG_DATA_HOME` | `/data/opencode-data` | Persistent OpenCode data/auth root |
 | `XDG_CONFIG_HOME` | `/data/opencode-config` | Persistent XDG config root |
@@ -341,7 +345,7 @@ history; **Job detail** for lifecycle facts, long output, review evidence, cance
 empty, API-unavailable, invalid-repository, stale/failed, and narrow-screen states are explicit.
 
 - `GET /health` — database, scheduler, provider, and worker heartbeat status;
-- `GET /status` — safe configuration, selected provider/model, Telegram state;
+- `GET /status` — safe configuration, selected provider, coding/review model profiles, Telegram state;
 - `GET /dashboard` — counts, repositories, scans, recent jobs, heartbeats;
 - `GET /jobs` and `GET /jobs/:id` — filtered history and timeline;
 - `GET /repositories`, `GET /scans`, `GET /events` — operational history;
@@ -421,15 +425,18 @@ The default tested configuration is:
 
 ```dotenv
 AGENT_PROVIDER=codex
-CODEX_MODEL=gpt-5.6-luna
-CODEX_REASONING_EFFORT=max
+CODEX_CODING_MODEL=gpt-5.6-luna
+CODEX_REVIEW_MODEL=gpt-5.6-luna
+CODEX_CODING_REASONING_EFFORT=max
+CODEX_REVIEW_REASONING_EFFORT=max
 CODEX_HOME=/data/codex-home
 ```
 
 Each invocation is a new `codex exec --json` process using `workspace-write`, automatic approval
-review, the configured model/reasoning, the assigned worktree, and the response file path. The
+review, the role-specific model/reasoning, the assigned worktree, and the response file path. The
 adapter does not resume an earlier thread. Auth persists in `codex_home`; the canonical runtime is
-not stored there.
+not stored there. Coding and review reasoning effort are separate so each role can be tuned for its
+quality and cost needs.
 
 OpenAI documents `codex exec`, JSONL, output schemas, and sandbox flags in the official [Codex CLI
 reference](https://developers.openai.com/codex/cli/reference). Account/device login, `CODEX_HOME`,
@@ -445,9 +452,9 @@ docker compose --env-file .env.production -f docker-compose.production.yaml exec
 curl --fail http://127.0.0.1:18421/api/status
 ```
 
-The definitive test is the disposable-repository E2E in **First deployment**. Confirm the job row
-shows provider `CODEX`, model `gpt-5.6-luna`, reasoning `max`, a session ID, PR, and independent
-review. A login-status check alone does not spend tokens and does not prove model access.
+The definitive test is the disposable-repository E2E in **First deployment**. Confirm the coding and
+review job rows show their configured `CODEX` model/reasoning snapshots, session IDs, a PR, and an
+independent review. A login-status check alone does not spend tokens and does not prove model access.
 
 ## OpenCode configuration
 
@@ -455,7 +462,8 @@ The default is:
 
 ```dotenv
 AGENT_PROVIDER=opencode
-OPENCODE_MODEL=opencode-go/deepseek-v4-flash
+OPENCODE_CODING_MODEL=opencode-go/deepseek-v4-flash
+OPENCODE_REVIEW_MODEL=opencode-go/deepseek-v4-flash
 XDG_DATA_HOME=/data/opencode-data
 OPENCODE_CONFIG_DIR=/data/opencode-config
 OPENCODE_PERMISSION={"*":"allow"}
@@ -484,8 +492,9 @@ container once and store its key in the persistent `opencode_data` volume:
    docker compose --env-file .env.production -f docker-compose.production.yaml exec worker opencode models opencode-go
    ```
 
-`OPENCODE_MODEL` uses the OpenCode Go model id format `opencode-go/<model-id>` (for example
-`opencode-go/deepseek-v4-flash`). Set any `provider/model` that the authenticated provider exposes.
+`OPENCODE_CODING_MODEL` and `OPENCODE_REVIEW_MODEL` use the OpenCode Go model id format
+`opencode-go/<model-id>` (for example `opencode-go/deepseek-v4-flash`). Set any `provider/model`
+that the authenticated provider exposes.
 
 See the official OpenCode [installation](https://opencode.ai/docs/), [CLI](https://opencode.ai/docs/cli/),
 [provider](https://opencode.ai/docs/providers/), and [model](https://opencode.ai/docs/models/)
@@ -501,16 +510,16 @@ docker compose --env-file .env.production -f docker-compose.production.yaml exec
 curl --fail http://127.0.0.1:18421/api/status
 ```
 
-Run the same disposable issue E2E and confirm provider `OPENCODE`, model
-`opencode-go/deepseek-v4-flash`, JSONL events, PR, and separate review. Model listing can require
-network access and does not replace a real job.
+Run the same disposable issue E2E and confirm provider `OPENCODE`, the coding/review model snapshots,
+JSONL events, PR, and separate review. Model listing can require network access and does not replace
+a real job.
 
 ## Switching agent provider
 
-1. Finish/cancel currently active work. Queued jobs retain their provider/model snapshot and a
-   worker claims only jobs matching its configured provider.
+1. Finish/cancel currently active work. Queued jobs retain their provider/model/reasoning snapshot;
+   new jobs use the coding and review profiles in Settings.
 2. Complete the interactive login for the destination provider and verify its CLI as above.
-3. Change only `AGENT_PROVIDER` plus the destination model setting in `.env.production`.
+3. Change only `AGENT_PROVIDER` plus the destination coding/review model settings in `.env.production`.
 4. Recreate backend and worker:
 
    ```bash
@@ -518,7 +527,7 @@ network access and does not replace a real job.
    curl --fail http://127.0.0.1:18421/api/status
    ```
 
-5. Run a new scan. New jobs snapshot the newly selected provider/model. Old history remains
+5. Run a new scan. New jobs snapshot the newly selected provider/model profiles. Old history remains
    unchanged. If unmatched queued jobs remain from the previous provider, switch back to drain or
    cancel/retry them deliberately.
 
@@ -734,15 +743,15 @@ The repository becomes `INVALID`, emits `REPOSITORY_INVALID`, and queues no issu
 - `codex login status` must succeed after completing the login from the online worker.
 - Confirm `CODEX_HOME=/data/codex-home` and that `codex_home` is mounted into backend and worker.
 - Re-run device login with `docker compose exec worker codex login --device-auth`.
-- Verify the configured account can access `CODEX_MODEL`.
+- Verify the configured account can access both `CODEX_CODING_MODEL` and `CODEX_REVIEW_MODEL`.
 
 ### OpenCode authentication/runtime
 
 - Confirm `/data/opencode-data/opencode/auth.json` is present and contains the `opencode-go`
   provider after following **OpenCode configuration** above.
 - Run `opencode auth list` and `opencode models opencode-go` in the worker container.
-- Confirm the model is in `provider/model` format (for example `opencode-go/deepseek-v4-flash`) and
-  that outbound access to provider/model catalogs is allowed.
+- Confirm both model settings use `provider/model` format (for example
+  `opencode-go/deepseek-v4-flash`) and that outbound access to provider/model catalogs is allowed.
 
 ### Telegram
 
@@ -759,9 +768,10 @@ directories.
 
 ### Provider mismatch after switching
 
-Each job stores the provider/model snapshot captured at discovery. New scans use the values in
-Settings, while the worker keeps both provider adapters available so switching does not strand
-queued work.
+Each job stores the provider/model/reasoning snapshot captured at discovery. Coding jobs use the
+coding profile; independent review jobs use the review profile; decomposition jobs inherit the
+coding snapshot from the implementation job that created them. New scans use the current Settings,
+while the worker keeps both provider adapters available so switching does not strand queued work.
 
 ## External verification gate
 

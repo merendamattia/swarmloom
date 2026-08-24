@@ -31,9 +31,12 @@ export type SettingsPatch = {
   scheduleTimezone?: string;
   maxParallelJobs?: number;
   agentProvider?: "codex" | "opencode";
-  opencodeModel?: string;
-  codexModel?: string;
-  codexReasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  opencodeCodingModel?: string;
+  opencodeReviewModel?: string;
+  codexCodingModel?: string;
+  codexReviewModel?: string;
+  codexCodingReasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  codexReviewReasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   telegramEnabled?: boolean;
   telegramBotToken?: string;
   telegramChatId?: string;

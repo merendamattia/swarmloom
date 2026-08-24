@@ -1,0 +1,146 @@
+{
+  "startMs": 500,
+  "defaultDuration": 400,
+  "elements": [
+    {
+      "id": "lifecycle-title",
+      "order": 1,
+      "duration": 300
+    },
+    {
+      "id": "lifecycle-subtitle",
+      "order": 1,
+      "duration": 300
+    },
+    {
+      "id": "lifecycle-issue-ready",
+      "order": 2,
+      "duration": 450
+    },
+    {
+      "id": "lifecycle-issue-ready-text",
+      "order": 2,
+      "duration": 300
+    },
+    {
+      "id": "lifecycle-a1",
+      "order": 3,
+      "duration": 350
+    },
+    {
+      "id": "lifecycle-implementation",
+      "order": 4,
+      "duration": 450
+    },
+    {
+      "id": "lifecycle-implementation-text",
+      "order": 4,
+      "duration": 300
+    },
+    {
+      "id": "lifecycle-a2",
+      "order": 5,
+      "duration": 350
+    },
+    {
+      "id": "lifecycle-pr-requested",
+      "order": 6,
+      "duration": 450
+    },
+    {
+      "id": "lifecycle-pr-requested-text",
+      "order": 6,
+      "duration": 300
+    },
+    {
+      "id": "lifecycle-a3",
+      "order": 7,
+      "duration": 350
+    },
+    {
+      "id": "lifecycle-review",
+      "order": 8,
+      "duration": 450
+    },
+    {
+      "id": "lifecycle-review-text",
+      "order": 8,
+      "duration": 300
+    },
+    {
+      "id": "lifecycle-pass",
+      "order": 9,
+      "duration": 400
+    },
+    {
+      "id": "lifecycle-pr-passed",
+      "order": 10,
+      "duration": 450
+    },
+    {
+      "id": "lifecycle-pr-passed-text",
+      "order": 10,
+      "duration": 300
+    },
+    {
+      "id": "lifecycle-issue-merge",
+      "order": 11,
+      "duration": 450
+    },
+    {
+      "id": "lifecycle-issue-merge-text",
+      "order": 11,
+      "duration": 300
+    },
+    {
+      "id": "lifecycle-human-merge",
+      "order": 12,
+      "duration": 450
+    },
+    {
+      "id": "lifecycle-human-merge-text",
+      "order": 12,
+      "duration": 300
+    },
+    {
+      "id": "lifecycle-issue-done",
+      "order": 13,
+      "duration": 450
+    },
+    {
+      "id": "lifecycle-issue-done-text",
+      "order": 13,
+      "duration": 300
+    },
+    {
+      "id": "lifecycle-requested",
+      "order": 14,
+      "duration": 400
+    },
+    {
+      "id": "lifecycle-fix-requested",
+      "order": 15,
+      "duration": 450
+    },
+    {
+      "id": "lifecycle-fix-requested-text",
+      "order": 15,
+      "duration": 300
+    },
+    {
+      "id": "lifecycle-fix",
+      "order": 16,
+      "duration": 450
+    },
+    {
+      "id": "lifecycle-fix-text",
+      "order": 16,
+      "duration": 300
+    },
+    {
+      "id": "lifecycle-loop",
+      "order": 17,
+      "duration": 500
+    }
+  ]
+}

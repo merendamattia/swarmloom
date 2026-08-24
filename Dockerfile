@@ -108,6 +108,8 @@ RUN --mount=type=cache,target=/tmp/npx-cache,uid=1000,gid=1000 \
       --global --agent codex opencode claude-code --copy --yes \
   && npx --yes skills@latest add https://github.com/tanstack-skills/tanstack-skills \
       --skill tanstack-query --global --agent codex opencode claude-code --copy --yes \
+  && npx --yes skills@latest add muthuishere/hand-drawn-diagrams \
+      --global --agent codex opencode claude-code --copy --yes \
   && npx --yes skills@latest add ramziddin/solid-skills \
       --global --agent codex opencode claude-code --copy --yes
 

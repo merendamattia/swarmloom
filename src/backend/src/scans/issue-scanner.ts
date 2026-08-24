@@ -1,5 +1,5 @@
 import type { Repository } from "@prisma/client";
-import { configuredAgent } from "../providers/index.ts";
+import { agentProfileForJobType, configuredAgent } from "../providers/index.ts";
 import { acquireIssue, queueJob, safeError, type ScannerShared } from "./common.ts";
 
 export type IssueScannerDependencies = ScannerShared;
@@ -9,7 +9,7 @@ export function createIssueScanner(shared: ScannerShared) {
 
   async function run(repository: Repository, fullName: string, scanRunId: string) {
     const queued: Array<{ jobId: string; info: Parameters<typeof events.notifyQueuedSummary>[1][number] }> = [];
-    const agent = configuredAgent(config);
+    const agent = configuredAgent(config, agentProfileForJobType("IMPLEMENTATION"));
     const issues = await github.listReadyIssues(fullName, config.ISSUE_READY_LABEL);
     for (const issue of issues) {
       const branchName = `agent/issue-${issue.number}-${crypto.randomUUID().slice(0, 8)}`;

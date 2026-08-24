@@ -14,7 +14,7 @@ describe("Telegram notifier", () => {
       },
     });
     await notifier.send({
-      type: "JOB_COMPLETED",
+      type: "PR_OPENED",
       message: "Done <safely>",
       id: "event-1",
       jobId: "job-1",
@@ -25,7 +25,7 @@ describe("Telegram notifier", () => {
     });
     expect(await requests[0].json()).toEqual({
       chat_id: "123",
-      text: "✅ <b>Job completed</b>\nDone &lt;safely&gt;\n\n🔗 <a href=\"https://github.com/acme/api/issues/7\">Issue</a> · <a href=\"https://github.com/acme/api/pull/8\">Pull request</a> · <a href=\"http://localhost:18420/jobs/job-1\">Dashboard</a>",
+      text: "🔗 <b>Pull request opened</b>\nDone &lt;safely&gt;\n\n🔗 <a href=\"https://github.com/acme/api/issues/7\">Issue</a> · <a href=\"https://github.com/acme/api/pull/8\">Pull request</a> · <a href=\"http://localhost:18420/jobs/job-1\">Dashboard</a>",
       parse_mode: "HTML",
       disable_web_page_preview: true,
     });
@@ -39,9 +39,9 @@ describe("Telegram notifier", () => {
       .rejects.toThrow("[REDACTED]");
   });
 
-  test("appends compact pull request details to completion and opened events", async () => {
+  test("appends compact pull request details to opened events", async () => {
     const request = await telegramRequest({
-      type: "JOB_COMPLETED",
+      type: "PR_OPENED",
       message: "Completed acme/api#7 with PR #8 using codex/gpt-5.6-luna in 120s",
       id: "event-3",
       jobId: "job-3",
@@ -63,7 +63,7 @@ describe("Telegram notifier", () => {
       parse_mode: "HTML",
       disable_web_page_preview: true,
     });
-    expect(request.text).toContain("✅ <b>Job completed</b>");
+    expect(request.text).toContain("🔗 <b>Pull request opened</b>");
     expect(request.text).toContain("Implemented &lt;durability&gt; safely.");
     expect(request.text).not.toContain("Completed acme/api#7");
     expect(request.text).toContain("<b>PR #8:</b> Fix queue &lt;durability&gt;");
@@ -75,7 +75,7 @@ describe("Telegram notifier", () => {
 
   test("keeps TL;DR notifications within Telegram's message limit", async () => {
     const request = await telegramRequest({
-      type: "JOB_COMPLETED",
+      type: "PR_OPENED",
       message: "Generic lifecycle message",
       id: "event-5",
       metadata: {
@@ -99,6 +99,16 @@ describe("Telegram notifier", () => {
     });
 
     expect(request.text).toBe("🔗 <b>Pull request opened</b>\nOpened PR #8 for acme/api#7\n\n🔗 <a href=\"https://github.com/acme/api/pull/8\">Pull request</a>");
+  });
+
+  test("combines the passed review and ready-to-merge states", async () => {
+    const request = await telegramRequest({
+      type: "READY_TO_MERGE",
+      message: "Review passed",
+      id: "event-6",
+    });
+
+    expect(request.text).toContain("🎉 <b>Review passed · Ready to merge</b>");
   });
 
   async function telegramRequest(event: Parameters<ReturnType<typeof createTelegramNotifier>["send"]>[0]) {
