@@ -37,21 +37,7 @@ without hiding them behind an opaque conversation:
 The lifecycle is driven by GitHub state. Each scanner observes the current issue or PR labels,
 records a durable job, and lets a worker perform the work asynchronously.
 
-```mermaid
-flowchart LR
-    issue([Issue<br/>agent:ready]) --> implementation[IMPLEMENTATION]
-    implementation --> pullRequest([Pull request<br/>review-requested])
-    pullRequest --> review[REVIEW<br/>exact head SHA]
-
-    review -->|passes| reviewPassed([PR<br/>review-passed])
-    reviewPassed --> readyToMerge([Issue<br/>ready-to-merge])
-    readyToMerge --> humanMerge[Human merge]
-    humanMerge --> done([Issue<br/>agent:done])
-
-    review -->|changes requested| fixRequested([PR<br/>fix-requested])
-    fixRequested --> fix[FIX<br/>same PR branch]
-    fix -.->|review again| review
-```
+![Swarmloom issue-to-merge lifecycle](docs/assets/swarmloom-lifecycle.svg)
 
 1. A repository issue receives `agent:ready`.
 2. The issue scanner queues an `IMPLEMENTATION` job. The worker creates a branch and worktree,
@@ -74,34 +60,7 @@ guarded PostgreSQL transitions; provider adapters keep Codex and OpenCode behind
 Coding models handle implementation, fixes, and decomposition; review models are configured
 independently for pull request reviews.
 
-```mermaid
-flowchart TB
-    subgraph delivery[Delivery path]
-        direction LR
-        github([GitHub<br/>issues + PRs]) --> api[API + Scheduler<br/>reconcile]
-        api --> queue[BullMQ + Redis<br/>deliver + lock]
-        queue --> workers[Workers<br/>only executor]
-        workers --> providers([Codex / OpenCode<br/>provider adapters])
-    end
-
-    subgraph durable[Durable state and worker storage]
-        direction LR
-        postgres[(PostgreSQL<br/>business state + history)]
-        worktrees[Worktrees<br/>isolated repositories]
-    end
-
-    subgraph surfaces[Operating surfaces]
-        direction LR
-        dashboard([Dashboard])
-        telegram([Telegram<br/>optional events])
-    end
-
-    api -->|record state| postgres
-    workers -->|guard claims| postgres
-    workers -->|isolate work| worktrees
-    dashboard -.->|reads API| api
-    workers -.->|selected events| telegram
-```
+![Swarmloom runtime architecture](docs/assets/swarmloom-architecture.svg)
 
 PostgreSQL is the durable business-state and history authority. Redis/Valkey is the BullMQ delivery
 authority. Local Compose provisions Redis; production deployments use externally managed PostgreSQL
