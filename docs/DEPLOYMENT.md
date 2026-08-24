@@ -1,7 +1,8 @@
 # Swarmloom — deployment and operations
 
-This is the operator guide for the implementation in this repository. Commands use Docker Compose
-v2 and the production file `docker-compose.production.yaml`. Run them from the repository root.
+This is the canonical operator guide for the implementation in this repository. For the product
+overview, see the [README](../README.md). Commands use Docker Compose v2 and the production file
+`docker-compose.production.yaml`; run them from the repository root.
 
 ## What the application does
 
