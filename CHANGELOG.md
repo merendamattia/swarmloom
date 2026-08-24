@@ -1,3 +1,19 @@
+# [1.13.0](https://github.com/merendamattia/swarmloom/compare/v1.12.0...v1.13.0) (2026-08-24)
+
+
+### Bug Fixes
+
+* **docs:** add responsive mobile diagrams ([a82f013](https://github.com/merendamattia/swarmloom/commit/a82f01327980b1908ad7a22ec550ddfaed8f26f9))
+* **docs:** clarify diagram labels and ownership ([3d2a77d](https://github.com/merendamattia/swarmloom/commit/3d2a77daa91443c5e80221057fda074fedf3707f))
+* **docs:** connect mobile review pass path ([7a4d2e7](https://github.com/merendamattia/swarmloom/commit/7a4d2e7232374faf8eb10935276bc91e2b111c7f))
+* **docs:** simplify diagrams with hand-drawn sources ([25317f1](https://github.com/merendamattia/swarmloom/commit/25317f18dd9f169d9632122bb5cc799ae92bca58))
+
+
+### Features
+
+* **notifications:** reduce Telegram lifecycle noise ([b595807](https://github.com/merendamattia/swarmloom/commit/b5958075dfe8d609b8cd075c97948d693f4c6824))
+* **settings:** configure coding and review agent models ([b97fe71](https://github.com/merendamattia/swarmloom/commit/b97fe71e98b2381c126772157165ef63ee769fc3))
+
 # [1.12.0](https://github.com/merendamattia/swarmloom/compare/v1.11.0...v1.12.0) (2026-08-23)
 
 
