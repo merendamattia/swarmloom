@@ -1,3 +1,16 @@
+# [1.14.0](https://github.com/merendamattia/swarmloom/compare/v1.13.0...v1.14.0) (2026-08-28)
+
+
+### Bug Fixes
+
+* **docs:** normalize rendered diagram files ([9daa98e](https://github.com/merendamattia/swarmloom/commit/9daa98efdbf8f5c3375667db947f97a126075dec))
+* **docs:** restore README diagram rendering ([bed0e6f](https://github.com/merendamattia/swarmloom/commit/bed0e6f4b5e6688776563fe7b35f2be19bdd21c7)), closes [#134](https://github.com/merendamattia/swarmloom/issues/134)
+
+
+### Features
+
+* **frontend:** refine job history views ([528a9ab](https://github.com/merendamattia/swarmloom/commit/528a9ab16bad2d1a7294b188cb0de92d342a8812))
+
 # [1.13.0](https://github.com/merendamattia/swarmloom/compare/v1.12.0...v1.13.0) (2026-08-24)
 
 
