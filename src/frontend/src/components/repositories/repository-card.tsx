@@ -1,6 +1,6 @@
 "use client";
 
-import { CircleAlert, Trash2 } from "lucide-react";
+import { ChevronRight, CircleAlert, GitBranch, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import { FactList } from "@/components/ui/fact-list";
 import { ActionMessage } from "@/components/ui/feedback";
 import { StatusPill } from "@/components/ui/status-pill";
 import { useRemoveRepository, type Repositories } from "@/hooks/api";
-import { dateTime, shortCommit } from "@/lib/format";
+import { dateTime, shortCommit, statusLabel, subjectLabel } from "@/lib/format";
 
 export function RepositoryCard({ repository }: { repository: Repositories[number] }) {
   const [confirmingRemove, setConfirmingRemove] = useState(false);
@@ -18,7 +18,7 @@ export function RepositoryCard({ repository }: { repository: Repositories[number
   return (
     <article className="repository-card">
       <div className="repository-head">
-        <div><h2>{repository.fullName}</h2><p className="muted">{repository.developAvailable ? "origin/develop is available and synchronized during scans." : "origin/develop is not available for worker jobs."}</p></div>
+        <div className="repository-identity"><span className="repository-icon"><GitBranch aria-hidden="true" /></span><div><h2>{repository.fullName}</h2><p className="muted">{repository.developAvailable ? "origin/develop is available and synchronized during scans." : "origin/develop is not available for worker jobs."}</p></div></div>
         <div className="repository-actions"><StatusPill status={repository.status} /><Button variant="danger" onClick={() => setConfirmingRemove(true)} disabled={remove.isPending}><Trash2 aria-hidden="true" />{remove.isPending ? "Removing…" : "Remove"}</Button></div>
       </div>
       {repository.errorMessage ? <div className="notice" role="alert"><CircleAlert aria-hidden="true" /><div><strong>Repository cannot be processed</strong><p>{repository.errorMessage}</p></div></div> : null}
@@ -29,10 +29,10 @@ export function RepositoryCard({ repository }: { repository: Repositories[number
         { label: "Local clone", value: repository.localPath ?? "Not created", mono: true },
       ]} />
       <div className="repository-jobs">
-        <h3>Recent jobs</h3>
+        <div className="repository-jobs-heading"><h3>Recent jobs</h3><span>Latest five</span></div>
         {repository.jobs.length
-          ? repository.jobs.map((job) => <div className="repository-job" key={job.id}><StatusPill status={job.status} /><Link href={`/jobs/${job.id}`}>#{job.issueNumber} {job.issueTitle}</Link><span className="list-meta">{dateTime(job.createdAt)}</span></div>)
-          : <EmptyState title="No jobs recorded" description="A ready-labelled issue will appear after the next successful scan." />}
+          ? <ul className="repository-job-list">{repository.jobs.map((job) => <li key={job.id}><Link className="repository-job" href={`/jobs/${job.id}`}><StatusPill status={job.status} /><span className="repository-job-copy"><strong>{subjectLabel(job.subjectType, job.issueNumber, job.pullRequestNumber)} {job.issueTitle}</strong><span>{statusLabel(job.jobType)} · {statusLabel(job.provider)} · {job.reasoningEffort ? `${statusLabel(job.reasoningEffort)} reasoning` : "Provider default"} · {dateTime(job.createdAt)}</span></span><ChevronRight aria-hidden="true" /></Link></li>)}</ul>
+          : <EmptyState title="No jobs recorded" description="A ready-labelled issue will appear after the next successful scan." tone="neutral" />}
       </div>
       <ActionMessage pending={remove.isPending} error={remove.error} success={remove.isSuccess} pendingText={`Removing ${repository.fullName}…`} successText="Repository removed." />
       <ConfirmDialog

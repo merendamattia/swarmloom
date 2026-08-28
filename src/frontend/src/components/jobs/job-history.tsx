@@ -16,11 +16,11 @@ export function JobHistory({ jobs, filters, fetching, onPage }: {
     <Panel aria-busy={fetching}>
       <SectionHeading title="Job history" description={`${jobs.total} ${jobs.total === 1 ? "job" : "jobs"} found${fetching ? " · refreshing" : ""}.`} />
       {jobs.items.length ? <JobTable jobs={jobs.items} /> : <EmptyState title="No jobs match these filters" description="Clear one or more filters, or run a scan to discover new work." />}
-      <nav className="pagination" aria-label="Job history pagination">
-        <Button variant="secondary" disabled={filters.page <= 1} onClick={() => onPage(filters.page - 1)}>Previous page</Button>
-        <span className="list-meta">Page {jobs.page} of {totalPages}</span>
-        <Button variant="secondary" disabled={filters.page >= totalPages} onClick={() => onPage(filters.page + 1)}>Next page</Button>
-      </nav>
+      {totalPages > 1 ? <nav className="pagination" aria-label="Job history pagination">
+          <Button variant="secondary" disabled={filters.page <= 1} onClick={() => onPage(filters.page - 1)}>Previous page</Button>
+          <span className="list-meta">Page {jobs.page} of {totalPages}</span>
+          <Button variant="secondary" disabled={filters.page >= totalPages} onClick={() => onPage(filters.page + 1)}>Next page</Button>
+        </nav> : null}
     </Panel>
   );
 }

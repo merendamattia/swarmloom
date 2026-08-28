@@ -67,6 +67,18 @@ describe("shared UI architecture", () => {
     expect(contents).toContain("@/components/ui/dashboard-sidebar");
   });
 
+  test("overview routes the five-job summary to the complete job history", async () => {
+    const contents = await source("src/components/overview/overview-history.tsx");
+    expect(contents).toContain('href="/jobs"');
+    expect(contents).toContain("View all jobs");
+  });
+
+  test("repository job rows show provider and reasoning", async () => {
+    const contents = await source("src/components/repositories/repository-card.tsx");
+    expect(contents).toContain("statusLabel(job.provider)");
+    expect(contents).toContain("job.reasoningEffort");
+  });
+
   test("important actions use the shared confirmation dialog", async () => {
     const consumers = [
       "src/app/(app)/page.tsx",

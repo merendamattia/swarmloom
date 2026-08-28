@@ -1,10 +1,7 @@
-"use client";
-
 import { GitPullRequest } from "lucide-react";
 import Link from "next/link";
 import { EmptyState } from "@/components/ui/empty-state";
 import { JobKindPill, StatusPill } from "@/components/ui/status-pill";
-import { TextLink } from "@/components/ui/text-link";
 import type { Jobs } from "@/hooks/api";
 import { dateTime, duration, shortCommit, statusLabel, subjectLabel, triggerLabel } from "@/lib/format";
 
@@ -14,25 +11,34 @@ export function JobTable({ jobs, compact = false }: { jobs: JobSummary[]; compac
   if (jobs.length === 0) return <EmptyState title="No jobs found" description="Run a scan or adjust the filters to find durable job history." />;
   return (
     <div className="table-wrap">
-      <table className="data-table">
-        <thead><tr><th>Status</th><th>Subject</th><th>Repository</th><th>Provider</th>{compact ? null : <th>Duration</th>}<th>Created</th><th><span className="sr-only">Details</span></th></tr></thead>
+      <table className="data-table" data-compact={compact || undefined}>
+        <caption className="sr-only">{compact ? "Five most recent jobs" : "Complete job history"}</caption>
+        <thead><tr><th className="job-status-heading">Status</th><th className="job-main-heading">Job</th><th>Repository</th><th>Agent</th><th>{compact ? "Started" : "Timing"}</th></tr></thead>
         <tbody>
           {jobs.map((job) => {
             const trigger = triggerLabel(job.trigger);
+            const context = [
+              job.headSha ? `head ${shortCommit(job.headSha)}` : null,
+              trigger,
+              job.review?.status && job.jobType === "REVIEW" ? statusLabel(job.review.status) : null,
+            ].filter(Boolean).join(" · ");
             return (
               <tr key={job.id}>
-                <td data-label="Status"><StatusPill status={job.status} /></td>
-                <td data-label="Subject">
-                  <JobKindPill jobType={job.jobType} />
-                  <Link className="row-title" href={`/jobs/${job.id}`}>{subjectLabel(job.subjectType, job.issueNumber, job.pullRequestNumber)} {job.issueTitle}</Link>
-                  {job.pullRequestUrl ? <a className="inline-meta" href={job.pullRequestUrl} target="_blank" rel="noreferrer"><GitPullRequest aria-hidden="true" />PR {job.pullRequestNumber}</a> : null}
-                  <p className="list-meta">{job.headSha ? `head ${shortCommit(job.headSha)} · ` : ""}{trigger ?? ""}{job.review?.status && job.jobType === "REVIEW" ? `${trigger ? " · " : ""}${statusLabel(job.review.status)}` : ""}</p>
+                <td className="job-status-cell" data-label="Status"><StatusPill status={job.status} /></td>
+                <td className="job-main-cell" data-label="Job">
+                  <div className="job-meta-line">
+                    <JobKindPill jobType={job.jobType} />
+                    <span>{subjectLabel(job.subjectType, job.issueNumber, job.pullRequestNumber)}</span>
+                    {context ? <span>{context}</span> : null}
+                  </div>
+                  <div className="job-title-line">
+                    <Link className="job-title" href={`/jobs/${job.id}`}>{job.issueTitle}</Link>
+                    {job.pullRequestUrl ? <a className="job-pr-link" href={job.pullRequestUrl} target="_blank" rel="noreferrer" aria-label={`Open pull request ${job.pullRequestNumber}`}><GitPullRequest aria-hidden="true" />PR {job.pullRequestNumber}</a> : null}
+                  </div>
                 </td>
-                <td data-label="Repository">{job.repository.fullName}</td>
-                <td data-label="Provider">{statusLabel(job.provider)} · {job.model}</td>
-                {compact ? null : <td data-label="Duration" className="numeric">{duration(job.durationMs)}</td>}
-                <td data-label="Created" className="numeric">{dateTime(job.createdAt)}</td>
-                <td data-label="Details"><TextLink href={`/jobs/${job.id}`} aria-label={`Open job ${job.repository.fullName} ${subjectLabel(job.subjectType, job.issueNumber, job.pullRequestNumber)}`}>Inspect</TextLink></td>
+                <td data-label="Repository"><span className="job-repository">{job.repository.fullName}</span></td>
+                <td data-label="Agent"><span className="job-agent"><strong>{statusLabel(job.provider)}</strong><span>{job.model}</span><span>{job.reasoningEffort ? `${statusLabel(job.reasoningEffort)} reasoning` : "Provider default"}</span></span></td>
+                <td data-label={compact ? "Started" : "Timing"} className="numeric"><span className="job-timing"><time dateTime={job.createdAt}>{dateTime(job.createdAt)}</time>{compact ? null : <span>{duration(job.durationMs)}</span>}</span></td>
               </tr>
             );
           })}

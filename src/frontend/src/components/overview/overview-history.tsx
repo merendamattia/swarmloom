@@ -8,7 +8,7 @@ import type { Dashboard } from "@/hooks/api";
 import { dateTime, duration, shortCommit, statusLabel } from "@/lib/format";
 
 export function RecentJobsSection({ jobs }: { jobs: Dashboard["recentJobs"] }) {
-  return <section aria-labelledby="recent-title"><SectionHeading id="recent-title" title="Recent jobs" description="The latest durable outcomes across configured repositories." action={<TextLink href="/jobs">View full history</TextLink>} /><JobTable jobs={jobs} compact /></section>;
+  return <Panel aria-labelledby="recent-title"><SectionHeading id="recent-title" title="Recent jobs" description="The five latest durable outcomes across configured repositories." action={<TextLink href="/jobs">View all jobs</TextLink>} /><JobTable jobs={jobs} compact /></Panel>;
 }
 
 export function OverviewHistory({ repositories, scans }: { repositories: Dashboard["repositories"]; scans: Dashboard["scans"] }) {

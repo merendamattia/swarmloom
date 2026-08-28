@@ -64,6 +64,7 @@ integration("operations API", () => {
         baselineCommit: "a".repeat(40),
         provider: "CODEX",
         model: "gpt-5.6-luna",
+        reasoningEffort: "high",
       },
     });
     jobId = job.id;
@@ -147,10 +148,39 @@ integration("operations API", () => {
 
     await prisma.job.update({ where: { id: jobId }, data: { status: "RUNNING", startedAt: new Date() } });
     expect(await (await app.request("/api/dashboard")).json())
-      .toMatchObject({ activeJobs: [{ id: jobId, repository: { fullName: `acme/api-${unique}` } }] });
+      .toMatchObject({ activeJobs: [{ id: jobId, reasoningEffort: "high", repository: { fullName: `acme/api-${unique}` } }] });
 
     const jobs = await app.request(`/api/jobs?q=${unique}&provider=CODEX`);
-    expect(await jobs.json()).toMatchObject({ total: 1, items: [{ id: jobId }] });
+    expect(await jobs.json()).toMatchObject({ total: 1, items: [{ id: jobId, reasoningEffort: "high" }] });
+
+    const repositories = await app.request("/api/repositories");
+    expect(await repositories.json()).toMatchObject([{ jobs: [{ id: jobId, reasoningEffort: "high" }] }]);
+  });
+
+  test("returns only the five most recent jobs on the dashboard", async () => {
+    const jobIds = Array.from({ length: 6 }, (_, index) => `dashboard-${unique}-${index}`);
+    await prisma.job.createMany({
+      data: jobIds.map((id, index) => ({
+        id,
+        repositoryId,
+        environment: "test",
+        issueNumber: 200 + index,
+        issueTitle: `Dashboard job ${index}`,
+        issueUrl: `https://github.com/acme/api-${unique}/issues/${200 + index}`,
+        issueBody: "Dashboard history",
+        status: "COMPLETED" as const,
+        queueJobId: id,
+        branchName: `agent/issue-${200 + index}`,
+        baselineCommit: "d".repeat(40),
+        provider: "CODEX" as const,
+        model: "gpt-5.6-luna",
+        createdAt: new Date(Date.UTC(2100, 0, index + 1)),
+      })),
+    });
+
+    const dashboard = await (await app.request("/api/dashboard")).json();
+
+    expect(dashboard.recentJobs.map((job: { id: string }) => job.id)).toEqual(jobIds.slice(1).reverse());
   });
 
   test("clears resolved dashboard exceptions without hiding live state or deleting history", async () => {

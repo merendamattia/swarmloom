@@ -19,9 +19,9 @@ export default function RepositoriesPage() {
 
   return (
     <>
-      <PageHeader eyebrow="Source boundary" title="Repositories" description="Validity, develop baselines, and recent work for every configured GitHub repository." actions={<Button variant="primary" onClick={() => runScan.mutate()} disabled={runScan.isPending}><Play aria-hidden="true" />{runScan.isPending ? "Starting scan…" : "Run now"}</Button>} />
+      <PageHeader eyebrow="Source boundary" title="Repositories" description="Develop availability, captured baselines, and recent work for every configured repository." actions={<Button variant="primary" onClick={() => runScan.mutate()} disabled={runScan.isPending}><Play aria-hidden="true" />{runScan.isPending ? "Starting scan…" : "Run now"}</Button>} />
       <ActionMessage pending={runScan.isPending} error={runScan.error} success={runScan.isSuccess} pendingText="Refreshing origin/develop for every repository…" />
-      <Panel>
+      <Panel className="repositories-panel">
         <SectionHeading title="Configured repositories" description={`${repositories.data.length} ${repositories.data.length === 1 ? "repository" : "repositories"}. No fallback from the required develop branch.`} />
         {repositories.data.length ? <div className="repo-list">{repositories.data.map((repository) => (
           <RepositoryCard key={repository.id} repository={repository} />
