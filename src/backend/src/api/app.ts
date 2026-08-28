@@ -78,6 +78,7 @@ const jobSummaryFields = {
   trigger: true,
   provider: true,
   model: true,
+  reasoningEffort: true,
   startedAt: true,
   attempts: true,
   errorMessage: true,
@@ -203,7 +204,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         prisma.job.findMany({
           where: { environment: config.APP_ENV },
           orderBy: { createdAt: "desc" },
-          take: 12,
+          take: 5,
           select: jobSummarySelect,
         }),
         prisma.job.findMany({
