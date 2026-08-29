@@ -42,10 +42,11 @@ export async function runJsonlProcess(
   signal: AbortSignal | undefined,
   onJson: (event: unknown) => void | Promise<void>,
   environment = providerEnvironment(globalThis.process.env),
+  cwd?: string,
 ): Promise<ProcessResult> {
   if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
   const process = Bun.spawn(command, {
-    cwd: undefined,
+    cwd,
     env: environment,
     stdin: "pipe",
     stdout: "pipe",

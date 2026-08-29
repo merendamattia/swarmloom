@@ -81,7 +81,13 @@ export function createJobRunner({
     void heartbeatOnce();
 
     let reachedTerminalState = false;
-    const state: SessionState = { worktreeCreated: false };
+    let retainWorktree = false;
+    const state: SessionState = {
+      worktreeCreated: Boolean(job.worktreePath),
+      worktreePersisted: Boolean(job.worktreePath),
+      worktreePath: job.worktreePath ?? undefined,
+      repositoryPath: job.worktreePath ? job.repository.localPath ?? undefined : undefined,
+    };
     try {
       if (!provider) throw new Error(`No provider configured for ${job.provider}`);
       const context: RunnerContext = {
@@ -128,6 +134,7 @@ export function createJobRunner({
         errorMessage: message,
         diagnostics: diagnostics as Prisma.InputJsonValue,
       });
+      retainWorktree = reachedTerminalState && state.worktreePersisted && Boolean(state.worktreePath);
       if (reachedTerminalState) {
         await events.record({
           ...terminalEvent(job, "JOB_FAILED", message),
@@ -138,13 +145,15 @@ export function createJobRunner({
     } finally {
       heartbeatStopped = true;
       if (heartbeatTimer) clearTimeout(heartbeatTimer);
-      if (state.worktreeCreated) {
+      if (state.worktreeCreated && !retainWorktree) {
+        let removed = false;
         try {
           await removeWorktree({
             worktreePath: state.worktreePath!,
             repositoryPath: state.repositoryPath,
             gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
           });
+          removed = true;
         } catch (error) {
           await events.record({
             type: "GITHUB_RECONCILIATION_REQUIRED",
@@ -156,8 +165,9 @@ export function createJobRunner({
             metadata: { issueUrl: job.issueUrl },
           });
         }
+        if (removed) await jobRepository.clearWorktree(job.id);
       }
-      if (state.repositoryPath) {
+      if (state.repositoryPath && !retainWorktree) {
         try {
           await gc({ repositoryPath: state.repositoryPath, gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl) });
         } catch {
@@ -207,6 +217,7 @@ function createExecuteRoleWithRetry(events: EventService, config: Config, provid
     currentJob: RunningJob,
   ) {
     let guidance: string | undefined;
+    const resumeSessionId = currentJob.sessionId ?? undefined;
     for (let attempt = 0; ; attempt++) {
       const result = await executeRole(
         { config, provider, events },
@@ -216,6 +227,7 @@ function createExecuteRoleWithRetry(events: EventService, config: Config, provid
         workingDirectory,
         abortSignal,
         currentJob,
+        resumeSessionId,
       );
       onExecution(result);
       if (result.exitCode !== 0) return result;

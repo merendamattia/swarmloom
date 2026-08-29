@@ -76,6 +76,36 @@ integration("PostgreSQL job lifecycle", () => {
     expect(await jobs.cancel(retry!.id)).toBe(true);
   });
 
+  test("rearms the same failed job and keeps its recovery state", async () => {
+    const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 20));
+    const claimed = await jobs.claim(queued!.id, environment, "test-worker");
+    const worktreePath = `/data/worktrees/${claimed!.id}`;
+    await prisma.job.update({
+      where: { id: claimed!.id },
+      data: {
+        status: "FAILED",
+        activeIssueKey: null,
+        worktreePath,
+        sessionId: "session-20",
+        errorMessage: "provider failed",
+        completedAt: new Date(),
+      },
+    });
+
+    const rearmed = await jobs.requeueForRetry(claimed!.id, environment);
+
+    expect(rearmed).toMatchObject({
+      id: claimed!.id,
+      status: "QUEUED",
+      activeIssueKey: `${repositoryId}:${issuePrefix + 20}`,
+      worktreePath,
+      sessionId: "session-20",
+      attempts: 1,
+      errorMessage: "provider failed",
+    });
+    expect(await jobs.requeueForRetry(claimed!.id, environment)).toBeNull();
+  });
+
   test("deduplicates PR jobs by repository, PR, head SHA, and job kind", async () => {
     const input = queuedPrJob("REVIEW", "c".repeat(40));
     const first = await jobs.tryCreateQueued(input);

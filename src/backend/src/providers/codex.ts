@@ -18,14 +18,15 @@ function event(type: NonNullable<NormalizedProviderEvent["event"]>["type"], fiel
 }
 
 export function buildCodexCommand(request: AgentRequest) {
-  const command = [
-    "codex", "exec", "--json", "--ignore-user-config", "--model", request.model,
-    "--dangerously-bypass-approvals-and-sandbox",
-  ];
+  const command = request.resumeSessionId
+    ? ["codex", "exec", "resume", request.resumeSessionId, "--json", "--ignore-user-config", "--model", request.model,
+      "--dangerously-bypass-approvals-and-sandbox"]
+    : ["codex", "exec", "--json", "--ignore-user-config", "--model", request.model,
+      "--dangerously-bypass-approvals-and-sandbox"];
   if (request.reasoningEffort) {
     command.push("--config", `model_reasoning_effort=\"${request.reasoningEffort}\"`);
   }
-  command.push("--cd", request.workingDirectory);
+  if (!request.resumeSessionId) command.push("--cd", request.workingDirectory);
   command.push("-");
   return command;
 }
@@ -83,7 +84,14 @@ export class CodexProvider implements AgentProvider {
       request.signal,
       async (raw) => {
         const normalized = normalizeCodexEvent(raw);
-        if (normalized.sessionId) sessionId = normalized.sessionId;
+        if (normalized.sessionId) {
+          if (request.resumeSessionId && normalized.sessionId !== request.resumeSessionId) {
+            sessionError = `Codex resumed session mismatch: requested ${request.resumeSessionId}, received ${normalized.sessionId}`;
+            await request.onEvent?.(event("SESSION_FAILED", { message: sessionError }));
+            return;
+          }
+          sessionId = normalized.sessionId;
+        }
         if (normalized.output) output.push(redactSecrets(normalized.output, environment));
         if (normalized.event) {
           if (normalized.event.type === "SESSION_FAILED") sessionError = normalized.event.message;
@@ -94,7 +102,12 @@ export class CodexProvider implements AgentProvider {
         }
       },
       environment,
+      request.workingDirectory,
     );
+    if (request.resumeSessionId && !sessionId && !sessionError) {
+      sessionError = `Codex did not resume session ${request.resumeSessionId}`;
+      await request.onEvent?.(event("SESSION_FAILED", { message: sessionError }));
+    }
     if (result.exitCode !== 0 && !sessionError) {
       await request.onEvent?.(event("SESSION_FAILED", { message: result.stderr || "Codex exited unsuccessfully" }));
     }

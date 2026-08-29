@@ -36,12 +36,12 @@ async function tryCreateQueued(input: QueuedJobInput) {
   const id = crypto.randomUUID();
   const [job] = await prisma.$queryRaw<Job[]>`
     INSERT INTO "job" (
-      "id", "queueJobId", "repositoryId", "scanRunId", "environment", "jobType", "subjectType",
+      "id", "repositoryId", "scanRunId", "environment", "jobType", "subjectType",
       "issueNumber", "issueTitle", "issueUrl", "issueBody", "branchName", "baselineCommit",
       "pullRequestId", "pullRequestNumber", "pullRequestUrl", "headSha", "trigger",
       "provider", "model", "reasoningEffort", "activeIssueKey", "activePrKey", "updatedAt"
     ) VALUES (
-      ${id}, ${id}, ${input.repositoryId}, ${input.scanRunId ?? null}, ${input.environment},
+      ${id}, ${input.repositoryId}, ${input.scanRunId ?? null}, ${input.environment},
       ${input.jobType}::"JobType", ${input.subjectType}::"JobSubject", ${input.issueNumber},
       ${input.issueTitle}, ${input.issueUrl}, ${input.issueBody}, ${input.branchName},
       ${input.baselineCommit}, ${input.pullRequestId ?? null}, ${input.pullRequestNumber ?? null},
@@ -70,6 +70,32 @@ async function claim(id: string, environment: string, workerId: string) {
     RETURNING *
   `;
   return job ?? null;
+}
+
+const retryableStatuses = ["FAILED", "BLOCKED", "CANCELLED", "STALE"] as const;
+
+async function requeueForRetry(id: string, environment: string) {
+  const job = await prisma.job.findFirst({ where: { id, environment } });
+  if (!job || !retryableStatuses.includes(job.status as typeof retryableStatuses[number])) return null;
+
+  const updated = await prisma.job.updateMany({
+    where: { id, environment, status: { in: [...retryableStatuses] } },
+    data: {
+      status: "QUEUED",
+      queuedAt: new Date(),
+      completedAt: null,
+      durationMs: null,
+      workerId: null,
+      heartbeatAt: null,
+      activeIssueKey: job.subjectType === "ISSUE" ? `${job.repositoryId}:${job.issueNumber}` : null,
+      activePrKey: job.subjectType === "PULL_REQUEST" && job.pullRequestId && job.headSha
+        ? `${job.repositoryId}:${job.pullRequestId}:${job.headSha}:${job.jobType}`
+        : null,
+      worktreePath: job.status === "FAILED" ? undefined : null,
+      sessionId: job.status === "FAILED" ? undefined : null,
+    },
+  });
+  return updated.count === 1 ? prisma.job.findUnique({ where: { id } }) : null;
 }
 
 async function complete(id: string, result: Prisma.InputJsonValue, exitCode: number) {
@@ -108,8 +134,8 @@ async function finishRunning(
       headSha: input.headSha,
       completedAt,
       durationMs: Math.max(0, completedAt.getTime() - job.startedAt.getTime()),
-      activeIssueKey: null,
-      activePrKey: null,
+      activeIssueKey: status === "FAILED" ? undefined : null,
+      activePrKey: status === "FAILED" ? undefined : null,
       heartbeatAt: null,
     },
   });
@@ -273,10 +299,26 @@ async function setWorktree(id: string, worktreePath: string) {
   return updated.count === 1;
 }
 
-async function setImplementationResult(id: string, sessionId: string | null, exitCode: number) {
+async function setSessionId(id: string, sessionId: string) {
   const updated = await prisma.job.updateMany({
     where: { id, status: "RUNNING" },
-    data: { implementationSessionId: sessionId, exitCode },
+    data: { sessionId },
+  });
+  return updated.count === 1;
+}
+
+async function setExecutionResult(id: string, sessionId: string | null, exitCode: number) {
+  const updated = await prisma.job.updateMany({
+    where: { id, status: "RUNNING" },
+    data: { sessionId: sessionId ?? undefined, exitCode },
+  });
+  return updated.count === 1;
+}
+
+async function clearWorktree(id: string) {
+  const updated = await prisma.job.updateMany({
+    where: { id, worktreePath: { not: null } },
+    data: { worktreePath: null },
   });
   return updated.count === 1;
 }
@@ -328,7 +370,7 @@ async function heartbeat(id: string, workerId: string) {
   return updated.count === 1;
 }
 
-async function failQueued(id: string, errorMessage: string) {
+async function failQueued(id: string, errorMessage: string, retainActiveKey = false) {
   const completedAt = new Date();
   const updated = await prisma.job.updateMany({
     where: { id, status: "QUEUED" },
@@ -336,8 +378,8 @@ async function failQueued(id: string, errorMessage: string) {
       status: "FAILED",
       errorMessage,
       completedAt,
-      activeIssueKey: null,
-      activePrKey: null,
+      activeIssueKey: retainActiveKey ? undefined : null,
+      activePrKey: retainActiveKey ? undefined : null,
     },
   });
   return updated.count === 1;
@@ -346,6 +388,7 @@ async function failQueued(id: string, errorMessage: string) {
 export const jobRepository = {
   tryCreateQueued,
   claim,
+  requeueForRetry,
   complete,
   cancel,
   recoverStaleBefore,
@@ -353,7 +396,9 @@ export const jobRepository = {
   failQueued,
   findRunning,
   setWorktree,
-  setImplementationResult,
+  setSessionId,
+  setExecutionResult,
+  clearWorktree,
   finishRunning,
   claimSupportIssue,
   findSupportIssue,

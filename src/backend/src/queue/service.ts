@@ -22,29 +22,39 @@ export function createJobQueue(config: Pick<Config, "APP_ENV" | "REDIS_URL">) {
   const workerConnections: IORedis[] = [];
 
   async function enqueue(jobId: string) {
+    const deliveryId = `${jobId}-${crypto.randomUUID()}`;
     try {
       await queue.add("execute", queuePayload(jobId, config.APP_ENV), {
-        jobId,
+        jobId: deliveryId,
         attempts: 3,
         backoff: { type: "exponential", delay: 2_000 },
         removeOnComplete: { age: 7 * 24 * 60 * 60, count: 1_000 },
         removeOnFail: { age: 30 * 24 * 60 * 60, count: 5_000 },
       });
     } catch (error) {
-      if (await queue.getJob(jobId)) return;
+      if (await queue.getJob(deliveryId)) return;
       throw error;
     }
   }
 
   async function remove(jobId: string) {
-    const job = await queue.getJob(jobId);
-    if (!job) return false;
-    try {
-      await job.remove();
-      return true;
-    } catch {
-      return false;
+    const direct = await queue.getJob(jobId);
+    const pending = await queue.getJobs(["waiting", "delayed", "prioritized"]);
+    const candidates = new Map(
+      [...(direct ? [direct] : []), ...pending]
+        .filter((job) => job.id === jobId || job.data.jobId === jobId)
+        .map((job) => [job.id, job]),
+    );
+    let removed = false;
+    for (const job of candidates.values()) {
+      try {
+        await job.remove();
+        removed = true;
+      } catch {
+        // an active delivery is owned by its worker and is stopped by the database transition
+      }
     }
+    return removed;
   }
 
   function createWorker(processor: QueueProcessor, concurrency: number) {

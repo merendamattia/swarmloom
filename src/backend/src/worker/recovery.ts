@@ -18,6 +18,7 @@ export async function recoverStaleJobs(config: Config, github: GitHubClient, eve
         repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
         gitEnvironment: undefined,
       });
+      await jobRepository.clearWorktree(job.id);
     }
     await events.record({
       type: "JOB_FAILED",

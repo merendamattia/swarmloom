@@ -9,6 +9,7 @@ import {
   parseJobOutcome,
   parsePullRequestUrl,
   parseTldr,
+  prepareJobWorktree,
   safeError,
 } from "./helpers.ts";
 import type { JobFlow } from "./types.ts";
@@ -21,19 +22,25 @@ export const runImplementation: JobFlow = async (context) => {
 
   if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
   const localPath = job.repository.localPath;
-  const worktreePath = safeWorktreePath(config.DATA_DIR, job.id);
-  const gitEnvironment = githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl);
-  await context.createWorktree({
-    repositoryPath: localPath,
-    worktreePath,
-    branchName: job.branchName,
-    baselineCommit: job.baselineCommit,
-    gitEnvironment,
+  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id), async () => {
+    await context.createWorktree({
+      repositoryPath: localPath,
+      worktreePath: safeWorktreePath(config.DATA_DIR, job.id),
+      branchName: job.branchName,
+      baselineCommit: job.baselineCommit,
+      gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
+    });
   });
+  const worktreePath = worktree.path;
+  const gitEnvironment = githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl);
   context.state.worktreeCreated = true;
   context.state.worktreePath = worktreePath;
   context.state.repositoryPath = localPath;
-  if (!await jobRepository.setWorktree(job.id, worktreePath)) return;
+  context.state.worktreePersisted = !worktree.created;
+  if (worktree.created) {
+    if (!await jobRepository.setWorktree(job.id, worktreePath)) return;
+    context.state.worktreePersisted = true;
+  }
 
   await events.record({
     type: "JOB_STARTED",
@@ -53,7 +60,7 @@ export const runImplementation: JobFlow = async (context) => {
     signal,
     job,
   );
-  await jobRepository.setImplementationResult(job.id, implementation.sessionId, implementation.exitCode);
+  await jobRepository.setExecutionResult(job.id, implementation.sessionId, implementation.exitCode);
   if (implementation.exitCode !== 0) {
     throw new Error(implementation.stderr || `${provider.name} exited with ${implementation.exitCode}`);
   }

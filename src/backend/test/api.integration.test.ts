@@ -10,6 +10,7 @@ integration("operations API", () => {
   let repositoryId = "";
   let jobId = "";
   let scanCalls = 0;
+  const enqueuedJobs: string[] = [];
   let restartCalls = 0;
   let version = "";
   const unique = crypto.randomUUID();
@@ -59,7 +60,6 @@ integration("operations API", () => {
         issueBody: "Acceptance criteria",
         status: "QUEUED",
         activeIssueKey: `${repositoryId}:99`,
-        queueJobId: apiJobId,
         branchName: "agent/issue-99",
         baselineCommit: "a".repeat(40),
         provider: "CODEX",
@@ -112,7 +112,11 @@ integration("operations API", () => {
         getPullRequestLabels: async () => [],
         setPullRequestLabels: async () => {},
       },
-      queue: { health: async () => "PONG", remove: async () => true },
+      queue: {
+        health: async () => "PONG",
+        remove: async () => true,
+        enqueue: async (id) => { enqueuedJobs.push(id); },
+      },
       settings: createSettingsService(config),
       scheduler: { restart: () => { restartCalls += 1; } },
     });
@@ -169,7 +173,6 @@ integration("operations API", () => {
         issueUrl: `https://github.com/acme/api-${unique}/issues/${200 + index}`,
         issueBody: "Dashboard history",
         status: "COMPLETED" as const,
-        queueJobId: id,
         branchName: `agent/issue-${200 + index}`,
         baselineCommit: "d".repeat(40),
         provider: "CODEX" as const,
@@ -193,7 +196,6 @@ integration("operations API", () => {
         issueUrl: `https://github.com/acme/api-${unique}/issues/100`,
         issueBody: "Failure body",
         status: "FAILED",
-        queueJobId: crypto.randomUUID(),
         branchName: "agent/issue-100",
         baselineCommit: "b".repeat(40),
         provider: "CODEX",
@@ -231,7 +233,6 @@ integration("operations API", () => {
         issueUrl: `https://github.com/acme/api-${unique}/issues/101`,
         issueBody: "New failure body",
         status: "STALE",
-        queueJobId: crypto.randomUUID(),
         branchName: "agent/issue-101",
         baselineCommit: "c".repeat(40),
         provider: "CODEX",
@@ -304,31 +305,37 @@ integration("operations API", () => {
     expect(secretRows.every(({ value }) => !value.includes("telegram-secret-token") && !value.includes("telegram-chat-id"))).toBe(true);
   });
 
-  test("cancels and retries through GitHub before invoking the shared scanner", async () => {
+  test("cancels and retries the same durable job without invoking the scanner", async () => {
     expect((await app.request(`/api/jobs/${jobId}/cancel`, { method: "POST" })).status).toBe(200);
     expect(labels).toEqual(["bug"]);
     const retry = await app.request(`/api/jobs/${jobId}/retry`, { method: "POST" });
     expect(retry.status).toBe(202);
-    expect(await retry.json()).toEqual({ scanId: "scan-1", scanStatus: "COMPLETED" });
-    expect(labels).toEqual(["bug", "agent:ready"]);
+    expect(await retry.json()).toEqual({ jobId, status: "QUEUED", sessionResumed: false });
+    expect(labels).toEqual(["bug", config.ISSUE_WORKING_LABEL]);
+    expect(enqueuedJobs).toEqual([jobId]);
+    expect((await prisma.job.findUniqueOrThrow({ where: { id: jobId } })).status).toBe("QUEUED");
+    expect((await app.request(`/api/jobs/${jobId}/retry`, { method: "POST" })).status).toBe(409);
   });
 
   test("uses the manual scanner and rejects Telegram tests while disabled", async () => {
     expect((await app.request("/api/scans/run", { method: "POST" })).status).toBe(202);
-    expect(scanCalls).toBe(2);
+    expect(scanCalls).toBe(1);
     expect((await app.request("/api/notifications/test", { method: "POST" })).status).toBe(409);
   });
 
-  test("retry after a terminal failure restores the ready label", async () => {
+  test("retry after a terminal failure requeues the job directly", async () => {
     await prisma.job.update({
       where: { id: jobId },
-      data: { status: "FAILED", activeIssueKey: null },
+      data: { status: "FAILED", activeIssueKey: null, attempts: 1, sessionId: "api-session" },
     });
     labels.splice(0, labels.length, "bug", config.ISSUE_BLOCKED_LABEL);
     const retry = await app.request(`/api/jobs/${jobId}/retry`, { method: "POST" });
     expect(retry.status).toBe(202);
-    expect(await retry.json()).toEqual({ scanId: "scan-3", scanStatus: "COMPLETED" });
-    expect(labels).toEqual(["bug", config.ISSUE_READY_LABEL]);
+    expect(await retry.json()).toEqual({ jobId, status: "QUEUED", sessionResumed: true });
+    expect(labels).toEqual(["bug", config.ISSUE_WORKING_LABEL]);
+    expect(enqueuedJobs).toEqual([jobId, jobId]);
+    expect(await prisma.jobEvent.findFirst({ where: { jobId, type: "JOB_RESUME_REQUESTED" }, orderBy: { createdAt: "desc" } }))
+      .toMatchObject({ metadata: expect.objectContaining({ attempt: 2, sessionId: "api-session", sessionResumed: true }) });
   });
 
   test("creates one sanitized support issue for a failed job and rejects non-failed jobs", async () => {
@@ -589,7 +596,6 @@ integration("operations API", () => {
         issueUrl: `https://github.com/acme/obsolete-${unique}/issues/55`,
         issueBody: "Body",
         status: "COMPLETED",
-        queueJobId: crypto.randomUUID(),
         branchName: "agent/issue-55",
         baselineCommit: "c".repeat(40),
         provider: "CODEX",
@@ -636,7 +642,6 @@ integration("operations API", () => {
         issueUrl: `https://github.com/acme/active-${unique}/issues/77`,
         issueBody: "Body",
         status: "QUEUED",
-        queueJobId: crypto.randomUUID(),
         branchName: "agent/issue-77",
         baselineCommit: "d".repeat(40),
         provider: "CODEX",

@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { resolve } from "node:path";
 import { parseConfig } from "../src/core/config-schema.ts";
 import type { AgentProvider, AgentRequest, AgentResult } from "../src/providers/index.ts";
@@ -149,7 +151,7 @@ integration("job runner", () => {
     });
   });
 
-  test("records blocked and failed outcomes without leaving an active issue key", async () => {
+  test("records blocked outcomes and retains failed issue ownership for recovery", async () => {
     const blocked = await claimed(issueBase + 3, "IMPLEMENTATION", "ISSUE");
     const blockedGitHub = fakeGitHub(blocked.issueNumber, blocked.branchName, "e".repeat(40));
     const blockedRunner = createJobRunner({
@@ -177,7 +179,7 @@ integration("job runner", () => {
     expect(await failedRunner.run(failed.id, "runner-worker")).toBe(true);
     const failedStored = await prisma.job.findUniqueOrThrow({ where: { id: failed.id } });
     expect(failedStored.status).toBe("FAILED");
-    expect(failedStored.activeIssueKey).toBeNull();
+    expect(failedStored.activeIssueKey).toBe(`${repositoryId}:${failed.issueNumber}`);
     expect(failedStored.errorMessage).toContain("provider failed");
     expect(failedStored.diagnostics).toMatchObject({
       stage: "implementation",
@@ -305,6 +307,72 @@ integration("job runner", () => {
       stderr: "stderr evidence",
       events: [{ type: "SESSION_STARTED", timestamp: "2026-08-20T00:00:00.000Z" }],
     });
+  });
+
+  test("persists a started session and retains its workspace for a durable retry", async () => {
+    const job = await claimed(issueBase + 17, "IMPLEMENTATION", "ISSUE");
+    const worktreePath = await mkdtemp(join(import.meta.dir, "resume-worktree-"));
+    await Bun.write(join(worktreePath, "partial-progress.txt"), "keep this change");
+    await prisma.job.update({ where: { id: job.id }, data: { worktreePath } });
+    let createCalls = 0;
+    let removeCalls = 0;
+    let gcCalls = 0;
+    const provider: AgentProvider = {
+      name: "codex",
+      execute: async (request) => {
+        await request.onEvent?.({
+          type: "SESSION_STARTED",
+          timestamp: "2026-08-20T00:00:00.000Z",
+          metadata: { sessionId: "resume-session" },
+        });
+        throw new ProviderProcessError("Provider failed after making progress", 3, "provider failed");
+      },
+    };
+    const runner = createJobRunner({
+      config,
+      provider,
+      github: fakeGitHub(job.issueNumber, job.branchName, "a".repeat(40)),
+      createWorktree: async () => {
+        createCalls += 1;
+        throw new Error("must reuse the retained worktree");
+      },
+      removeWorktree: async () => { removeCalls += 1; },
+      gcRepository: async () => { gcCalls += 1; },
+    });
+
+    try {
+      expect(await runner.run(job.id, "runner-worker")).toBe(true);
+      const failed = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+      expect(failed).toMatchObject({ status: "FAILED", sessionId: "resume-session", worktreePath });
+      expect(await Bun.file(join(worktreePath, "partial-progress.txt")).text()).toBe("keep this change");
+      expect({ createCalls, removeCalls, gcCalls }).toEqual({ createCalls: 0, removeCalls: 0, gcCalls: 0 });
+
+      await jobs.requeueForRetry(job.id, environment);
+      const resumedCalls: AgentRequest[] = [];
+      const resumedRunner = createJobRunner({
+        config,
+        provider: {
+          name: "codex",
+          execute: async (request) => {
+            resumedCalls.push(request);
+            await Bun.write(request.responseFilePath!, "Outcome: blocked\nTL;DR: Continue from the retained workspace.\nContinue from the retained workspace.");
+            return success("Outcome: blocked\nTL;DR: Continue from the retained workspace.\nContinue from the retained workspace.", "resume-session");
+          },
+        },
+        github: fakeGitHub(job.issueNumber, job.branchName, "a".repeat(40)),
+        createWorktree: async () => { throw new Error("must not recreate the retained worktree"); },
+        removeWorktree: async () => { removeCalls += 1; await rm(worktreePath, { recursive: true, force: true }); },
+        gcRepository: async () => { gcCalls += 1; },
+      });
+
+      expect(await jobs.claim(job.id, environment, "runner-worker")).not.toBeNull();
+      expect(await resumedRunner.run(job.id, "runner-worker")).toBe(true);
+      expect(resumedCalls[0]).toMatchObject({ workingDirectory: worktreePath, resumeSessionId: "resume-session" });
+      expect(await Bun.file(join(worktreePath, "partial-progress.txt")).exists()).toBe(false);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({ status: "BLOCKED", sessionId: "resume-session", worktreePath: null });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
   });
   test("retries the role when the agent finishes without writing the response, then fails clearly if it never writes it", async () => {
 
@@ -708,7 +776,7 @@ integration("job runner", () => {
     expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "STALE_RESULT_DISCARDED" } })).not.toBeNull();
   });
 
-  test("retrying a failed review only re-creates review work and never reruns the implementation", async () => {
+  test("retrying a failed review reuses the same job and never reruns the implementation", async () => {
     const issueNumber = issueBase + 13;
     const implementation = await claimed(issueNumber, "IMPLEMENTATION", "ISSUE");
     await prisma.job.update({ where: { id: implementation.id }, data: { status: "COMPLETED", activeIssueKey: null } });
@@ -733,31 +801,33 @@ integration("job runner", () => {
       pullRequestUrl: "https://github.com/acme/runner/pull/906",
       headSha: "8".repeat(40),
     });
+    const retainedWorktree = resolve(config.DATA_DIR, "worktrees", failed.id);
     const failedRunner = createJobRunner({
       config,
       provider: new FakeProvider([{ ...success("", "review-fail"), exitCode: 1, stderr: "reviewer crashed" }]),
       github: state,
-      createReviewWorktree: async () => "agent/review-local",
+      createReviewWorktree: async (input) => { await mkdir(input.worktreePath, { recursive: true }); return input.worktreePath; },
     });
-    expect(await failedRunner.run(failed.id, "runner-worker")).toBe(true);
-    expect((await prisma.job.findUniqueOrThrow({ where: { id: failed.id } })).status).toBe("FAILED");
-    expect((await prisma.job.findUniqueOrThrow({ where: { id: implementation.id } })).status).toBe("COMPLETED");
+    try {
+      expect(await failedRunner.run(failed.id, "runner-worker")).toBe(true);
+      expect((await prisma.job.findUniqueOrThrow({ where: { id: failed.id } })).status).toBe("FAILED");
+      expect((await prisma.job.findUniqueOrThrow({ where: { id: implementation.id } })).status).toBe("COMPLETED");
 
-    const retried = await claimed(issueNumber, "REVIEW", "PULL_REQUEST", {
-      pullRequestId: managed.id,
-      pullRequestNumber: managed.prNumber,
-      pullRequestUrl: "https://github.com/acme/runner/pull/906",
-      headSha: "8".repeat(40),
-    });
-    const retriedRunner = createJobRunner({
-      config,
-      provider: new FakeProvider([success("Review: pass\nTL;DR: The review passed and is ready now.\nReady now.", "review-retry")]),
-      github: state,
-      createReviewWorktree: async () => "agent/review-local",
-    });
-    expect(await retriedRunner.run(retried.id, "runner-worker")).toBe(true);
-    expect((await prisma.job.findUniqueOrThrow({ where: { id: retried.id } })).status).toBe("COMPLETED");
-    expect((await prisma.job.findUniqueOrThrow({ where: { id: implementation.id } })).status).toBe("COMPLETED");
+      expect(await jobs.requeueForRetry(failed.id, environment)).not.toBeNull();
+      const retried = (await jobs.claim(failed.id, environment, "runner-worker"))!;
+      const retriedRunner = createJobRunner({
+        config,
+        provider: new FakeProvider([success("Review: pass\nTL;DR: The review passed and is ready now.\nReady now.", "review-fail")]),
+        github: state,
+        createReviewWorktree: async () => { throw new Error("must reuse the retained review worktree"); },
+        removeWorktree: async ({ worktreePath }) => { await rm(worktreePath, { recursive: true, force: true }); },
+      });
+      expect(await retriedRunner.run(retried.id, "runner-worker")).toBe(true);
+      expect((await prisma.job.findUniqueOrThrow({ where: { id: retried.id } })).status).toBe("COMPLETED");
+      expect((await prisma.job.findUniqueOrThrow({ where: { id: implementation.id } })).status).toBe("COMPLETED");
+    } finally {
+      await rm(retainedWorktree, { recursive: true, force: true });
+    }
   });
 
   test("failing fixes also consume the cycle budget and eventually block the workflow", async () => {

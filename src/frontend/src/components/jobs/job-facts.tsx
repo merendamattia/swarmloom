@@ -5,6 +5,8 @@ import type { Job } from "@/hooks/api";
 import { dateTime, duration, shortCommit, statusLabel } from "@/lib/format";
 
 export function JobFacts({ job, subject, trigger }: { job: Job; subject: string; trigger: string | null }) {
+  const resumeRequested = job.events.some((event) => event.type === "JOB_RESUME_REQUESTED");
+  const sessionResumed = job.events.some((event) => event.type === "SESSION_RESUMED");
   return (
     <aside className="detail-aside" aria-label="Job facts">
       <Panel>
@@ -20,7 +22,8 @@ export function JobFacts({ job, subject, trigger }: { job: Job; subject: string;
           { label: "Exit code", value: job.exitCode ?? "Not recorded" },
           { label: "Duration", value: duration(job.durationMs) },
           { label: "Worker", value: job.workerId ?? "Not assigned" },
-          { label: "Session", value: job.implementationSessionId ?? "Not recorded", mono: true },
+          { label: "Recovery", value: sessionResumed ? "Session resumed" : resumeRequested ? (job.sessionId ? "Session resume queued" : "Restart queued without session") : job.attempts > 1 ? (job.sessionId ? "Session resumed" : "Restarted without session") : "Initial execution" },
+          { label: "Session", value: job.sessionId ?? "Not recorded", mono: true },
         ]} />
       </Panel>
       <Panel>
