@@ -7,7 +7,9 @@ import { githubGitEnvironment } from "../github/git-auth.ts";
 import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.ts";
 import { loadAgentInstructions } from "../runtime/instructions.ts";
 import type { AgentRole } from "../providers/index.ts";
+import type { AgentTokenUsage } from "../providers/types.ts";
 import { ProviderProcessError } from "../providers/process.ts";
+import { jobRepository } from "../repositories/jobs.ts";
 import { AgentExecutionError, causeChain, stackTrace, type DiagnosticEvent, type JobDiagnostics } from "./diagnostics.ts";
 import type { GitHubIssueContext } from "../github/client.ts";
 import type { RunningJob, RunnerContext, RunnerGitHub } from "./types.ts";
@@ -48,6 +50,24 @@ export async function executeRole(
   await mkdir(dirname(responseFilePath), { recursive: true });
   const diagnosticEvents: DiagnosticEvent[] = [];
   let sessionId: string | null = null;
+  let usagePersistenceFailureRecorded = false;
+  const persistUsage = async (usage: AgentTokenUsage) => {
+    try {
+      await jobRepository.setTokenUsage(job.id, usage);
+    } catch {
+      if (usagePersistenceFailureRecorded) return;
+      usagePersistenceFailureRecorded = true;
+      await context.events.record({
+        type: "AGENT_USAGE_PERSISTENCE_FAILED",
+        level: "WARNING",
+        message: "Could not persist provider token usage; execution continues without this telemetry",
+        jobId: job.id,
+        repositoryId: job.repositoryId,
+        scanRunId: job.scanRunId ?? undefined,
+        metadata: { issueUrl: job.issueUrl },
+      }).catch(() => {});
+    }
+  };
   try {
     const result = await context.provider.execute({
       role,
@@ -60,6 +80,7 @@ export async function executeRole(
       environment: githubGitEnvironment(context.config.GITHUB_TOKEN, job.repository.cloneUrl),
       responseFilePath,
       signal: abortSignal,
+      onUsage: persistUsage,
       onEvent: async (agentEvent) => {
         if (agentEvent.type === "SESSION_STARTED" && typeof agentEvent.metadata?.sessionId === "string") {
           sessionId = agentEvent.metadata.sessionId;
@@ -80,6 +101,7 @@ export async function executeRole(
         });
       },
     });
+    if (result.usage) await persistUsage(result.usage);
     return {
       ...result,
       role,

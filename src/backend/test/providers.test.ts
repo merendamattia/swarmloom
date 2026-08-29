@@ -7,7 +7,7 @@ import { redactSecrets } from "../src/core/secrets.ts";
 import { parseConfig } from "../src/core/config-schema.ts";
 import { ProviderProcessError, runJsonlProcess } from "../src/providers/process.ts";
 import { agentProfileForJobType, configuredAgent } from "../src/providers/index.ts";
-import { buildAgentPrompt, type AgentEvent, type AgentRequest } from "../src/providers/types.ts";
+import { buildAgentPrompt, type AgentEvent, type AgentRequest, type AgentTokenUsage } from "../src/providers/types.ts";
 
 const request: AgentRequest = {
   role: "issue-worker",
@@ -92,6 +92,58 @@ describe("Codex provider", () => {
     expect(normalizeCodexEvent({ type: "turn.completed" })).toMatchObject({
       event: { type: "SESSION_COMPLETED" },
     });
+  });
+
+  test("forwards provider-reported cumulative token usage", async () => {
+    const original = Bun.spawn;
+    const usage: AgentTokenUsage[] = [];
+    const stdout = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(encoder.encode(`${JSON.stringify({
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            tokenUsage: {
+              total: {
+                inputTokens: 1_000,
+                cachedInputTokens: 400,
+                outputTokens: 120,
+                reasoningOutputTokens: 80,
+                totalTokens: 1_120,
+              },
+            },
+          },
+        })}\n`));
+        controller.close();
+      },
+    });
+    const stderr = new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+    const fake = mock((_args: unknown) => ({
+      stdin: { write() {}, end() {} },
+      stdout,
+      stderr,
+      exited: Promise.resolve(0),
+      kill() {},
+    }));
+    // @ts-expect-error test-only substitution of the spawn implementation
+    Bun.spawn = fake;
+    try {
+      const result = await new CodexProvider().execute({
+        ...request,
+        onUsage: (value) => { usage.push(value); },
+      });
+      expect(usage).toEqual([{
+        inputTokens: 1_000,
+        cachedInputTokens: 400,
+        outputTokens: 120,
+        reasoningOutputTokens: 80,
+        totalTokens: 1_120,
+      }]);
+      expect(result.usage).toEqual(usage[0]);
+    } finally {
+      Bun.spawn = original;
+    }
   });
 
   test("surfaces the real message from nested provider errors", () => {

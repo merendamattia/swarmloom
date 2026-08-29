@@ -51,6 +51,10 @@ export function duration(milliseconds: number | null | undefined) {
   return `${minutes}m ${remainder}s`;
 }
 
+export function formatTokens(value: number | null | undefined) {
+  return value == null ? "Not recorded" : new Intl.NumberFormat().format(value);
+}
+
 export function statusLabel(value: string) {
   return value.toLowerCase().replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
 }

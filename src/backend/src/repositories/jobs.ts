@@ -1,5 +1,6 @@
 import { Prisma, type AgentProvider, type Job, type JobStatus, type JobSubject, type JobType } from "@prisma/client";
 import { prisma } from "../core/db.ts";
+import type { AgentTokenUsage } from "../providers/types.ts";
 
 export type QueuedJobInput = {
   repositoryId: string;
@@ -281,6 +282,50 @@ async function setImplementationResult(id: string, sessionId: string | null, exi
   return updated.count === 1;
 }
 
+async function setTokenUsage(id: string, usage: AgentTokenUsage) {
+  const updated = await prisma.$executeRaw`
+    UPDATE "job"
+    SET
+      "inputTokens" = CASE
+        WHEN CAST(${usage.inputTokens} AS INTEGER) IS NULL THEN "inputTokens"
+        WHEN "inputTokens" IS NULL OR "inputTokens" < CAST(${usage.inputTokens} AS INTEGER) THEN CAST(${usage.inputTokens} AS INTEGER)
+        ELSE "inputTokens"
+      END,
+      "cachedInputTokens" = CASE
+        WHEN CAST(${usage.cachedInputTokens} AS INTEGER) IS NULL THEN "cachedInputTokens"
+        WHEN "cachedInputTokens" IS NULL OR "cachedInputTokens" < CAST(${usage.cachedInputTokens} AS INTEGER) THEN CAST(${usage.cachedInputTokens} AS INTEGER)
+        ELSE "cachedInputTokens"
+      END,
+      "outputTokens" = CASE
+        WHEN CAST(${usage.outputTokens} AS INTEGER) IS NULL THEN "outputTokens"
+        WHEN "outputTokens" IS NULL OR "outputTokens" < CAST(${usage.outputTokens} AS INTEGER) THEN CAST(${usage.outputTokens} AS INTEGER)
+        ELSE "outputTokens"
+      END,
+      "reasoningOutputTokens" = CASE
+        WHEN CAST(${usage.reasoningOutputTokens} AS INTEGER) IS NULL THEN "reasoningOutputTokens"
+        WHEN "reasoningOutputTokens" IS NULL OR "reasoningOutputTokens" < CAST(${usage.reasoningOutputTokens} AS INTEGER) THEN CAST(${usage.reasoningOutputTokens} AS INTEGER)
+        ELSE "reasoningOutputTokens"
+      END,
+      "totalTokens" = CASE
+        WHEN CAST(${usage.totalTokens} AS INTEGER) IS NULL THEN "totalTokens"
+        WHEN "totalTokens" IS NULL OR "totalTokens" < CAST(${usage.totalTokens} AS INTEGER) THEN CAST(${usage.totalTokens} AS INTEGER)
+        ELSE "totalTokens"
+      END,
+      "tokenUsageUpdatedAt" = CURRENT_TIMESTAMP,
+      "updatedAt" = CURRENT_TIMESTAMP
+    WHERE "id" = ${id}
+      AND "status" = 'RUNNING'
+      AND (
+        CAST(${usage.inputTokens} AS INTEGER) IS NOT NULL
+        OR CAST(${usage.cachedInputTokens} AS INTEGER) IS NOT NULL
+        OR CAST(${usage.outputTokens} AS INTEGER) IS NOT NULL
+        OR CAST(${usage.reasoningOutputTokens} AS INTEGER) IS NOT NULL
+        OR CAST(${usage.totalTokens} AS INTEGER) IS NOT NULL
+      )
+  `;
+  return updated === 1;
+}
+
 async function cancel(id: string) {
   const updated = await prisma.job.updateMany({
     where: { id, status: { in: ["QUEUED", "RUNNING"] } },
@@ -354,6 +399,7 @@ export const jobRepository = {
   findRunning,
   setWorktree,
   setImplementationResult,
+  setTokenUsage,
   finishRunning,
   claimSupportIssue,
   findSupportIssue,

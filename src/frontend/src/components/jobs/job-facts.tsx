@@ -2,7 +2,7 @@ import { FactList } from "@/components/ui/fact-list";
 import { SectionHeading } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import type { Job } from "@/hooks/api";
-import { dateTime, duration, shortCommit, statusLabel } from "@/lib/format";
+import { dateTime, duration, formatTokens, shortCommit, statusLabel } from "@/lib/format";
 
 export function JobFacts({ job, subject, trigger }: { job: Job; subject: string; trigger: string | null }) {
   return (
@@ -21,6 +21,16 @@ export function JobFacts({ job, subject, trigger }: { job: Job; subject: string;
           { label: "Duration", value: duration(job.durationMs) },
           { label: "Worker", value: job.workerId ?? "Not assigned" },
           { label: "Session", value: job.implementationSessionId ?? "Not recorded", mono: true },
+        ]} />
+      </Panel>
+      <Panel>
+        <SectionHeading title="Token usage" description="Provider-reported cumulative usage; missing fields are not inferred." />
+        <FactList items={[
+          { label: "Input / consumed", value: formatTokens(job.usage.inputTokens) },
+          { label: "Cached input", value: formatTokens(job.usage.cachedInputTokens) },
+          { label: "Output / generated", value: formatTokens(job.usage.outputTokens) },
+          { label: "Reasoning output", value: formatTokens(job.usage.reasoningOutputTokens) },
+          { label: "Total tokens", value: formatTokens(job.usage.totalTokens) },
         ]} />
       </Panel>
       <Panel>

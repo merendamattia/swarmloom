@@ -16,6 +16,36 @@ export type AgentEvent = {
   metadata?: Record<string, string | number | boolean | null>;
 };
 
+export type AgentTokenUsage = {
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  outputTokens: number | null;
+  reasoningOutputTokens: number | null;
+  totalTokens: number | null;
+};
+
+export type ProviderQuotaWindow = {
+  limitId: string | null;
+  limitName: string | null;
+  windowType: "primary" | "secondary";
+  usedPercent: number | null;
+  remainingPercent: number | null;
+  windowDurationMins: number | null;
+  resetsAt: string | null;
+};
+
+export type ProviderUsageSnapshot = {
+  status: "available" | "unavailable" | "unsupported" | "stale";
+  observedAt: string | null;
+  windows: ProviderQuotaWindow[];
+  message?: string;
+};
+
+export interface ProviderUsageCapability {
+  readAccountUsage(): Promise<ProviderUsageSnapshot>;
+  readThreadUsage?(threadId: string): Promise<AgentTokenUsage | null>;
+}
+
 export type AgentRequest = {
   role: AgentRole;
   workingDirectory: string;
@@ -28,6 +58,7 @@ export type AgentRequest = {
   responseFilePath?: string;
   signal?: AbortSignal;
   onEvent?: (event: AgentEvent) => void | Promise<void>;
+  onUsage?: (usage: AgentTokenUsage) => void | Promise<void>;
 };
 
 export type AgentResult = {
@@ -36,17 +67,20 @@ export type AgentResult = {
   exitCode: number;
   finalOutput: string;
   stderr: string;
+  usage?: AgentTokenUsage;
 };
 
 export type NormalizedProviderEvent = {
   event?: AgentEvent;
   sessionId?: string;
   output?: string;
+  usage?: AgentTokenUsage;
 };
 
 export interface AgentProvider {
   readonly name: "codex" | "opencode";
   execute(request: AgentRequest): Promise<AgentResult>;
+  readonly usage?: ProviderUsageCapability;
 }
 
 export function buildAgentPrompt(request: AgentRequest) {

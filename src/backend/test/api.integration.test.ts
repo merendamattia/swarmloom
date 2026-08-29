@@ -143,12 +143,28 @@ integration("operations API", () => {
 
     const status = await app.request("/api/status");
     const statusBody = await status.json();
-    expect(statusBody).toMatchObject({ version });
+    expect(statusBody).toMatchObject({
+      version,
+      providerUsage: { status: "unavailable", observedAt: null, windows: [] },
+    });
     expect(JSON.stringify(statusBody)).not.toContain("test-token");
 
-    await prisma.job.update({ where: { id: jobId }, data: { status: "RUNNING", startedAt: new Date() } });
+    await prisma.job.update({ where: { id: jobId }, data: {
+      status: "RUNNING",
+      startedAt: new Date(),
+      inputTokens: 1_000,
+      cachedInputTokens: 400,
+      outputTokens: 120,
+      reasoningOutputTokens: 80,
+      totalTokens: 1_120,
+    } });
     expect(await (await app.request("/api/dashboard")).json())
-      .toMatchObject({ activeJobs: [{ id: jobId, reasoningEffort: "high", repository: { fullName: `acme/api-${unique}` } }] });
+      .toMatchObject({ activeJobs: [{
+        id: jobId,
+        reasoningEffort: "high",
+        totalTokens: 1_120,
+        repository: { fullName: `acme/api-${unique}` },
+      }] });
 
     const jobs = await app.request(`/api/jobs?q=${unique}&provider=CODEX`);
     expect(await jobs.json()).toMatchObject({ total: 1, items: [{ id: jobId, reasoningEffort: "high" }] });
@@ -255,6 +271,13 @@ integration("operations API", () => {
     const detail = await app.request(`/api/jobs/${jobId}`);
     expect(await detail.json()).toMatchObject({
       pullRequestUrl: `https://github.com/acme/api-${unique}/pull/99`,
+      usage: {
+        inputTokens: 1_000,
+        cachedInputTokens: 400,
+        outputTokens: 120,
+        reasoningOutputTokens: 80,
+        totalTokens: 1_120,
+      },
     });
   });
 

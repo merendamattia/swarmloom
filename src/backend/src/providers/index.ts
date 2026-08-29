@@ -1,10 +1,10 @@
 import { CodexProvider } from "./codex.ts";
 import { OpenCodeProvider } from "./opencode.ts";
-import type { AgentProvider } from "./types.ts";
+import type { AgentProvider, ProviderUsageCapability } from "./types.ts";
 import type { Config } from "../core/config-schema.ts";
 
-export function createAgentProvider(name: "codex" | "opencode"): AgentProvider {
-  return name === "codex" ? new CodexProvider() : new OpenCodeProvider();
+export function createAgentProvider(name: "codex" | "opencode", usage?: ProviderUsageCapability): AgentProvider {
+  return name === "codex" ? new CodexProvider(usage) : new OpenCodeProvider();
 }
 
 export type AgentProfile = "coding" | "review";
@@ -35,4 +35,15 @@ export function configuredAgent(config: Config, profile: AgentProfile) {
   };
 }
 
-export type { AgentProvider, AgentRequest, AgentResult, AgentEvent, AgentRole } from "./types.ts";
+export type {
+  AgentEvent,
+  AgentProvider,
+  AgentRequest,
+  AgentResult,
+  AgentRole,
+  AgentTokenUsage,
+  NormalizedProviderEvent,
+  ProviderQuotaWindow,
+  ProviderUsageCapability,
+  ProviderUsageSnapshot,
+} from "./types.ts";

@@ -1,11 +1,17 @@
 import { redactSecrets } from "../core/secrets.ts";
 import { providerEnvironment, runJsonlProcess } from "./process.ts";
 import {
+  normalizeCodexThreadUsage,
+  normalizeCodexTokenUsage,
+  type CodexUsageReader,
+} from "./codex-usage.ts";
+import {
   buildAgentPrompt,
   type AgentProvider,
   type AgentRequest,
   type NormalizedProviderEvent,
 } from "./types.ts";
+import type { AgentTokenUsage } from "./types.ts";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -16,6 +22,8 @@ function record(value: unknown): Record<string, unknown> | undefined {
 function event(type: NonNullable<NormalizedProviderEvent["event"]>["type"], fields = {}) {
   return { type, timestamp: new Date().toISOString(), ...fields };
 }
+
+export { normalizeCodexTokenUsage } from "./codex-usage.ts";
 
 export function buildCodexCommand(request: AgentRequest) {
   const command = [
@@ -32,7 +40,20 @@ export function buildCodexCommand(request: AgentRequest) {
 
 export function normalizeCodexEvent(value: unknown): NormalizedProviderEvent {
   const raw = record(value);
-  if (!raw || typeof raw.type !== "string") return {};
+  if (!raw) return {};
+  if (raw.method === "thread/tokenUsage/updated" || raw.type === "thread/tokenUsage/updated") {
+    const usage = normalizeCodexThreadUsage(raw);
+    return usage ? { usage } : {};
+  }
+  if (raw.method === "thread/started") {
+    const params = record(raw.params);
+    const thread = record(params?.thread);
+    const sessionId = typeof thread?.id === "string" ? thread.id : undefined;
+    return sessionId
+      ? { sessionId, event: event("SESSION_STARTED", { metadata: { sessionId } }) }
+      : {};
+  }
+  if (typeof raw.type !== "string") return {};
   if (raw.type === "thread.started" && typeof raw.thread_id === "string") {
     return {
       sessionId: raw.thread_id,
@@ -55,7 +76,13 @@ export function normalizeCodexEvent(value: unknown): NormalizedProviderEvent {
       }),
     };
   }
-  if (raw.type === "turn.completed") return { event: event("SESSION_COMPLETED") };
+  if (raw.type === "turn.completed" || raw.type === "turn/completed") {
+    const usage = normalizeCodexTokenUsage(raw.usage);
+    return {
+      ...(usage ? { usage } : {}),
+      event: event("SESSION_COMPLETED"),
+    };
+  }
   if (raw.type === "turn.failed" || raw.type === "error") {
     const error = record(raw.error);
     const data = record(error?.data);
@@ -72,9 +99,12 @@ export function normalizeCodexEvent(value: unknown): NormalizedProviderEvent {
 export class CodexProvider implements AgentProvider {
   readonly name = "codex" as const;
 
+  constructor(readonly usage?: CodexUsageReader) {}
+
   async execute(request: AgentRequest) {
     let sessionId: string | null = null;
     let sessionError: string | undefined;
+    let latestUsage: AgentTokenUsage | undefined;
     const output: string[] = [];
     const environment = providerEnvironment({ ...globalThis.process.env, ...request.environment });
     const result = await runJsonlProcess(
@@ -84,6 +114,14 @@ export class CodexProvider implements AgentProvider {
       async (raw) => {
         const normalized = normalizeCodexEvent(raw);
         if (normalized.sessionId) sessionId = normalized.sessionId;
+        if (normalized.usage) {
+          latestUsage = normalized.usage;
+          try {
+            await request.onUsage?.(normalized.usage);
+          } catch {
+            // Usage persistence is telemetry and must not fail executable work.
+          }
+        }
         if (normalized.output) output.push(redactSecrets(normalized.output, environment));
         if (normalized.event) {
           if (normalized.event.type === "SESSION_FAILED") sessionError = normalized.event.message;
@@ -98,6 +136,21 @@ export class CodexProvider implements AgentProvider {
     if (result.exitCode !== 0 && !sessionError) {
       await request.onEvent?.(event("SESSION_FAILED", { message: result.stderr || "Codex exited unsuccessfully" }));
     }
+    if (sessionId && this.usage?.readThreadUsage) {
+      try {
+        const threadUsage = await this.usage.readThreadUsage(sessionId);
+        if (threadUsage) {
+          latestUsage = threadUsage;
+          try {
+            await request.onUsage?.(threadUsage);
+          } catch {
+            // Usage persistence is telemetry and must not fail executable work.
+          }
+        }
+      } catch {
+        // App Server usage recovery is best-effort; the exec result remains authoritative.
+      }
+    }
     return {
       provider: this.name,
       sessionId,
@@ -106,6 +159,7 @@ export class CodexProvider implements AgentProvider {
       stderr: sessionError
         ? `${redactSecrets(sessionError, environment)}${result.stderr ? `\n${result.stderr}` : ""}`
         : result.stderr,
+      usage: latestUsage,
     };
   }
 }

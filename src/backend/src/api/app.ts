@@ -15,6 +15,7 @@ import { checkProviderAuthentication, validateStartup } from "../core/startup.ts
 import type { EventService } from "../events/service.ts";
 import type { GitHubClient } from "../github/client.ts";
 import { configuredAgent } from "../providers/index.ts";
+import type { ProviderUsageCapability, ProviderUsageSnapshot } from "../providers/types.ts";
 import { createSupportIssue } from "../support-issues/service.ts";
 import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.ts";
 import { dashboardExceptionRepository } from "../repositories/dashboard-exceptions.ts";
@@ -37,6 +38,7 @@ type Dependencies = {
   queue: Pick<JobQueue, "health" | "remove">;
   settings: SettingsService;
   scheduler: Scheduler;
+  providerUsage?: ProviderUsageCapability;
 };
 
 function configuredAgentProfiles(config: Config) {
@@ -79,6 +81,7 @@ const jobSummaryFields = {
   provider: true,
   model: true,
   reasoningEffort: true,
+  totalTokens: true,
   startedAt: true,
   attempts: true,
   errorMessage: true,
@@ -96,7 +99,7 @@ const repositoryJobSummarySelect = {
   ...jobSummaryFields,
   review: { select: { status: true } },
 } satisfies Prisma.JobSelect;
-export function createApp({ config, scanner, github, events, startup, queue, settings, scheduler }: Dependencies) {
+export function createApp({ config, scanner, github, events, startup, queue, settings, scheduler, providerUsage }: Dependencies) {
   const app = new Hono().basePath("/api");
   app.use("*", requestId(), secureHeaders(), cors({
     origin: config.FRONTEND_URL,
@@ -151,9 +154,11 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         }) : null,
         checkProviderAuthentication(config.AGENT_PROVIDER),
       ]);
+      const usage = await readProviderUsage(config.AGENT_PROVIDER, providerAuth.status, providerUsage);
       return context.json({
         ...startup,
         providerAuth,
+        providerUsage: usage,
         schedule: { cron: config.SCHEDULE_CRON, timezone: config.SCHEDULE_TIMEZONE },
         provider: config.AGENT_PROVIDER,
         agentProfiles: configuredAgentProfiles(config),
@@ -276,7 +281,17 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         },
       });
       return job
-        ? context.json({ ...job, pullRequestUrl: canonicalPullRequestUrl(job.repository, job.pullRequestNumber) })
+        ? context.json({
+          ...job,
+          pullRequestUrl: canonicalPullRequestUrl(job.repository, job.pullRequestNumber),
+          usage: {
+            inputTokens: job.inputTokens,
+            cachedInputTokens: job.cachedInputTokens,
+            outputTokens: job.outputTokens,
+            reasoningOutputTokens: job.reasoningOutputTokens,
+            totalTokens: job.totalTokens,
+          },
+        })
         : context.json({ error: "Not found" }, 404);
     })
     .post("/jobs/:id/support-issue", async (context) => {
@@ -468,6 +483,27 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       });
       return false;
     }
+  }
+}
+
+async function readProviderUsage(
+  provider: Config["AGENT_PROVIDER"],
+  authentication: "authenticated" | "required",
+  capability?: ProviderUsageCapability,
+): Promise<ProviderUsageSnapshot> {
+  if (provider !== "codex") {
+    return { status: "unsupported", observedAt: null, windows: [], message: "Quota telemetry is not supported for this provider" };
+  }
+  if (authentication !== "authenticated") {
+    return { status: "unavailable", observedAt: null, windows: [], message: "Codex authentication is required to read quota" };
+  }
+  if (!capability) {
+    return { status: "unavailable", observedAt: null, windows: [], message: "Codex quota telemetry is not configured" };
+  }
+  try {
+    return await capability.readAccountUsage();
+  } catch {
+    return { status: "unavailable", observedAt: null, windows: [], message: "Codex quota telemetry is unavailable" };
   }
 }
 

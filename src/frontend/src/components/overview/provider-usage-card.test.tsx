@@ -1,0 +1,54 @@
+import { describe, expect, test } from "bun:test";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ProviderUsageCard } from "./provider-usage-card";
+
+describe("ProviderUsageCard", () => {
+  test("renders provider-reported standard windows and unknown fields explicitly", () => {
+    const html = renderToStaticMarkup(<ProviderUsageCard
+      provider="codex"
+      usage={{
+        status: "available",
+        observedAt: "2026-08-29T20:00:00.000Z",
+        windows: [
+          {
+            limitId: "codex",
+            limitName: null,
+            windowType: "primary",
+            usedPercent: 25,
+            remainingPercent: 75,
+            windowDurationMins: 300,
+            resetsAt: "2026-08-30T01:00:00.000Z",
+          },
+          {
+            limitId: "codex",
+            limitName: null,
+            windowType: "secondary",
+            usedPercent: null,
+            remainingPercent: null,
+            windowDurationMins: 10_080,
+            resetsAt: null,
+          },
+        ],
+      }}
+    />);
+
+    expect(html).toContain("Account quota");
+    expect(html).toContain("5-hour");
+    expect(html).toContain("75% remaining");
+    expect(html).toContain("Weekly");
+    expect(html).toContain("Remaining: Unknown");
+    expect(html).toContain("Reset: Not recorded");
+    expect(html).toContain("aria-label=\"5-hour quota remaining\"");
+  });
+
+  test("does not show quota values for unsupported providers", () => {
+    const html = renderToStaticMarkup(<ProviderUsageCard
+      provider="opencode"
+      usage={{ status: "unsupported", observedAt: null, windows: [], message: "ignored" }}
+    />);
+
+    expect(html).toContain("Quota telemetry is unsupported for this provider.");
+    expect(html).not.toContain("ignored");
+    expect(html).not.toContain("% remaining");
+  });
+});

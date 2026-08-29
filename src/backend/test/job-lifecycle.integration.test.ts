@@ -110,6 +110,39 @@ integration("PostgreSQL job lifecycle", () => {
     expect(await jobs.complete(cancelled!.id, { outcome: "wrong" }, 0)).toBe(false);
   });
 
+  test("persists cumulative provider usage idempotently and stops updates after completion", async () => {
+    const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 4));
+    const claimed = await jobs.claim(queued!.id, environment, "usage-worker");
+    const first = {
+      inputTokens: 1_000,
+      cachedInputTokens: 400,
+      outputTokens: 120,
+      reasoningOutputTokens: 80,
+      totalTokens: 1_120,
+    };
+
+    expect(await jobs.setTokenUsage(claimed!.id, first)).toBe(true);
+    expect(await jobs.setTokenUsage(claimed!.id, first)).toBe(true);
+    expect(await jobs.setTokenUsage(claimed!.id, {
+      inputTokens: 900,
+      cachedInputTokens: null,
+      outputTokens: 100,
+      reasoningOutputTokens: null,
+      totalTokens: 1_000,
+    })).toBe(true);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).toMatchObject(first);
+
+    expect(await jobs.complete(claimed!.id, { outcome: "complete" }, 0)).toBe(true);
+    expect(await jobs.setTokenUsage(claimed!.id, {
+      inputTokens: 2_000,
+      cachedInputTokens: 800,
+      outputTokens: 200,
+      reasoningOutputTokens: 100,
+      totalTokens: 2_200,
+    })).toBe(false);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).toMatchObject(first);
+  });
+
   test("stale recovery blocks an issue job while preserving unrelated labels", async () => {
     const { recoverStaleJobs } = await import("../src/worker/recovery.ts");
     const { createEventService } = await import("../src/events/service.ts");

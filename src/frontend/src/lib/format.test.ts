@@ -5,6 +5,7 @@ import {
   dateTime,
   diagnosticsBundle,
   duration,
+  formatTokens,
   inlineMarkdown,
   normalizeDiagnostics,
   shortCommit,
@@ -47,6 +48,8 @@ test("renders the small Markdown subset used in provider summaries", () => {
 
 test("formats operational values", () => {
   expect(duration(125_000)).toBe("2m 5s");
+  expect(formatTokens(1_120)).toBe("1,120");
+  expect(formatTokens(null)).toBe("Not recorded");
   expect(statusLabel("CHANGES_REQUESTED")).toBe("Changes requested");
   expect(shortCommit("1234567890abcdef")).toBe("12345678");
 });
