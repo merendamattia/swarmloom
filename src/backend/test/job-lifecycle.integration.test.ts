@@ -91,6 +91,35 @@ integration("PostgreSQL job lifecycle", () => {
     await prisma.job.deleteMany({ where: { environment, subjectType: "PULL_REQUEST" } });
   });
 
+  test("keeps quota-waiting jobs unique and requeues the same durable job", async () => {
+    const input = queuedJob(issuePrefix + 10);
+    const queued = await jobs.tryCreateQueued(input);
+    expect(queued).not.toBeNull();
+    expect(await jobs.waitForQuotaQueued(queued!.id, environment, {
+      resetAt: "2026-08-29T21:00:00.000Z",
+      window: "codex:primary",
+      usedPercent: 100,
+      message: "Codex quota exhausted",
+    })).toBe(true);
+
+    const waiting = await prisma.job.findUniqueOrThrow({ where: { id: queued!.id } });
+    expect(waiting).toMatchObject({
+      status: "WAITING_FOR_QUOTA",
+      activeIssueKey: `${repositoryId}:${input.issueNumber}`,
+      attempts: 0,
+      quotaWindow: "codex:primary",
+      quotaUsedPercent: 100,
+    });
+    expect(await jobs.tryCreateQueued(input)).toBeNull();
+    expect((await jobs.findWaitingForQuota(environment)).map(({ id }) => id)).toContain(queued!.id);
+
+    const requeued = await jobs.requeueWaitingForQuota(queued!.id, environment);
+    expect(requeued?.id).toBe(queued!.id);
+    expect(requeued?.queueJobId).not.toBe(queued!.queueJobId);
+    expect((await prisma.job.findUniqueOrThrow({ where: { id: queued!.id } })).status).toBe("QUEUED");
+    expect(await jobs.claim(queued!.id, environment, "test-worker")).not.toBeNull();
+  });
+
   test("marks abandoned running jobs stale and never claims cancelled work", async () => {
     const stale = await jobs.tryCreateQueued(queuedJob(issuePrefix + 1));
     expect((await jobs.claim(stale!.id, environment, "dead-worker"))?.id).toBe(stale?.id);

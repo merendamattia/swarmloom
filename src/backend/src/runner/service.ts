@@ -26,8 +26,9 @@ import {
 import { runImplementation } from "./implementation.ts";
 import { runReview } from "./review.ts";
 import { createSupportIssue } from "../support-issues/service.ts";
-import { AgentExecutionError, executionFailure, minimalDiagnostics, type JobDiagnostics, type RoleExecution } from "./diagnostics.ts";
+import { AgentExecutionError, executionFailure, isQuotaFailure, minimalDiagnostics, type JobDiagnostics, type RoleExecution } from "./diagnostics.ts";
 import type { RunnerContext, RunnerGitHub, RunningJob, SessionState } from "./types.ts";
+import { quotaAdmission } from "../providers/quota.ts";
 
 type RunnerDependencies = {
   config: Config;
@@ -110,35 +111,64 @@ export function createJobRunner({
       await flow(context);
       reachedTerminalState = true;
     } catch (error) {
-      const message = safeError(error);
-      const diagnostics = error instanceof AgentExecutionError
-        ? error.diagnostics
-        : state.lastExecution
-          ? executionFailure(
-            roleStage(state.lastExecution.role),
-            state.lastExecution.role,
-            job,
-            provider,
-            state.lastExecution,
-            error,
-            { environment: diagnosticEnvironment },
-          ).diagnostics
-          : minimalDiagnostics(error, { provider: provider?.name ?? "unconfigured", model: job.model }, diagnosticEnvironment);
-      reachedTerminalState = await jobRepository.finishRunning(job.id, "FAILED", {
-        errorMessage: message,
-        diagnostics: diagnostics as Prisma.InputJsonValue,
-      });
-      if (reachedTerminalState) {
-        await events.record({
-          ...terminalEvent(job, "JOB_FAILED", message),
-          level: "ERROR",
+      if (isQuotaFailure(error)) {
+        const admission = quotaAdmission(error.failure.quota);
+        const paused = await jobRepository.waitForQuotaRunning(job.id, job.environment, workerId, {
+          resetAt: admission.kind === "wait" ? admission.resetAt : null,
+          window: admission.kind === "wait" ? admission.window : null,
+          usedPercent: admission.kind === "wait" ? admission.usedPercent : null,
+          message: error.failure.message,
+          diagnostics: error.diagnostics as Prisma.InputJsonValue,
+          sessionId: error.diagnostics.sessionId,
+          exitCode: error.diagnostics.exitCode,
         });
-        await reportFailure(job, error, state);
+        if (paused) {
+          state.preserveWorktree = true;
+          await events.record({
+            type: "JOB_WAITING_FOR_QUOTA",
+            message: `Paused ${job.repository.fullName}#${job.issueNumber} until Codex quota returns`,
+            jobId: job.id,
+            repositoryId: job.repositoryId,
+            scanRunId: job.scanRunId ?? undefined,
+            metadata: {
+              quotaResetAt: admission.kind === "wait" ? admission.resetAt : null,
+              quotaWindow: admission.kind === "wait" ? admission.window : null,
+              quotaUsedPercent: admission.kind === "wait" ? admission.usedPercent : null,
+              observedAt: error.failure.quota.observedAt,
+            },
+          });
+        }
+      } else {
+        const message = safeError(error);
+        const diagnostics = error instanceof AgentExecutionError
+          ? error.diagnostics
+          : state.lastExecution
+            ? executionFailure(
+              roleStage(state.lastExecution.role),
+              state.lastExecution.role,
+              job,
+              provider,
+              state.lastExecution,
+              error,
+              { environment: diagnosticEnvironment },
+            ).diagnostics
+            : minimalDiagnostics(error, { provider: provider?.name ?? "unconfigured", model: job.model }, diagnosticEnvironment);
+        reachedTerminalState = await jobRepository.finishRunning(job.id, "FAILED", {
+          errorMessage: message,
+          diagnostics: diagnostics as Prisma.InputJsonValue,
+        });
+        if (reachedTerminalState) {
+          await events.record({
+            ...terminalEvent(job, "JOB_FAILED", message),
+            level: "ERROR",
+          });
+          await reportFailure(job, error, state);
+        }
       }
     } finally {
       heartbeatStopped = true;
       if (heartbeatTimer) clearTimeout(heartbeatTimer);
-      if (state.worktreeCreated) {
+      if (state.worktreeCreated && !state.preserveWorktree) {
         try {
           await removeWorktree({
             worktreePath: state.worktreePath!,
@@ -157,7 +187,7 @@ export function createJobRunner({
           });
         }
       }
-      if (state.repositoryPath) {
+      if (state.repositoryPath && !state.preserveWorktree) {
         try {
           await gc({ repositoryPath: state.repositoryPath, gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl) });
         } catch {

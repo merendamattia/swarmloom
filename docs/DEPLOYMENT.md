@@ -351,13 +351,13 @@ empty, API-unavailable, invalid-repository, stale/failed, and narrow-screen stat
 - `GET /repositories`, `GET /scans`, `GET /events` — operational history;
 - `GET/PATCH /settings` — runtime configuration without exposing Telegram secrets;
 - `POST /scans/run` — the same scanner used by cron;
-- `POST /jobs/:id/cancel` — cancels queued/running work and causes a running provider to abort on
+- `POST /jobs/:id/cancel` — cancels queued, quota-waiting, or running work and causes a running provider to abort on
   the next heartbeat;
 - `POST /jobs/:id/retry` — eligible only for failed, blocked, cancelled, or stale jobs;
 - `POST /notifications/test` — persists and dispatches a Telegram test event.
 
-The dashboard polls only while active work is present. PostgreSQL rows remain authoritative if a
-browser closes or a container restarts.
+The dashboard polls only while active work is present, with a slower cadence for quota-waiting
+jobs. PostgreSQL rows remain authoritative if a browser closes or a container restarts.
 
 ## Scheduler, locking, and parallelism
 
@@ -375,7 +375,10 @@ key (repository + issue) and Pull Request jobs have a unique active key
 (repository + PR + head SHA + job kind), so duplicate scans cannot create duplicate active work.
 The scanners write the durable PostgreSQL history rows, then enqueue the same `queueJobId` in
 BullMQ. Workers alone perform a guarded `QUEUED` → `RUNNING` transition, so duplicate delivery is
-ignored. Set `MAX_PARALLEL_JOBS=1` for sequential behavior; raising it changes BullMQ worker
+ignored. If Codex reports an exhausted structured rate-limit window, admission instead performs a
+guarded `QUEUED` → `WAITING_FOR_QUOTA` transition without claiming an execution attempt. The next
+scheduled scan reads the account snapshot once and requeues the same durable job when quota is
+available. Set `MAX_PARALLEL_JOBS=1` for sequential behavior; raising it changes BullMQ worker
 concurrency. BullMQ owns retries and locks while PostgreSQL retains the visible business state.
 
 At worker startup, expired running jobs become `STALE` and release their active key. For issue jobs

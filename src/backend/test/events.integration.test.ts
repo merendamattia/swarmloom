@@ -47,6 +47,9 @@ integration("event notification policy", () => {
       "REVIEW_COMPLETED",
       "REVIEW_PASSED",
       "ISSUE_DONE",
+      "JOB_WAITING_FOR_QUOTA",
+      "PROVIDER_QUOTA_AVAILABLE",
+      "JOB_QUOTA_RESUME_QUEUED",
     ];
     const types = [...allowedTypes, ...suppressedTypes];
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { CircleAlert } from "lucide-react";
+import { CircleAlert, Clock3 } from "lucide-react";
 import { useParams } from "next/navigation";
 import { FailureDiagnostics } from "@/components/jobs/job-evidence";
 import { JobFacts } from "@/components/jobs/job-facts";
@@ -31,12 +31,12 @@ export default function JobPage() {
     <>
       <JobHeader job={data} subject={subject} cancelling={cancel.isPending} retrying={retry.isPending} onCancel={() => cancel.mutate()} onRetry={() => retry.mutate()} />
       <ActionMessage pending={cancel.isPending || retry.isPending} error={cancel.error || retry.error} success={cancel.isSuccess || retry.isSuccess} pendingText={cancel.isPending ? "Cancelling the job…" : data.subjectType === "PULL_REQUEST" ? "Restoring the pull request label and starting a scan…" : "Restoring the ready label and starting a scan…"} />
-      {data.errorMessage ? <div className="notice" role="alert"><CircleAlert aria-hidden="true" /><div><strong>The job requires attention</strong><p>{data.errorMessage}</p></div></div> : null}
+      {data.status === "WAITING_FOR_QUOTA" ? <div className="notice" role="status"><Clock3 aria-hidden="true" /><div><strong>Waiting for provider quota</strong><p>{data.quotaMessage ?? "This job will resume automatically when Codex quota is available."}{data.quotaResetAt ? ` Reset at ${new Date(data.quotaResetAt).toLocaleString()}.` : ""}</p></div></div> : data.errorMessage ? <div className="notice" role="alert"><CircleAlert aria-hidden="true" /><div><strong>The job requires attention</strong><p>{data.errorMessage}</p></div></div> : null}
       <div className="detail-grid">
         <div className="detail-main">
           {data.status === "FAILED" ? <Panel><FailureDiagnostics diagnostics={data.diagnostics} jobId={data.id} supportIssueNumber={data.supportIssueNumber ?? null} supportIssueUrl={data.supportIssueUrl ?? null} /></Panel> : null}
           <JobTimeline job={data} events={agentOutputEvents(data.events)} />
-          <JobResult status={data.status} result={result} />
+          <JobResult status={data.status} result={result} quotaMessage={data.quotaMessage} />
           <JobReview job={data} response={review} />
         </div>
         <JobFacts job={data} subject={subject} trigger={triggerLabel(data.trigger)} />

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { parseConfig } from "../src/core/config-schema.ts";
-import type { AgentProvider, AgentRequest, AgentResult } from "../src/providers/index.ts";
+import type { AgentProvider, AgentRequest, AgentResult, ProviderUsageSnapshot } from "../src/providers/index.ts";
 import { ProviderProcessError } from "../src/providers/process.ts";
 
 const integration = process.env.RUN_INTEGRATION === "1" ? describe : describe.skip;
@@ -204,6 +204,95 @@ integration("job runner", () => {
     expect(diagnosticGitHub.createdIssues[0]?.body).toContain("Stack trace:");
     expect(diagnosticGitHub.createdIssues[0]?.body).toContain("created automatically");
     expect(diagnosticGitHub.createdIssues[0]?.body).not.toContain("created manually");
+  });
+
+  test("pauses a confirmed quota failure and resumes the same session and worktree", async () => {
+    const job = await claimed(issueBase + 50, "IMPLEMENTATION", "ISSUE");
+    const github = fakeGitHub(job.issueNumber, job.branchName, "a".repeat(40));
+    const created: string[] = [];
+    const removed: string[] = [];
+    const exhausted: ProviderUsageSnapshot = {
+      status: "available",
+      availability: "exhausted",
+      observedAt: "2026-08-29T20:00:00.000Z",
+      windows: [{
+        limitId: "codex",
+        limitName: "included",
+        windowType: "primary",
+        usedPercent: 100,
+        remainingPercent: 0,
+        windowDurationMins: 300,
+        resetsAt: "2026-08-29T21:00:00.000Z",
+      }],
+    };
+    const paused = new FakeProvider([{
+      ...success("", "quota-session"),
+      exitCode: 1,
+      stderr: "You've hit your usage limit",
+      failure: { reason: "QUOTA_EXHAUSTED", message: "You've hit your usage limit", quota: exhausted },
+    }]);
+    const runner = createJobRunner({
+      config: { ...config, CREATE_DIAGNOSTIC_ISSUES: true },
+      provider: paused,
+      github,
+      createWorktree: async (input) => { created.push(input.worktreePath); return input.worktreePath; },
+      removeWorktree: async (input) => { removed.push(input.worktreePath); },
+      gcRepository: async () => {},
+    });
+
+    expect(await runner.run(job.id, "runner-worker")).toBe(false);
+    const waiting = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(waiting).toMatchObject({
+      status: "WAITING_FOR_QUOTA",
+      activeIssueKey: `${repositoryId}:${job.issueNumber}`,
+      implementationSessionId: "quota-session",
+      errorMessage: null,
+      quotaWindow: "codex:primary",
+      quotaUsedPercent: 100,
+      quotaMessage: "You've hit your usage limit",
+      worktreePath: created[0],
+    });
+    expect(waiting.diagnostics).toMatchObject({ stderr: "You've hit your usage limit" });
+    expect(created).toHaveLength(1);
+    expect(removed).toEqual([]);
+    expect(github.createdIssues).toEqual([]);
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "JOB_FAILED" } })).toBeNull();
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "JOB_WAITING_FOR_QUOTA" } })).not.toBeNull();
+
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { quotaWaitStartedAt: new Date(Date.now() - 10_000) },
+    });
+    const requeued = await jobs.requeueWaitingForQuota(job.id, environment);
+    expect(requeued?.id).toBe(job.id);
+    expect(requeued?.quotaWaitDurationMs).toBeGreaterThanOrEqual(10_000);
+    const claimedAgain = await jobs.claim(job.id, environment, "runner-worker");
+    expect(claimedAgain?.attempts).toBe(2);
+    const persistedWorktreePath = waiting.worktreePath!;
+    expect(persistedWorktreePath).not.toBeNull();
+    const resumed = new FakeProvider([success([
+      "Outcome: implemented",
+      `PR: https://github.com/acme/runner/pull/${job.issueNumber}`,
+      "TL;DR: Resumed the implementation.",
+      "Resumed the implementation.",
+    ].join("\n"), "resumed-session")]);
+    const resumedRunner = createJobRunner({
+      config,
+      provider: resumed,
+      github,
+      createWorktree: async (input) => { created.push(input.worktreePath); return input.worktreePath; },
+      removeWorktree: async (input) => { removed.push(input.worktreePath); },
+      gcRepository: async () => {},
+    });
+
+    expect(await resumedRunner.run(job.id, "runner-worker")).toBe(true);
+    expect(resumed.calls[0]?.sessionId).toBe("quota-session");
+    expect(resumed.calls[0]?.workingDirectory).toBe(persistedWorktreePath);
+    expect(created).toHaveLength(1);
+    expect(removed).toEqual([persistedWorktreePath]);
+    const completed = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(completed.status).toBe("COMPLETED");
+    expect(completed.activeDurationMs).toBeLessThan(completed.quotaWaitDurationMs);
   });
 
   test("aborts an active provider when cancellation makes its heartbeat fail", async () => {

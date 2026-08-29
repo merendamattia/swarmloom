@@ -16,6 +16,35 @@ export type AgentEvent = {
   metadata?: Record<string, string | number | boolean | null>;
 };
 
+export type ProviderQuotaWindow = {
+  limitId: string | null;
+  limitName: string | null;
+  windowType: "primary" | "secondary";
+  usedPercent: number | null;
+  remainingPercent: number | null;
+  windowDurationMins: number | null;
+  resetsAt: string | null;
+};
+
+export type ProviderUsageSnapshot = {
+  status: "available" | "unavailable" | "unsupported" | "stale";
+  availability?: "available" | "exhausted" | "unknown";
+  observedAt: string | null;
+  windows: ProviderQuotaWindow[];
+  message?: string;
+};
+
+export type ProviderFailure = {
+  reason: "QUOTA_EXHAUSTED";
+  message: string;
+  quota: ProviderUsageSnapshot;
+};
+
+export interface ProviderUsageCapability {
+  readAccountUsage(): Promise<ProviderUsageSnapshot>;
+  refreshAccountUsage?(): Promise<ProviderUsageSnapshot>;
+}
+
 export type AgentRequest = {
   role: AgentRole;
   workingDirectory: string;
@@ -24,6 +53,7 @@ export type AgentRequest = {
   instructions?: string;
   model: string;
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  sessionId?: string | null;
   environment?: Record<string, string | undefined>;
   responseFilePath?: string;
   signal?: AbortSignal;
@@ -36,6 +66,7 @@ export type AgentResult = {
   exitCode: number;
   finalOutput: string;
   stderr: string;
+  failure?: ProviderFailure;
 };
 
 export type NormalizedProviderEvent = {
@@ -47,6 +78,7 @@ export type NormalizedProviderEvent = {
 export interface AgentProvider {
   readonly name: "codex" | "opencode";
   execute(request: AgentRequest): Promise<AgentResult>;
+  readonly usage?: ProviderUsageCapability;
 }
 
 export function buildAgentPrompt(request: AgentRequest) {

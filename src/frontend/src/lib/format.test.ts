@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  activeDuration,
   agentOutputEvents,
   agentOutputMessage,
   dateTime,
@@ -9,6 +10,7 @@ import {
   normalizeDiagnostics,
   shortCommit,
   statusLabel,
+  quotaWaitDuration,
 } from "./format.ts";
 
 test("formats a valid timestamp", () => {
@@ -47,6 +49,8 @@ test("renders the small Markdown subset used in provider summaries", () => {
 
 test("formats operational values", () => {
   expect(duration(125_000)).toBe("2m 5s");
+  expect(activeDuration(1_000, null)).toBe("1s");
+  expect(quotaWaitDuration(1_000, null)).toBe("1s");
   expect(statusLabel("CHANGES_REQUESTED")).toBe("Changes requested");
   expect(shortCommit("1234567890abcdef")).toBe("12345678");
 });

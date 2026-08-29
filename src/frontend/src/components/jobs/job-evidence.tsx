@@ -9,7 +9,7 @@ import { FactList } from "@/components/ui/fact-list";
 import { SectionHeading } from "@/components/ui/page-header";
 import { StatusPill } from "@/components/ui/status-pill";
 import { useCreateSupportIssue, type Job } from "@/hooks/api";
-import { diagnosticsBundle, duration, inlineMarkdown, normalizeDiagnostics, statusLabel } from "@/lib/format";
+import { activeDuration, diagnosticsBundle, inlineMarkdown, normalizeDiagnostics, statusLabel } from "@/lib/format";
 
 export function MarkdownText({ value, className = "rich-text" }: { value: string; className?: string }) {
   return <p className={className}>{inlineMarkdown(value).map((part, index) => {
@@ -98,10 +98,15 @@ function DiagnosticBlock({ title, text, lines }: { title: string; text?: string 
   return <div className="diagnostics-block"><h3>{title}</h3>{text ? <pre className="diagnostics-pre">{text}</pre> : <p className="muted">Not recorded</p>}</div>;
 }
 
-export function ReviewEvidence({ review, response }: { review: NonNullable<Job["review"]>; response: string | null }) {
+export function ReviewEvidence({ review, response, activeDurationMs, activeStartedAt }: {
+  review: NonNullable<Job["review"]>;
+  response: string | null;
+  activeDurationMs: number;
+  activeStartedAt: string | null;
+}) {
   return (
     <div className="review-evidence">
-      <div className="review-meta"><StatusPill status={review.status} /><span className="list-meta">{statusLabel(review.provider)} · {review.model} · {duration(review.durationMs)}</span></div>
+      <div className="review-meta"><StatusPill status={review.status} /><span className="list-meta">{statusLabel(review.provider)} · {review.model} · {activeDuration(activeDurationMs, activeStartedAt)} active</span></div>
       {review.errorMessage ? <div className="outcome-message" data-tone="danger"><CircleAlert aria-hidden="true" /><div><h3>Review failed</h3><MarkdownText value={review.errorMessage} /></div></div> : null}
       {response
         ? <div className="response-evidence"><MarkdownText value={response} /></div>

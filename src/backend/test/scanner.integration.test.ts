@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { parseConfig } from "../src/core/config-schema.ts";
 import { MissingDevelopBranchError } from "../src/git/repositories.ts";
+import type { ProviderUsageSnapshot } from "../src/providers/types.ts";
 
 const integration = process.env.RUN_INTEGRATION === "1" ? describe : describe.skip;
 
@@ -182,6 +183,48 @@ integration("issue scanner", () => {
       where: { id: job.id },
       data: { status: "CANCELLED", activeIssueKey: null, completedAt: new Date(), heartbeatAt: null },
     });
+  });
+
+  test("requeues the same quota-waiting job once the account snapshot is available", async () => {
+    const waiting = await prisma.job.findFirstOrThrow({ where: { environment } });
+    const oldQueueJobId = waiting.queueJobId;
+    await prisma.job.update({
+      where: { id: waiting.id },
+      data: {
+        status: "WAITING_FOR_QUOTA",
+        completedAt: null,
+        quotaWaitStartedAt: new Date(Date.now() - 5_000),
+        quotaResetAt: new Date(Date.now() + 60_000),
+        quotaWindow: "codex:primary",
+        quotaUsedPercent: 100,
+        quotaMessage: "Codex quota exhausted",
+        activeIssueKey: `${waiting.repositoryId}:${waiting.issueNumber}`,
+      },
+    });
+    const available: ProviderUsageSnapshot = {
+      status: "available",
+      availability: "available",
+      observedAt: new Date().toISOString(),
+      windows: [],
+    };
+    let reads = 0;
+    enqueuedJobs.length = 0;
+    const scanner = createScanService({
+      config: { ...config, APP_ENV: environment as "test" },
+      github,
+      queue: { enqueue: async (jobId) => { enqueuedJobs.push(jobId); } },
+      providerUsage: { readAccountUsage: async () => { reads += 1; return available; } },
+      syncRepository: sync,
+    });
+
+    const scan = await scanner.run("MANUAL");
+    const requeued = await prisma.job.findUniqueOrThrow({ where: { id: waiting.id } });
+    expect(scan.status).toBe("COMPLETED");
+    expect(reads).toBe(1);
+    expect(requeued).toMatchObject({ id: waiting.id, status: "QUEUED", activeIssueKey: `${waiting.repositoryId}:${waiting.issueNumber}`, completedAt: null });
+    expect(requeued.queueJobId).not.toBe(oldQueueJobId);
+    expect(enqueuedJobs).toEqual([waiting.id]);
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: waiting.id, type: "JOB_QUOTA_RESUME_QUEUED" } })).not.toBeNull();
   });
 
   test("a failed label acquisition releases the issue key and fails the queued row", async () => {

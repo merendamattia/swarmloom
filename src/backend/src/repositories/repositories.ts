@@ -45,7 +45,7 @@ type RemoveConfiguration = { environment: string; value: string | null };
 
 async function remove(id: string, fullName: string, configuration?: RemoveConfiguration) {
   const activeJobs = await prisma.job.count({
-    where: { repositoryId: id, status: { in: ["QUEUED", "RUNNING"] } },
+    where: { repositoryId: id, status: { in: ["QUEUED", "RUNNING", "WAITING_FOR_QUOTA"] } },
   });
   if (activeJobs > 0) return { blocked: true, activeJobs };
   const settingsWrite = configuration

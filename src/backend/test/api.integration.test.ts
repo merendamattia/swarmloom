@@ -157,6 +157,48 @@ integration("operations API", () => {
     expect(await repositories.json()).toMatchObject([{ jobs: [{ id: jobId, reasoningEffort: "high" }] }]);
   });
 
+  test("exposes quota waits as active filterable jobs and allows cancellation", async () => {
+    const waiting = await prisma.job.create({
+      data: {
+        repositoryId,
+        environment: "test",
+        issueNumber: 199,
+        subjectType: "PULL_REQUEST",
+        issueTitle: `Quota wait ${unique}`,
+        issueUrl: `https://github.com/acme/api-${unique}/pull/199`,
+        issueBody: "Quota wait",
+        status: "WAITING_FOR_QUOTA",
+        activePrKey: `${repositoryId}:199:head:REVIEW`,
+        queueJobId: crypto.randomUUID(),
+        branchName: "agent/issue-199",
+        baselineCommit: "e".repeat(40),
+        pullRequestNumber: 199,
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+        quotaWaitStartedAt: new Date(),
+        quotaResetAt: new Date(Date.now() + 60_000),
+        quotaWindow: "codex:primary",
+        quotaUsedPercent: 100,
+        quotaMessage: "Codex quota exhausted",
+      },
+    });
+
+    const dashboard = await (await app.request("/api/dashboard")).json();
+    expect(dashboard.jobs.WAITING_FOR_QUOTA).toBe(1);
+    expect(dashboard.activeJobs).toEqual(expect.arrayContaining([expect.objectContaining({ id: waiting.id, status: "WAITING_FOR_QUOTA" })]));
+
+    const filtered = await app.request("/api/jobs?status=WAITING_FOR_QUOTA");
+    expect(await filtered.json()).toMatchObject({ total: 1, items: [{ id: waiting.id, status: "WAITING_FOR_QUOTA", quotaWindow: "codex:primary" }] });
+
+    const cancelled = await app.request(`/api/jobs/${waiting.id}/cancel`, { method: "POST" });
+    expect(cancelled.status).toBe(200);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: waiting.id } })).toMatchObject({
+      status: "CANCELLED",
+      activePrKey: null,
+      quotaWaitStartedAt: null,
+    });
+  });
+
   test("returns only the five most recent jobs on the dashboard", async () => {
     const jobIds = Array.from({ length: 6 }, (_, index) => `dashboard-${unique}-${index}`);
     await prisma.job.createMany({

@@ -8,7 +8,7 @@ import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.
 import { loadAgentInstructions } from "../runtime/instructions.ts";
 import type { AgentRole } from "../providers/index.ts";
 import { ProviderProcessError } from "../providers/process.ts";
-import { AgentExecutionError, causeChain, stackTrace, type DiagnosticEvent, type JobDiagnostics } from "./diagnostics.ts";
+import { AgentExecutionError, causeChain, executionFailure, stackTrace, type DiagnosticEvent, type JobDiagnostics } from "./diagnostics.ts";
 import type { GitHubIssueContext } from "../github/client.ts";
 import type { RunningJob, RunnerContext, RunnerGitHub } from "./types.ts";
 import { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome, parseTldr } from "./response.ts";
@@ -57,6 +57,7 @@ export async function executeRole(
       instructions: await loadAgentInstructions(context.config.AGENT_RUNTIME_DIR),
       model: job.model,
       reasoningEffort: job.reasoningEffort as Config["CODEX_CODING_REASONING_EFFORT"] | undefined,
+      sessionId: job.implementationSessionId,
       environment: githubGitEnvironment(context.config.GITHUB_TOKEN, job.repository.cloneUrl),
       responseFilePath,
       signal: abortSignal,
@@ -80,15 +81,33 @@ export async function executeRole(
         });
       },
     });
-    return {
+    const execution = {
       ...result,
       role,
-      sessionId: sessionId ?? result.sessionId,
+      sessionId: sessionId ?? result.sessionId ?? job.implementationSessionId,
       responseFilePath,
       response: "",
       events: diagnosticEvents,
     };
+    if (result.failure) {
+      throw executionFailure(
+        roleStage(role),
+        role,
+        job,
+        context.provider,
+        execution,
+        new Error(result.failure.message),
+        {
+          failure: result.failure,
+          finalOutput: result.finalOutput,
+          stderr: result.stderr,
+          environment: { ...globalThis.process.env, SWARMLOOM_GITHUB_TOKEN: context.config.GITHUB_TOKEN },
+        },
+      );
+    }
+    return execution;
   } catch (error) {
+    if (error instanceof AgentExecutionError) throw error;
     throw new AgentExecutionError(safeError(error), {
       stage: error instanceof ProviderProcessError ? "provider_process" : roleStage(role),
       role,
@@ -268,12 +287,6 @@ function roleStage(role: AgentRole): JobDiagnostics["stage"] {
 export function safeError(error: unknown) {
 
   return redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000);
-}
-
-export function duration(startedAt: Date | null) {
-  if (!startedAt) return "an unknown duration";
-  const seconds = Math.max(0, Math.round((Date.now() - startedAt.getTime()) / 1_000));
-  return `${seconds}s`;
 }
 
 export { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome, parseTldr };

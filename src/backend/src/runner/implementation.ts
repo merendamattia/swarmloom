@@ -4,7 +4,6 @@ import { jobRepository } from "../repositories/jobs.ts";
 import { safeWorktreePath } from "./paths.ts";
 import {
   applyPullRequestLabels,
-  duration,
   implementationContext,
   parseJobOutcome,
   parsePullRequestUrl,
@@ -21,19 +20,21 @@ export const runImplementation: JobFlow = async (context) => {
 
   if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
   const localPath = job.repository.localPath;
-  const worktreePath = safeWorktreePath(config.DATA_DIR, job.id);
+  const worktreePath = job.worktreePath ?? safeWorktreePath(config.DATA_DIR, job.id);
   const gitEnvironment = githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl);
-  await context.createWorktree({
-    repositoryPath: localPath,
-    worktreePath,
-    branchName: job.branchName,
-    baselineCommit: job.baselineCommit,
-    gitEnvironment,
-  });
+  if (!job.worktreePath) {
+    await context.createWorktree({
+      repositoryPath: localPath,
+      worktreePath,
+      branchName: job.branchName,
+      baselineCommit: job.baselineCommit,
+      gitEnvironment,
+    });
+  }
   context.state.worktreeCreated = true;
   context.state.worktreePath = worktreePath;
   context.state.repositoryPath = localPath;
-  if (!await jobRepository.setWorktree(job.id, worktreePath)) return;
+  if (!job.worktreePath && !await jobRepository.setWorktree(job.id, worktreePath)) return;
 
   await events.record({
     type: "JOB_STARTED",
@@ -140,7 +141,7 @@ export const runImplementation: JobFlow = async (context) => {
     }
     await events.record({
       type: "JOB_COMPLETED",
-      message: `Completed ${fullName}#${job.issueNumber} with PR #${pullRequest.number} using ${provider.name}/${job.model} in ${duration(job.startedAt)}`,
+      message: `Completed ${fullName}#${job.issueNumber} with PR #${pullRequest.number} using ${provider.name}/${job.model}`,
       jobId: job.id,
       repositoryId: job.repositoryId,
       scanRunId: job.scanRunId ?? undefined,

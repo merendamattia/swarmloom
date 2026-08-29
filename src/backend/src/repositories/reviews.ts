@@ -8,6 +8,8 @@ async function start(
   reasoningEffort?: string | null,
   input: { pullRequestId?: string | null; pullRequestNumber?: number | null; headSha?: string | null } = {},
 ) {
+  const existing = await prisma.review.findUnique({ where: { jobId } });
+  if (existing) return existing;
   return prisma.review.create({
     data: {
       jobId,

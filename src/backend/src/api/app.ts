@@ -49,7 +49,7 @@ function configuredAgentProfiles(config: Config) {
 }
 
 const jobQuery = z.object({
-  status: z.enum(["QUEUED", "RUNNING", "COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"]).optional(),
+  status: z.enum(["QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"]).optional(),
   jobType: z.enum(["IMPLEMENTATION", "FIX", "REVIEW", "DECOMPOSITION"]).optional(),
   subjectType: z.enum(["ISSUE", "PULL_REQUEST"]).optional(),
   provider: z.enum(["CODEX", "OPENCODE"]).optional(),
@@ -70,6 +70,13 @@ const jobSummaryFields = {
   status: true,
   completedAt: true,
   durationMs: true,
+  activeDurationMs: true,
+  quotaWaitDurationMs: true,
+  quotaWaitStartedAt: true,
+  quotaResetAt: true,
+  quotaWindow: true,
+  quotaUsedPercent: true,
+  quotaMessage: true,
   branchName: true,
   baselineCommit: true,
   pullRequestNumber: true,
@@ -80,6 +87,7 @@ const jobSummaryFields = {
   model: true,
   reasoningEffort: true,
   startedAt: true,
+  activeStartedAt: true,
   attempts: true,
   errorMessage: true,
   updatedAt: true,
@@ -197,7 +205,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         prisma.job.groupBy({ where: { environment: config.APP_ENV }, by: ["status"], _count: true }),
         prisma.repository.findMany({ orderBy: { fullName: "asc" } }),
         prisma.job.findMany({
-          where: { environment: config.APP_ENV, status: "RUNNING" },
+          where: { environment: config.APP_ENV, status: { in: ["RUNNING", "WAITING_FOR_QUOTA"] } },
           orderBy: { startedAt: "asc" },
           select: jobSummarySelect,
         }),
@@ -332,7 +340,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         : undefined);
       if (result?.blocked) {
         return context.json({
-          error: `Cannot remove the repository while ${result.activeJobs} active job${result.activeJobs === 1 ? "" : "s"} ${result.activeJobs === 1 ? "is" : "are"} queued or running. Cancel or finish them first.`,
+          error: `Cannot remove the repository while ${result.activeJobs} active job${result.activeJobs === 1 ? "" : "s"} ${result.activeJobs === 1 ? "is" : "are"} queued, waiting, or running. Cancel or finish them first.`,
         }, 409);
       }
       if (configured) {

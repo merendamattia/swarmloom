@@ -10,6 +10,7 @@ import {
   reviewContext,
   safeError,
 } from "./helpers.ts";
+import { isQuotaFailure } from "./diagnostics.ts";
 import type { JobFlow } from "./types.ts";
 
 export const runReview: JobFlow = async (context) => {
@@ -51,18 +52,20 @@ export const runReview: JobFlow = async (context) => {
 
   if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
   const localPath = job.repository.localPath;
-  const worktreePath = safeWorktreePath(config.DATA_DIR, job.id);
+  const worktreePath = job.worktreePath ?? safeWorktreePath(config.DATA_DIR, job.id);
   const gitEnvironment = githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl);
-  await context.createReviewWorktree({
-    repositoryPath: localPath,
-    worktreePath,
-    branchName: pullRequest.headBranch,
-    gitEnvironment,
-  });
+  if (!job.worktreePath) {
+    await context.createReviewWorktree({
+      repositoryPath: localPath,
+      worktreePath,
+      branchName: pullRequest.headBranch,
+      gitEnvironment,
+    });
+  }
   context.state.worktreeCreated = true;
   context.state.worktreePath = worktreePath;
   context.state.repositoryPath = localPath;
-  if (!await jobRepository.setWorktree(job.id, worktreePath)) return;
+  if (!job.worktreePath && !await jobRepository.setWorktree(job.id, worktreePath)) return;
 
   await events.record({
     type: "JOB_STARTED",
@@ -255,7 +258,9 @@ export const runReview: JobFlow = async (context) => {
     });
     return;
   } catch (error) {
-    await reviewRepository.finish(reviewRow.id, "FAILED", { errorMessage: safeError(error) });
+    if (!isQuotaFailure(error)) {
+      await reviewRepository.finish(reviewRow.id, "FAILED", { errorMessage: safeError(error) });
+    }
     throw error;
   }
 };
