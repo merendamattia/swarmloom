@@ -292,7 +292,7 @@ export async function readCodexThreadUsage(threadId: string): Promise<AgentToken
         jsonrpc: "2.0",
         id: 3,
         method: "thread/resume",
-        params: { threadId, excludeTurns: true },
+        params: { threadId },
       });
       await resumed;
       const noUsage = new Promise<null>((resolve) => {

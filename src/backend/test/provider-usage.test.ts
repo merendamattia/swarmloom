@@ -114,9 +114,9 @@ describe("Codex account usage", () => {
     expect(reads).toBe(1);
   });
 
-  test("reads account and restored thread usage through the App Server protocol", async () => {
+  test("uses replay-capable resume to read restored thread usage", async () => {
     const original = Bun.spawn;
-    const requests: Array<{ id?: number; method?: string }> = [];
+    const requests: Array<{ id?: number; method?: string; params?: { threadId?: string; excludeTurns?: boolean } }> = [];
     const fakeSpawn = () => {
       let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
       let closed = false;
@@ -127,7 +127,7 @@ describe("Codex account usage", () => {
       const send = (message: unknown) => controller?.enqueue(encoder.encode(`${JSON.stringify(message)}\n`));
       const stdin = {
         write(value: string) {
-          const request = JSON.parse(value) as { id?: number; method?: string };
+          const request = JSON.parse(value) as { id?: number; method?: string; params?: { threadId?: string; excludeTurns?: boolean } };
           requests.push(request);
           if (request.id === 1) send({ id: 1, result: {} });
           if (request.method === "account/rateLimits/read") {
@@ -138,17 +138,19 @@ describe("Codex account usage", () => {
           }
           if (request.method === "thread/resume") {
             send({ id: 3, result: { thread: { id: "thread-1" } } });
-            send({ method: "thread/tokenUsage/updated", params: {
-              threadId: "thread-1",
-              turnId: "turn-1",
-              tokenUsage: { total: {
-                inputTokens: 1_000,
-                cachedInputTokens: 400,
-                outputTokens: 120,
-                reasoningOutputTokens: 80,
-                totalTokens: 1_120,
-              } },
-            } });
+            if (!request.params?.excludeTurns) {
+              send({ method: "thread/tokenUsage/updated", params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                tokenUsage: { total: {
+                  inputTokens: 1_000,
+                  cachedInputTokens: 400,
+                  outputTokens: 120,
+                  reasoningOutputTokens: 80,
+                  totalTokens: 1_120,
+                } },
+              } });
+            }
           }
         },
       };
@@ -177,6 +179,7 @@ describe("Codex account usage", () => {
         reasoningOutputTokens: 80,
         totalTokens: 1_120,
       });
+      expect(requests.find(({ method }) => method === "thread/resume")?.params).toEqual({ threadId: "thread-1" });
       expect(requests).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: 1, method: "initialize" }),
         expect.objectContaining({ id: 2, method: "account/rateLimits/read" }),
