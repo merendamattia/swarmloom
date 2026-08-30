@@ -123,15 +123,23 @@ integration("PostgreSQL job lifecycle", () => {
   test("marks abandoned running jobs stale and never claims cancelled work", async () => {
     const stale = await jobs.tryCreateQueued(queuedJob(issuePrefix + 1));
     expect((await jobs.claim(stale!.id, environment, "dead-worker"))?.id).toBe(stale?.id);
+    const activeStartedAt = new Date(Date.now() - 2_000);
     await prisma.job.update({
       where: { id: stale!.id },
-      data: { heartbeatAt: new Date(Date.now() - 120_000) },
+      data: {
+        heartbeatAt: new Date(Date.now() - 120_000),
+        activeStartedAt,
+        activeDurationMs: 700,
+      },
     });
 
     const recovered = await jobs.recoverStaleBefore(environment, new Date(Date.now() - 60_000));
     expect(recovered).toHaveLength(1);
     expect(recovered[0]?.repository.id).toBe(repositoryId);
-    expect((await prisma.job.findUniqueOrThrow({ where: { id: stale!.id } })).status).toBe("STALE");
+    const staleRow = await prisma.job.findUniqueOrThrow({ where: { id: stale!.id } });
+    expect(staleRow).toMatchObject({ status: "STALE", activeStartedAt: null });
+    expect(staleRow.activeDurationMs).toBeGreaterThanOrEqual(2_700);
+    expect(staleRow.durationMs).toBe(staleRow.activeDurationMs);
 
     const cancelled = await jobs.tryCreateQueued(queuedJob(issuePrefix + 2));
     expect(await jobs.cancel(cancelled!.id)).toBe(true);
@@ -157,6 +165,37 @@ integration("PostgreSQL job lifecycle", () => {
 
     expect(await recoverStaleJobs(config, github as unknown as GitHubClient, createEventService())).toBe(1);
     expect(labelCalls[0]).toEqual(["bug", config.ISSUE_BLOCKED_LABEL]);
+  });
+
+  test("reconciles a cancelled quota worktree after the API handoff is interrupted", async () => {
+    const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 20, config.APP_ENV));
+    expect(await jobs.waitForQuotaQueued(queued!.id, config.APP_ENV, {
+      window: "codex:primary",
+      usedPercent: 100,
+      message: "Codex quota exhausted",
+    })).toBe(true);
+    const worktreePath = `/worker_data/worktrees/${crypto.randomUUID()}`;
+    await prisma.job.update({ where: { id: queued!.id }, data: { worktreePath } });
+
+    expect(await jobs.cancel(queued!.id)).toBe(true);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: queued!.id } })).toMatchObject({
+      status: "CANCELLED",
+      worktreeCleanupRequired: true,
+    });
+
+    const { createEventService } = await import("../src/events/service.ts");
+    const removed: string[] = [];
+    const { recoverCancelledWorktrees } = await import("../src/worktrees/recovery.ts");
+    expect(await recoverCancelledWorktrees(
+      config,
+      createEventService(),
+      async ({ worktreePath: path }) => { removed.push(path); },
+    )).toBe(1);
+    expect(removed).toEqual([worktreePath]);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: queued!.id } })).toMatchObject({
+      worktreeCleanupRequired: false,
+      worktreePath: null,
+    });
   });
 
   function queuedJob(issueNumber: number, jobEnvironment = environment) {

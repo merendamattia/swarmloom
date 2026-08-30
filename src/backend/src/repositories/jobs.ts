@@ -90,6 +90,21 @@ async function findQueued(id: string, environment: string) {
   });
 }
 
+async function findQueuedJobs(environment: string) {
+  return prisma.job.findMany({
+    where: { environment, status: "QUEUED" },
+    select: {
+      id: true,
+      queueJobId: true,
+      repositoryId: true,
+      issueNumber: true,
+      issueUrl: true,
+      jobType: true,
+    },
+    orderBy: { queuedAt: "asc" },
+  });
+}
+
 function quotaResetAt(value: string | null | undefined) {
   if (!value) return null;
   const date = new Date(value);
@@ -155,6 +170,27 @@ async function findWaitingForQuota(environment: string, provider: AgentProvider 
     include: { repository: true },
     orderBy: { quotaWaitStartedAt: "asc" },
   });
+}
+
+async function findCancelledWorktrees(environment: string) {
+  return prisma.job.findMany({
+    where: {
+      environment,
+      status: "CANCELLED",
+      worktreeCleanupRequired: true,
+      worktreePath: { not: null },
+    },
+    include: { repository: true },
+    orderBy: { completedAt: "asc" },
+  });
+}
+
+async function markWorktreeCleaned(id: string, environment: string) {
+  const updated = await prisma.job.updateMany({
+    where: { id, environment, status: "CANCELLED", worktreeCleanupRequired: true },
+    data: { worktreeCleanupRequired: false, worktreePath: null },
+  });
+  return updated.count === 1;
 }
 
 async function requeueWaitingForQuota(id: string, environment: string) {
@@ -412,6 +448,7 @@ async function cancel(id: string) {
       quotaWaitDurationMs: true,
       activeStartedAt: true,
       activeDurationMs: true,
+      worktreePath: true,
     },
   });
   if (!job || !["QUEUED", "RUNNING", "WAITING_FOR_QUOTA"].includes(job.status)) return false;
@@ -434,6 +471,7 @@ async function cancel(id: string) {
       durationMs: job.status === "RUNNING" ? activeDurationMs : undefined,
       quotaWaitStartedAt: null,
       quotaWaitDurationMs,
+      worktreeCleanupRequired: job.status === "WAITING_FOR_QUOTA" && Boolean(job.worktreePath),
       heartbeatAt: null,
     },
   });
@@ -443,24 +481,35 @@ async function cancel(id: string) {
 async function recoverStaleBefore(environment: string, cutoff: Date) {
   const candidates = await prisma.job.findMany({
     where: { environment, status: "RUNNING", heartbeatAt: { lt: cutoff } },
-    select: { id: true },
+    select: { id: true, activeStartedAt: true, startedAt: true, activeDurationMs: true },
   });
   if (candidates.length === 0) return [];
-  const ids = candidates.map(({ id }) => id);
-  const updated = await prisma.job.updateMany({
-    where: { id: { in: ids }, status: "RUNNING", heartbeatAt: { lt: cutoff } },
-    data: {
-      status: "STALE",
-      completedAt: new Date(),
-      activeIssueKey: null,
-      activePrKey: null,
-      heartbeatAt: null,
-      errorMessage: "Worker heartbeat expired before the job reached a terminal state",
-    },
-  });
-  if (updated.count === 0) return [];
+  const completedAt = new Date();
+  const recoveredIds: string[] = [];
+  for (const candidate of candidates) {
+    const activeStartedAt = candidate.activeStartedAt ?? candidate.startedAt;
+    const activeDurationMs = (candidate.activeDurationMs ?? 0) + (activeStartedAt
+      ? Math.max(0, completedAt.getTime() - activeStartedAt.getTime())
+      : 0);
+    const updated = await prisma.job.updateMany({
+      where: { id: candidate.id, status: "RUNNING", heartbeatAt: { lt: cutoff } },
+      data: {
+        status: "STALE",
+        completedAt,
+        durationMs: activeDurationMs,
+        activeDurationMs,
+        activeStartedAt: null,
+        activeIssueKey: null,
+        activePrKey: null,
+        heartbeatAt: null,
+        errorMessage: "Worker heartbeat expired before the job reached a terminal state",
+      },
+    });
+    if (updated.count === 1) recoveredIds.push(candidate.id);
+  }
+  if (recoveredIds.length === 0) return [];
   return prisma.job.findMany({
-    where: { id: { in: ids }, status: "STALE" },
+    where: { id: { in: recoveredIds }, status: "STALE" },
     include: { repository: true, pullRequest: true },
   });
 }
@@ -491,11 +540,14 @@ async function failQueued(id: string, errorMessage: string) {
 export const jobRepository = {
   tryCreateQueued,
   findQueued,
+  findQueuedJobs,
   claim,
   waitForQuotaQueued,
   waitForQuotaRunning,
   findWaitingForQuota,
   requeueWaitingForQuota,
+  findCancelledWorktrees,
+  markWorktreeCleaned,
   complete,
   cancel,
   recoverStaleBefore,

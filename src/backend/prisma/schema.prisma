@@ -132,6 +132,7 @@ model Job {
   quotaMessage            String?       @db.Text
   branchName              String
   worktreePath            String?
+  worktreeCleanupRequired Boolean       @default(false)
   baselineCommit          String
   pullRequestNumber       Int?
   pullRequestUrl          String?
@@ -166,6 +167,7 @@ model Job {
   @@index([provider, createdAt])
   @@index([repositoryId, pullRequestNumber])
   @@index([environment, status, quotaWaitStartedAt])
+  @@index([environment, status, worktreeCleanupRequired])
   @@map("job")
 }
 

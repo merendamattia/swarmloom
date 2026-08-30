@@ -157,6 +157,27 @@ integration("issue scanner", () => {
     })).not.toBeNull();
   });
 
+  test("restores BullMQ delivery for a queued job after a handoff crash", async () => {
+    const job = await prisma.job.findFirstOrThrow({ where: { environment, issueNumber: 42 } });
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { status: "QUEUED", queueJobId: crypto.randomUUID(), completedAt: null },
+    });
+    enqueuedJobs.length = 0;
+
+    const scanner = createScanService({
+      config: { ...config, APP_ENV: environment as "test" },
+      github,
+      queue: { enqueue: async (jobId, deliveryId) => { enqueuedJobs.push(`${jobId}:${deliveryId}`); } },
+      syncRepository: sync,
+    });
+    await scanner.run("MANUAL");
+
+    const recovered = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(recovered.status).toBe("QUEUED");
+    expect(enqueuedJobs).toEqual([`${job.id}:${recovered.queueJobId}`]);
+  });
+
   test("a repeated scan discovers while prior work is active without duplicating it", async () => {
     const scanner = createScanService({ config: { ...config, APP_ENV: environment as "test" }, github, syncRepository: sync });
     const scan = await scanner.run("MANUAL");

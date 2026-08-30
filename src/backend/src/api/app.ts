@@ -20,7 +20,10 @@ import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.
 import { dashboardExceptionRepository } from "../repositories/dashboard-exceptions.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import { repositoryRepository } from "../repositories/repositories.ts";
+import { reviewRepository } from "../repositories/reviews.ts";
 import type { JobQueue } from "../queue/service.ts";
+import { cleanupCancelledWorktree } from "../worktrees/recovery.ts";
+import { removeJobWorktree } from "../git/repositories.ts";
 
 type Scanner = { run(source: "SCHEDULED" | "MANUAL"): Promise<{ id: string; status: string }> };
 type ApiGitHub = Pick<GitHubClient,
@@ -35,6 +38,7 @@ type Dependencies = {
   events: EventService;
   startup: Startup;
   queue: Pick<JobQueue, "health" | "remove">;
+  removeWorktree?: typeof removeJobWorktree;
   settings: SettingsService;
   scheduler: Scheduler;
 };
@@ -104,7 +108,7 @@ const repositoryJobSummarySelect = {
   ...jobSummaryFields,
   review: { select: { status: true } },
 } satisfies Prisma.JobSelect;
-export function createApp({ config, scanner, github, events, startup, queue, settings, scheduler }: Dependencies) {
+export function createApp({ config, scanner, github, events, startup, queue, removeWorktree = removeJobWorktree, settings, scheduler }: Dependencies) {
   const app = new Hono().basePath("/api");
   app.use("*", requestId(), secureHeaders(), cors({
     origin: config.FRONTEND_URL,
@@ -360,6 +364,12 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       });
       if (!job) return context.json({ error: "Not found" }, 404);
       if (!await jobRepository.cancel(job.id)) return context.json({ error: "Job is already terminal" }, 409);
+      if (job.status === "WAITING_FOR_QUOTA" && job.worktreePath) {
+        await cleanupCancelledWorktree(config, events, job, removeWorktree);
+      }
+      if (job.status === "WAITING_FOR_QUOTA" && job.jobType === "REVIEW") {
+        await reviewRepository.cancelForJob(job.id);
+      }
       await queue.remove(job.queueJobId);
       await events.record({
         type: "JOB_CANCELLED",

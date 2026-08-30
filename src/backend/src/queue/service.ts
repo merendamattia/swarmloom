@@ -23,6 +23,7 @@ export function createJobQueue(config: Pick<Config, "APP_ENV" | "REDIS_URL">) {
 
   async function enqueue(jobId: string, deliveryId = jobId) {
     try {
+      if (await queue.getJob(deliveryId)) return;
       await queue.add("execute", queuePayload(jobId, config.APP_ENV), {
         jobId: deliveryId,
         attempts: 3,

@@ -22,6 +22,7 @@ integration("operations API", () => {
   let afterCreateIssue: (() => Promise<void>) | undefined;
   let reconciledIssue: { number: number; url: string } | undefined;
   let findIssueCalls = 0;
+  const removedWorktrees: string[] = [];
   const config = parseConfig({
     APP_ENV: "test",
     NODE_ENV: "test",
@@ -113,6 +114,7 @@ integration("operations API", () => {
         setPullRequestLabels: async () => {},
       },
       queue: { health: async () => "PONG", remove: async () => true },
+      removeWorktree: async ({ worktreePath }) => { removedWorktrees.push(worktreePath); },
       settings: createSettingsService(config),
       scheduler: { restart: () => { restartCalls += 1; } },
     });
@@ -158,12 +160,15 @@ integration("operations API", () => {
   });
 
   test("exposes quota waits as active filterable jobs and allows cancellation", async () => {
+    removedWorktrees.length = 0;
+    const worktreePath = `/worker_data/worktrees/${crypto.randomUUID()}`;
     const waiting = await prisma.job.create({
       data: {
         repositoryId,
         environment: "test",
         issueNumber: 199,
         subjectType: "PULL_REQUEST",
+        jobType: "REVIEW",
         issueTitle: `Quota wait ${unique}`,
         issueUrl: `https://github.com/acme/api-${unique}/pull/199`,
         issueBody: "Quota wait",
@@ -173,6 +178,7 @@ integration("operations API", () => {
         branchName: "agent/issue-199",
         baselineCommit: "e".repeat(40),
         pullRequestNumber: 199,
+        worktreePath,
         provider: "CODEX",
         model: "gpt-5.6-luna",
         quotaWaitStartedAt: new Date(),
@@ -180,6 +186,15 @@ integration("operations API", () => {
         quotaWindow: "codex:primary",
         quotaUsedPercent: 100,
         quotaMessage: "Codex quota exhausted",
+      },
+    });
+    await prisma.review.create({
+      data: {
+        jobId: waiting.id,
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+        status: "RUNNING",
+        startedAt: new Date(Date.now() - 5_000),
       },
     });
 
@@ -196,6 +211,12 @@ integration("operations API", () => {
       status: "CANCELLED",
       activePrKey: null,
       quotaWaitStartedAt: null,
+      worktreeCleanupRequired: false,
+    });
+    expect(removedWorktrees).toEqual([worktreePath]);
+    expect(await prisma.review.findUniqueOrThrow({ where: { jobId: waiting.id } })).toMatchObject({
+      status: "FAILED",
+      errorMessage: expect.stringContaining("cancelled"),
     });
   });
 

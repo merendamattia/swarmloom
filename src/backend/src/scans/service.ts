@@ -56,6 +56,7 @@ export function createScanService({
         scanRunId: scan.id,
         metadata: { source, repositories: config.githubRepositories },
       });
+      await reconcileQueuedJobs(scan.id);
       await reconcileWaitingJobs(scan.id);
       for (const fullName of config.githubRepositories) {
         let repository = await repositoryRepository.upsertConfigured(fullName, "");
@@ -126,6 +127,25 @@ export function createScanService({
   }
 
   return { run };
+
+  async function reconcileQueuedJobs(scanRunId: string) {
+    const queued = await jobRepository.findQueuedJobs(config.APP_ENV);
+    for (const job of queued) {
+      try {
+        await queue.enqueue(job.id, job.queueJobId);
+      } catch (error) {
+        await events.record({
+          type: "QUEUE_RECONCILIATION_REQUIRED",
+          level: "ERROR",
+          message: `Could not restore BullMQ delivery for ${job.jobType} job ${job.id}: ${safeError(error)}`,
+          jobId: job.id,
+          repositoryId: job.repositoryId,
+          scanRunId,
+          metadata: { issueUrl: job.issueUrl, issueNumber: job.issueNumber },
+        });
+      }
+    }
+  }
 
   async function reconcileWaitingJobs(scanRunId: string) {
     if (!providerUsage) return;

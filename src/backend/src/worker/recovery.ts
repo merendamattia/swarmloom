@@ -5,8 +5,12 @@ import { redactSecrets } from "../core/secrets.ts";
 import type { Config } from "../core/config-schema.ts";
 import { removeJobWorktree, repositoryPath } from "../git/repositories.ts";
 import { jobRepository } from "../repositories/jobs.ts";
+import { reviewRepository } from "../repositories/reviews.ts";
+import { recoverCancelledWorktrees } from "../worktrees/recovery.ts";
 
 export async function recoverStaleJobs(config: Config, github: GitHubClient, events: EventService) {
+  await recoverCancelledWorktrees(config, events);
+  await reviewRepository.reconcileCancelledJobs();
   const staleJobs = await jobRepository.recoverStaleBefore(
     config.APP_ENV,
     new Date(Date.now() - config.STALE_JOB_THRESHOLD_MS),
