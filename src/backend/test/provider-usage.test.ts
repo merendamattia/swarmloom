@@ -270,6 +270,13 @@ test("accepts provider int64 token counts without narrowing them to 32-bit integ
     reasoningOutputTokens: null,
     totalTokens: BigInt("9223372036854775807"),
   });
+  expect(normalizeCodexTokenUsage({ inputTokens: -1n })).toEqual({
+    inputTokens: null,
+    cachedInputTokens: null,
+    outputTokens: null,
+    reasoningOutputTokens: null,
+    totalTokens: null,
+  });
 });
 
 test("normalizes cumulative Codex thread token usage notifications", () => {

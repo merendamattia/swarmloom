@@ -41,7 +41,7 @@ function tokenCount(value: unknown) {
   } else {
     return null;
   }
-  return count <= MAX_INT64 ? count : null;
+  return count >= BigInt(0) && count <= MAX_INT64 ? count : null;
 }
 
 export function normalizeCodexTokenUsage(value: unknown): AgentTokenUsage | null {
