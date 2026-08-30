@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { parseConfig } from "../src/core/config-schema.ts";
 import type { GitHubClient } from "../src/github/client.ts";
 
@@ -174,6 +176,91 @@ integration("PostgreSQL job lifecycle", () => {
       sessionId: null,
     });
     expect(await jobs.cancel(claimed!.id)).toBe(true);
+  });
+
+  test("reclaims a terminal cleanup lease after a worker dies between claim and clear", async () => {
+    const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 24));
+    const claimed = await jobs.claim(queued!.id, environment, "dead-worker");
+    const worktreePath = await mkdtemp(join(import.meta.dir, "cleanup-lease-"));
+    await prisma.job.update({
+      where: { id: queued!.id },
+      data: {
+        status: "COMPLETED",
+        completedAt: new Date(Date.now() - 10 * 60_000),
+        worktreePath,
+      },
+    });
+
+    try {
+      const firstClaim = await jobs.claimWorktreeCleanup(
+        queued!.id,
+        "dead-worker",
+        claimed!.claimToken!,
+        worktreePath,
+        10,
+      );
+      expect(firstClaim).toMatchObject({ path: worktreePath });
+
+      await prisma.job.update({
+        where: { id: queued!.id },
+        data: { cleanupLeaseExpiresAt: new Date(Date.now() - 1) },
+      });
+      const recoveredClaim = await jobs.reclaimTerminalWorktreeCleanup(queued!.id, worktreePath);
+
+      expect(recoveredClaim).toMatchObject({ path: worktreePath });
+      expect(recoveredClaim?.cleanupToken).not.toBe(firstClaim?.cleanupToken);
+      expect(await jobs.clearWorktree(queued!.id, null, firstClaim!.cleanupToken)).toBe(false);
+      expect(await jobs.clearWorktree(queued!.id, null, recoveredClaim!.cleanupToken)).toBe(true);
+      expect(await jobs.releaseWorker(queued!.id, null, null)).toBe(true);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: queued!.id } })).toMatchObject({
+        worktreePath: null,
+        cleanupToken: null,
+        cleanupLeaseExpiresAt: null,
+        workerId: null,
+        claimToken: null,
+      });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("reaps an unclaimed terminal worktree after worker loss", async () => {
+    const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 25));
+    const claimed = await jobs.claim(queued!.id, environment, "dead-worker");
+    const worktreePath = await mkdtemp(join(import.meta.dir, "terminal-reaper-"));
+    await prisma.job.update({
+      where: { id: queued!.id },
+      data: {
+        status: "COMPLETED",
+        completedAt: new Date(Date.now() - 10 * 60_000),
+        worktreePath,
+      },
+    });
+
+    try {
+      const { recoverTerminalWorktrees } = await import("../src/worker/recovery.ts");
+      const { createEventService } = await import("../src/events/service.ts");
+      let removeCalls = 0;
+      const reaperConfig = { ...config, APP_ENV: environment };
+
+      expect(await recoverTerminalWorktrees(
+        reaperConfig,
+        createEventService(),
+        async ({ worktreePath: path }) => {
+          removeCalls += 1;
+          await rm(path, { recursive: true, force: true });
+        },
+      )).toBe(1);
+      expect(removeCalls).toBe(1);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: queued!.id } })).toMatchObject({
+        status: "COMPLETED",
+        worktreePath: null,
+        workerId: null,
+        claimToken: null,
+      });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
   });
 
   test("reconciles queued jobs that have no BullMQ delivery", async () => {

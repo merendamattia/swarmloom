@@ -84,6 +84,7 @@ export async function executeRole(
       responseFilePath,
       signal: abortSignal,
       onEvent: async (agentEvent) => {
+        if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
         if (agentEvent.type === "SESSION_STARTED" && typeof agentEvent.metadata?.sessionId === "string") {
           const observedSessionId = agentEvent.metadata.sessionId;
           if (requestedSessionId && observedSessionId !== requestedSessionId) {
@@ -328,13 +329,16 @@ export async function applyPullRequestLabels(
   job: RunningJob,
   pullRequestNumber: number,
   nextLabels: string[],
+  canWrite?: () => Promise<boolean>,
 ) {
   const labels = await github.getPullRequestLabels(job.repository.fullName, pullRequestNumber);
+  if (canWrite && !await canWrite()) return false;
   await github.setPullRequestLabels(
     job.repository.fullName,
     pullRequestNumber,
     replacePullRequestLabels(labels, config, nextLabels),
   );
+  return true;
 }
 
 export function terminalEvent(

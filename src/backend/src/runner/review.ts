@@ -88,6 +88,7 @@ export const runReview: JobFlow = async (context) => {
 
   const reviewRow = await reviewRepository.start(
     job.id,
+    job.claimToken!,
     job.provider,
     job.model,
     job.reasoningEffort,
@@ -97,6 +98,7 @@ export const runReview: JobFlow = async (context) => {
       headSha: job.headSha,
     },
   );
+  if (!reviewRow) return;
   try {
     const result = await context.executeRoleWithRetry(
       "reviewer",
@@ -110,15 +112,17 @@ export const runReview: JobFlow = async (context) => {
     if (result.exitCode !== 0) throw new Error(result.stderr || "Automated review failed");
     const verdict = parseReviewOutcome(result.response);
     const tldr = parseTldr(result.response);
-    await reviewRepository.finish(
+    if (!await reviewRepository.finish(
       reviewRow.id,
+      job.claimToken!,
       verdict === "pass" ? "PASSED" : "CHANGES_REQUESTED",
       {
         sessionId: result.sessionId,
         response: result.response,
         exitCode: result.exitCode,
       },
-    );
+    )) return;
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await events.record({
       type: "REVIEW_COMPLETED",
       message: `Review ${verdict} for ${fullName}#${pullRequest.prNumber} at ${job.headSha}`,
@@ -134,18 +138,30 @@ export const runReview: JobFlow = async (context) => {
         tldr,
       },
     });
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     const current = await github.getPullRequest(fullName, pullRequest.prNumber);
     if (current.headSha !== job.headSha) {
       await stale();
       return;
     }
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await context.commentOnPullRequest(job, pullRequest.prNumber, result.response);
 
     if (verdict === "pass") {
       try {
-        await applyPullRequestLabels(github, config, job, pullRequest.prNumber, [config.PR_REVIEW_PASSED_LABEL]);
+        if (!await applyPullRequestLabels(
+          github,
+          config,
+          job,
+          pullRequest.prNumber,
+          [config.PR_REVIEW_PASSED_LABEL],
+          () => jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken),
+        )) return;
+        if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
         await managedPullRequestRepository.setWorkflow(job.repositoryId, pullRequest.prNumber, "REVIEW_PASSED");
+        if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
         await managedPullRequestRepository.resetFixCycle(job.repositoryId, pullRequest.prNumber);
+        if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
         await events.record({
           type: "REVIEW_PASSED",
           message: `Review passed for ${fullName}#${pullRequest.prNumber} at ${job.headSha}`,
@@ -166,6 +182,7 @@ export const runReview: JobFlow = async (context) => {
         });
         throw error;
       }
+      if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
       const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "COMPLETED", {
         result: result.response,
         exitCode: result.exitCode,
@@ -205,13 +222,22 @@ export const runReview: JobFlow = async (context) => {
     }
 
     try {
-      await applyPullRequestLabels(github, config, job, pullRequest.prNumber, [config.PR_FIX_REQUESTED_LABEL]);
+      if (!await applyPullRequestLabels(
+        github,
+        config,
+        job,
+        pullRequest.prNumber,
+        [config.PR_FIX_REQUESTED_LABEL],
+        () => jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken),
+      )) return;
+      if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
       await managedPullRequestRepository.setWorkflow(
         job.repositoryId,
         pullRequest.prNumber,
         "FIX_REQUESTED",
         { fixReason: "REVIEW_CHANGES_REQUESTED", fixDetails: result.response },
       );
+      if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
       await events.record({
         type: "PR_FIX_REQUESTED",
         message: `Review requested changes on ${fullName}#${pullRequest.prNumber}`,
@@ -238,6 +264,7 @@ export const runReview: JobFlow = async (context) => {
       });
       throw error;
     }
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "COMPLETED", {
       result: result.response,
       exitCode: result.exitCode,
@@ -262,7 +289,7 @@ export const runReview: JobFlow = async (context) => {
     });
     return;
   } catch (error) {
-    await reviewRepository.finish(reviewRow.id, "FAILED", { errorMessage: safeError(error) });
+    await reviewRepository.finish(reviewRow.id, job.claimToken!, "FAILED", { errorMessage: safeError(error) });
     throw error;
   }
 };

@@ -82,6 +82,7 @@ export const runImplementation: JobFlow = async (context) => {
     if (!pullRequest.body.includes(issueReference) || pullRequest.body.includes("[REDACTED]")) {
       throw new Error(`PR #${pullRequest.number} must contain ${issueReference} and no [REDACTED] markers`);
     }
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     const managedPullRequestId = await managedPullRequestRepository.upsertFromImplementation({
       repositoryId: job.repositoryId,
       prNumber: pullRequest.number,
@@ -96,6 +97,7 @@ export const runImplementation: JobFlow = async (context) => {
     if (!managedPullRequestId) {
       throw new Error(`Could not persist managed pull request ${fullName}#${pullRequest.number}`);
     }
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "COMPLETED", {
       result: implementation.response,
       exitCode: implementation.exitCode,

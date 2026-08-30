@@ -11,6 +11,7 @@ const integration = process.env.RUN_INTEGRATION === "1" ? describe : describe.sk
 integration("job runner", () => {
   let prisma: typeof import("../src/core/db.ts").prisma;
   let jobs: typeof import("../src/repositories/jobs.ts").jobRepository;
+  let reviews: typeof import("../src/repositories/reviews.ts").reviewRepository;
   let createJobRunner: typeof import("../src/runner/service.ts").createJobRunner;
   let repositoryId = "";
   const environment = `runner-${crypto.randomUUID()}`;
@@ -30,6 +31,7 @@ integration("job runner", () => {
   beforeAll(async () => {
     ({ prisma } = await import("../src/core/db.ts"));
     ({ jobRepository: jobs } = await import("../src/repositories/jobs.ts"));
+    ({ reviewRepository: reviews } = await import("../src/repositories/reviews.ts"));
     ({ createJobRunner } = await import("../src/runner/service.ts"));
     repositoryId = (await prisma.repository.create({
       data: {
@@ -824,6 +826,91 @@ integration("job runner", () => {
     expect(provider.calls).toEqual([]);
     expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("COMPLETED");
     expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "STALE_RESULT_DISCARDED" } })).not.toBeNull();
+  });
+
+  test("does not let an old review attempt finish or publish after stale recovery and requeue", async () => {
+    const issueNumber = issueBase + 26;
+    const managed = await prisma.managedPullRequest.create({
+      data: {
+        repositoryId,
+        prNumber: 910,
+        issueNumber,
+        issueTitle: `Issue ${issueNumber}`,
+        issueUrl: `https://github.com/acme/runner/issues/${issueNumber}`,
+        headBranch: `agent/issue-${issueNumber}`,
+        headSha: "a".repeat(40),
+        baseBranch: "develop",
+        state: "OPEN",
+        workflow: "REVIEW_REQUESTED",
+      },
+    });
+    const state = reviewGitHub(config, issueNumber, `agent/issue-${issueNumber}`, managed.prNumber, "a".repeat(40));
+    const job = await claimed(issueNumber, "REVIEW", "PULL_REQUEST", {
+      pullRequestId: managed.id,
+      pullRequestNumber: managed.prNumber,
+      pullRequestUrl: "https://github.com/acme/runner/pull/910",
+      headSha: "a".repeat(40),
+    });
+    const reviewResponse = "Review: pass\nTL;DR: The old review must not publish.\nOld review result.";
+    let releaseProvider!: () => void;
+    let signalProviderStarted!: () => void;
+    const providerStarted = new Promise<void>((resolve) => { signalProviderStarted = resolve; });
+    const providerRelease = new Promise<void>((resolve) => { releaseProvider = resolve; });
+    const firstRunner = createJobRunner({
+      config,
+      provider: {
+        name: "codex",
+        execute: async (request) => {
+          await request.onEvent?.({
+            type: "SESSION_STARTED",
+            timestamp: "2026-08-20T00:00:00.000Z",
+            metadata: { sessionId: "old-review-session" },
+          });
+          signalProviderStarted();
+          await providerRelease;
+          await Bun.write(request.responseFilePath!, reviewResponse);
+          return success(reviewResponse, "old-review-session");
+        },
+      },
+      github: state,
+      createReviewWorktree: async () => "agent/review-local",
+    });
+
+    const firstRun = firstRunner.run(job.id, "runner-worker", job.claimToken!);
+    await providerStarted;
+    const firstReview = await prisma.review.findUniqueOrThrow({ where: { jobId: job.id } });
+    await prisma.job.update({ where: { id: job.id }, data: { heartbeatAt: new Date(Date.now() - 120_000) } });
+    expect(await jobs.recoverStaleBefore(environment, new Date(Date.now() - 60_000))).toHaveLength(1);
+    await prisma.job.update({ where: { id: job.id }, data: { worktreePath: null } });
+    expect(await jobs.releaseWorker(job.id, "runner-worker", job.claimToken!)).toBe(true);
+    expect(await jobs.requeueForRetry(job.id, environment)).not.toBeNull();
+    expect(await reviews.finish(firstReview.id, job.claimToken!, "PASSED", { response: reviewResponse })).toBe(false);
+    const retry = (await jobs.claim(job.id, environment, "runner-worker"))!;
+    const retryReview = await reviews.start(
+      job.id,
+      retry.claimToken!,
+      job.provider,
+      job.model,
+      job.reasoningEffort,
+      { pullRequestId: managed.id, pullRequestNumber: managed.prNumber, headSha: job.headSha },
+    );
+    expect(retryReview).not.toBeNull();
+
+    releaseProvider();
+    expect(await firstRun).toBe(true);
+    const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id }, include: { review: true } });
+    expect(stored).toMatchObject({ status: "RUNNING", claimToken: retry.claimToken, workerId: "runner-worker" });
+    expect(stored.review).toMatchObject({ status: "RUNNING", claimToken: retry.claimToken });
+    expect(state.comments).toEqual([]);
+    expect(state.prLabels).toEqual([config.PR_REVIEW_REQUESTED_LABEL]);
+    expect(await prisma.managedPullRequest.findUniqueOrThrow({ where: { id: managed.id } }))
+      .toMatchObject({ workflow: "REVIEW_REQUESTED" });
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "REVIEW_COMPLETED" } })).toBeNull();
+
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { status: "FAILED", workerId: null, claimToken: null, worktreePath: null, activePrKey: null },
+    });
   });
 
   test("retrying a failed review reuses the same job and never reruns the implementation", async () => {

@@ -145,6 +145,7 @@ model Job {
   workerId                 String?
   claimToken               String?
   cleanupToken             String?
+  cleanupLeaseExpiresAt    DateTime?
   attempts                 Int           @default(0)
   heartbeatAt              DateTime?
   createdAt                DateTime      @default(now())
@@ -202,6 +203,7 @@ model Review {
   model            String
   reasoningEffort  String?
   sessionId        String?
+  claimToken       String?
   response         String?            @db.Text
   exitCode         Int?
   errorMessage     String?            @db.Text

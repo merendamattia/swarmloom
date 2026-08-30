@@ -446,7 +446,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
               return context.json({ error: "Job cleanup is still in progress" }, 409);
             }
           }
-          if (!await jobRepository.discardFailedJob(job.id, job.claimToken)) {
+          if (!await jobRepository.discardTerminalJob(job.id, job.claimToken)) {
             return context.json({ error: "Job cleanup is still in progress" }, 409);
           }
         } catch (error) {

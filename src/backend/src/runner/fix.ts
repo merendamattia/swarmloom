@@ -79,8 +79,17 @@ export const runFix: JobFlow = async (context) => {
     const blockedOutcome = parseJobOutcome(result.response) === "blocked";
     resultTldr = parseTldr(result.response);
     if (blockedOutcome) {
+      if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
       await managedPullRequestRepository.block(job.repositoryId, pullRequest.prNumber);
-      await applyPullRequestLabels(github, config, job, pullRequest.prNumber, [config.ISSUE_HUMAN_REVIEW_LABEL]);
+      if (!await applyPullRequestLabels(
+        github,
+        config,
+        job,
+        pullRequest.prNumber,
+        [config.ISSUE_HUMAN_REVIEW_LABEL],
+        () => jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken),
+      )) return;
+      if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
       const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "BLOCKED", {
         result: result.response,
         exitCode: result.exitCode,
@@ -104,7 +113,9 @@ export const runFix: JobFlow = async (context) => {
     if (current.headSha === job.headSha) {
       throw new Error(`FIX completed but PR #${current.number} still points at ${current.headSha}; the branch push was not detected`);
     }
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await managedPullRequestRepository.updateHead(job.repositoryId, pullRequest.prNumber, current.head, current.headSha);
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     const fixCycleCount = await managedPullRequestRepository.incrementFixCycle(job.repositoryId, pullRequest.prNumber);
     const loopExceeded = fixCycleCount !== null && fixCycleCount >= config.MAX_AUTOMATIC_FIX_CYCLES;
 
@@ -113,12 +124,21 @@ export const runFix: JobFlow = async (context) => {
       return;
     }
 
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await managedPullRequestRepository.setWorkflow(job.repositoryId, pullRequest.prNumber, "REVIEW_REQUESTED", {
       fixReason: null,
       fixDetails: null,
     });
     try {
-      await applyPullRequestLabels(github, config, job, pullRequest.prNumber, [config.PR_REVIEW_REQUESTED_LABEL]);
+      if (!await applyPullRequestLabels(
+        github,
+        config,
+        job,
+        pullRequest.prNumber,
+        [config.PR_REVIEW_REQUESTED_LABEL],
+        () => jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken),
+      )) return;
+      if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
       await events.record({
         type: "PR_REVIEW_REQUESTED",
         message: `PR #${pullRequest.prNumber} returned to review-requested after a fix`,
@@ -170,11 +190,21 @@ export const runFix: JobFlow = async (context) => {
   }
 
   async function guardFailure(error: unknown) {
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     const fixCycleCount = await managedPullRequestRepository.incrementFixCycle(job.repositoryId, pullRequest.prNumber);
     if (fixCycleCount === null || fixCycleCount < config.MAX_AUTOMATIC_FIX_CYCLES) return;
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await managedPullRequestRepository.block(job.repositoryId, pullRequest.prNumber);
     try {
-      await applyPullRequestLabels(github, config, job, pullRequest.prNumber, [config.ISSUE_HUMAN_REVIEW_LABEL]);
+      if (!await applyPullRequestLabels(
+        github,
+        config,
+        job,
+        pullRequest.prNumber,
+        [config.ISSUE_HUMAN_REVIEW_LABEL],
+        () => jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken),
+      )) return;
+      if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     } catch (labelError) {
       await events.record({
         type: "GITHUB_RECONCILIATION_REQUIRED",
@@ -186,6 +216,7 @@ export const runFix: JobFlow = async (context) => {
         metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl },
       });
     }
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await events.record({
       type: "LOOP_GUARD_TRIPPED",
       level: "ERROR",
@@ -195,6 +226,7 @@ export const runFix: JobFlow = async (context) => {
       scanRunId: job.scanRunId ?? undefined,
       metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl, fixCycleCount, tldr: resultTldr },
     });
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await context.finalizeIssue(
       job,
       [config.ISSUE_BLOCKED_LABEL, config.ISSUE_HUMAN_REVIEW_LABEL],
@@ -215,9 +247,18 @@ export const runFix: JobFlow = async (context) => {
     headSha: string | undefined,
     fixCycleCount: number,
   ) {
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await managedPullRequestRepository.block(job.repositoryId, pullRequest.prNumber);
     try {
-      await applyPullRequestLabels(github, config, job, pullRequest.prNumber, [config.ISSUE_HUMAN_REVIEW_LABEL]);
+      if (!await applyPullRequestLabels(
+        github,
+        config,
+        job,
+        pullRequest.prNumber,
+        [config.ISSUE_HUMAN_REVIEW_LABEL],
+        () => jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken),
+      )) return;
+      if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     } catch (error) {
       await events.record({
         type: "GITHUB_RECONCILIATION_REQUIRED",
@@ -229,6 +270,7 @@ export const runFix: JobFlow = async (context) => {
         metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl },
       });
     }
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "COMPLETED", {
       result: response,
       pullRequestNumber: prNumber,

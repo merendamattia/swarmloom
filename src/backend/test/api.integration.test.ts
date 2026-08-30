@@ -418,6 +418,51 @@ integration("operations API", () => {
     pullRequestHead = "a".repeat(40);
   });
 
+  test("discards every supported non-failed terminal status when a pull request head changed", async () => {
+    const statuses = ["BLOCKED", "CANCELLED", "STALE"] as const;
+    pullRequestHead = "f".repeat(40);
+
+    for (const [index, status] of statuses.entries()) {
+      const job = await prisma.job.create({
+        data: {
+          repositoryId,
+          environment: "test",
+          jobType: "REVIEW",
+          subjectType: "PULL_REQUEST",
+          issueNumber: 470 + index,
+          issueTitle: `Changed head ${status}`,
+          issueUrl: `https://github.com/acme/api-${unique}/issues/${470 + index}`,
+          issueBody: "Retry this pull request",
+          status,
+          branchName: `agent/issue-${470 + index}`,
+          baselineCommit: "b".repeat(40),
+          pullRequestNumber: 470 + index,
+          pullRequestUrl: `https://github.com/acme/api-test/pull/${470 + index}`,
+          headSha: "a".repeat(40),
+          activePrKey: `${repositoryId}:changed-head-${index}`,
+          provider: "CODEX",
+          model: "gpt-5.6-luna",
+        },
+      });
+      pullRequestLabels.splice(0, pullRequestLabels.length, "bug");
+
+      const response = await app.request(`/api/jobs/${job.id}/retry`, { method: "POST" });
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: "Pull request head changed; retry was not queued" });
+      expect(pullRequestLabels).toEqual(["bug", config.PR_REVIEW_REQUESTED_LABEL]);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+        status,
+        activePrKey: null,
+        worktreePath: null,
+        workerId: null,
+        cleanupToken: null,
+      });
+    }
+
+    pullRequestHead = "a".repeat(40);
+  });
+
   test("removes scanner trigger labels on a normal same-head pull request retry", async () => {
     const retry = await prisma.job.create({
       data: {
