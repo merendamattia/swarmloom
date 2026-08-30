@@ -82,6 +82,7 @@ export function createJobRunner({
 
     let reachedTerminalState = false;
     let retainWorktree = false;
+    let worktreeCleanupComplete = false;
     const state: SessionState = {
       worktreeCreated: Boolean(job.worktreePath),
       worktreePersisted: Boolean(job.worktreePath),
@@ -146,14 +147,14 @@ export function createJobRunner({
       heartbeatStopped = true;
       if (heartbeatTimer) clearTimeout(heartbeatTimer);
       if (state.worktreeCreated && !retainWorktree) {
-        let removed = false;
         try {
           await removeWorktree({
             worktreePath: state.worktreePath!,
             repositoryPath: state.repositoryPath,
             gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
           });
-          removed = true;
+          await jobRepository.clearWorktree(job.id);
+          worktreeCleanupComplete = true;
         } catch (error) {
           await events.record({
             type: "GITHUB_RECONCILIATION_REQUIRED",
@@ -165,7 +166,6 @@ export function createJobRunner({
             metadata: { issueUrl: job.issueUrl },
           });
         }
-        if (removed) await jobRepository.clearWorktree(job.id);
       }
       if (state.repositoryPath && !retainWorktree) {
         try {
@@ -174,6 +174,8 @@ export function createJobRunner({
           // gc is best-effort; leave the local clone untouched on failure
         }
       }
+      if (!state.worktreeCreated || retainWorktree) worktreeCleanupComplete = true;
+      if (worktreeCleanupComplete) await jobRepository.releaseWorker(job.id, workerId);
     }
     return reachedTerminalState;
   }

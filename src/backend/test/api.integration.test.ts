@@ -23,6 +23,8 @@ integration("operations API", () => {
   let afterCreateIssue: (() => Promise<void>) | undefined;
   let reconciledIssue: { number: number; url: string } | undefined;
   let findIssueCalls = 0;
+  let pullRequestHead = "a".repeat(40);
+  const pullRequestLabels = ["agent:review-requested"];
   const config = parseConfig({
     APP_ENV: "test",
     NODE_ENV: "test",
@@ -109,8 +111,24 @@ integration("operations API", () => {
           return reconciledIssue;
         },
         addIssueComment: async () => {},
-        getPullRequestLabels: async () => [],
-        setPullRequestLabels: async () => {},
+        getPullRequest: async (_repository, number) => ({
+          number,
+          title: "Pull request",
+          url: "https://github.com/acme/api-test/pull/456",
+          base: "develop",
+          head: "agent/issue-456",
+          headSha: pullRequestHead,
+          state: "open",
+          merged: false,
+          body: "Closes #456",
+          additions: 1,
+          deletions: 1,
+          changedFiles: 1,
+        }),
+        getPullRequestLabels: async () => [...pullRequestLabels],
+        setPullRequestLabels: async (_repository, _number, next) => {
+          pullRequestLabels.splice(0, pullRequestLabels.length, ...next);
+        },
       },
       queue: {
         health: async () => "PONG",
@@ -125,6 +143,7 @@ integration("operations API", () => {
   afterAll(async () => {
     await prisma.jobEvent.deleteMany({ where: { repositoryId } });
     await prisma.job.deleteMany({ where: { repositoryId } });
+    await prisma.managedPullRequest.deleteMany({ where: { repositoryId } });
     await prisma.runtimeSetting.deleteMany({ where: { environment: "test" } });
     await prisma.repository.delete({ where: { id: repositoryId } });
     await prisma.$disconnect();
@@ -336,6 +355,55 @@ integration("operations API", () => {
     expect(enqueuedJobs).toEqual([jobId, jobId]);
     expect(await prisma.jobEvent.findFirst({ where: { jobId, type: "JOB_RESUME_REQUESTED" }, orderBy: { createdAt: "desc" } }))
       .toMatchObject({ metadata: expect.objectContaining({ attempt: 2, sessionId: "api-session", sessionResumed: true }) });
+  });
+
+  test("rejects a stale pull request retry and restores its current review trigger", async () => {
+    const managed = await prisma.managedPullRequest.create({
+      data: {
+        repositoryId,
+        prNumber: 456,
+        issueNumber: 456,
+        issueTitle: "Pull request retry",
+        issueUrl: `https://github.com/acme/api-${unique}/issues/456`,
+        headBranch: "agent/issue-456",
+        headSha: "a".repeat(40),
+        baseBranch: "develop",
+        workflow: "REVIEW_REQUESTED",
+      },
+    });
+    const stale = await prisma.job.create({
+      data: {
+        repositoryId,
+        environment: "test",
+        jobType: "REVIEW",
+        subjectType: "PULL_REQUEST",
+        issueNumber: 456,
+        issueTitle: "Pull request retry",
+        issueUrl: `https://github.com/acme/api-${unique}/issues/456`,
+        issueBody: "Review this pull request",
+        status: "FAILED",
+        branchName: "agent/issue-456",
+        baselineCommit: "b".repeat(40),
+        pullRequestId: managed.id,
+        pullRequestNumber: 456,
+        pullRequestUrl: "https://github.com/acme/api-test/pull/456",
+        headSha: "a".repeat(40),
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+        activePrKey: `${repositoryId}:${managed.id}:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:REVIEW`,
+      },
+    });
+    pullRequestHead = "c".repeat(40);
+    pullRequestLabels.splice(0, pullRequestLabels.length, "bug");
+
+    const retry = await app.request(`/api/jobs/${stale.id}/retry`, { method: "POST" });
+
+    expect(retry.status).toBe(409);
+    expect(await retry.json()).toEqual({ error: "Pull request head changed; retry was not queued" });
+    expect(pullRequestLabels).toEqual(["bug", config.PR_REVIEW_REQUESTED_LABEL]);
+    expect(enqueuedJobs).not.toContain(stale.id);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: stale.id } })).toMatchObject({ status: "FAILED", headSha: "a".repeat(40) });
+    pullRequestHead = "a".repeat(40);
   });
 
   test("creates one sanitized support issue for a failed job and rejects non-failed jobs", async () => {

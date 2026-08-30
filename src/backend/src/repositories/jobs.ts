@@ -76,10 +76,21 @@ const retryableStatuses = ["FAILED", "BLOCKED", "CANCELLED", "STALE"] as const;
 
 async function requeueForRetry(id: string, environment: string) {
   const job = await prisma.job.findFirst({ where: { id, environment } });
-  if (!job || !retryableStatuses.includes(job.status as typeof retryableStatuses[number])) return null;
+  if (
+    !job
+    || !retryableStatuses.includes(job.status as typeof retryableStatuses[number])
+    || job.workerId
+    || (job.status !== "FAILED" && job.worktreePath)
+  ) return null;
 
   const updated = await prisma.job.updateMany({
-    where: { id, environment, status: { in: [...retryableStatuses] } },
+    where: {
+      id,
+      environment,
+      status: job.status,
+      workerId: null,
+      ...(job.status !== "FAILED" ? { worktreePath: null } : {}),
+    },
     data: {
       status: "QUEUED",
       queuedAt: new Date(),
@@ -93,6 +104,7 @@ async function requeueForRetry(id: string, environment: string) {
         : null,
       worktreePath: job.status === "FAILED" ? undefined : null,
       sessionId: job.status === "FAILED" ? undefined : null,
+      errorMessage: null,
     },
   });
   return updated.count === 1 ? prisma.job.findUnique({ where: { id } }) : null;
@@ -127,13 +139,13 @@ async function finishRunning(
       status,
       result: input.result,
       exitCode: input.exitCode,
-      errorMessage: input.errorMessage,
       diagnostics: input.diagnostics,
       pullRequestNumber: input.pullRequestNumber,
       pullRequestUrl: input.pullRequestUrl,
       headSha: input.headSha,
       completedAt,
       durationMs: Math.max(0, completedAt.getTime() - job.startedAt.getTime()),
+      errorMessage: status === "FAILED" ? input.errorMessage ?? null : null,
       activeIssueKey: status === "FAILED" ? undefined : null,
       activePrKey: status === "FAILED" ? undefined : null,
       heartbeatAt: null,
@@ -323,6 +335,19 @@ async function clearWorktree(id: string) {
   return updated.count === 1;
 }
 
+async function releaseWorker(id: string, workerId: string) {
+  const updated = await prisma.job.updateMany({
+    where: {
+      id,
+      workerId,
+      status: { in: ["COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"] },
+      OR: [{ status: "FAILED" }, { worktreePath: null }],
+    },
+    data: { workerId: null, heartbeatAt: null },
+  });
+  return updated.count === 1;
+}
+
 async function cancel(id: string) {
   const updated = await prisma.job.updateMany({
     where: { id, status: { in: ["QUEUED", "RUNNING"] } },
@@ -399,6 +424,7 @@ export const jobRepository = {
   setSessionId,
   setExecutionResult,
   clearWorktree,
+  releaseWorker,
   finishRunning,
   claimSupportIssue,
   findSupportIssue,

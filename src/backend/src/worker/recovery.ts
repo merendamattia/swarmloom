@@ -20,6 +20,7 @@ export async function recoverStaleJobs(config: Config, github: GitHubClient, eve
       });
       await jobRepository.clearWorktree(job.id);
     }
+    if (job.workerId) await jobRepository.releaseWorker(job.id, job.workerId);
     await events.record({
       type: "JOB_FAILED",
       level: "ERROR",

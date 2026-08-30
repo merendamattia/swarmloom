@@ -26,7 +26,7 @@ import type { JobQueue } from "../queue/service.ts";
 
 type Scanner = { run(source: "SCHEDULED" | "MANUAL"): Promise<{ id: string; status: string }> };
 type ApiGitHub = Pick<GitHubClient,
-  "getIssue" | "setIssueLabels" | "addIssueComment" | "getPullRequestLabels" | "setPullRequestLabels" | "createIssue" | "findIssueByMarker">;
+  "getIssue" | "setIssueLabels" | "addIssueComment" | "getPullRequest" | "getPullRequestLabels" | "setPullRequestLabels" | "createIssue" | "findIssueByMarker">;
 type Scheduler = { restart(): void };
 type Startup = Awaited<ReturnType<typeof validateStartup>>;
 
@@ -408,6 +408,50 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         return context.json({ error: "Only failed, blocked, cancelled, or stale jobs can be retried" }, 409);
       }
 
+      let currentPullRequest;
+      if (job.subjectType === "PULL_REQUEST" && job.pullRequestNumber) {
+        try {
+          currentPullRequest = await github.getPullRequest(job.repository.fullName, job.pullRequestNumber);
+        } catch (error) {
+          await events.record({
+            type: "GITHUB_RECONCILIATION_REQUIRED",
+            level: "ERROR",
+            message: `Could not validate the pull request head for ${job.repository.fullName}#${job.pullRequestNumber}: ${redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
+            jobId: job.id,
+            repositoryId: job.repositoryId,
+            metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber },
+          });
+          return context.json({ error: "Could not validate the pull request head" }, 502);
+        }
+      }
+      if (currentPullRequest && job.headSha && currentPullRequest.headSha !== job.headSha) {
+        const trigger = job.jobType === "REVIEW" ? config.PR_REVIEW_REQUESTED_LABEL : config.PR_FIX_REQUESTED_LABEL;
+        try {
+          const labels = await github.getPullRequestLabels(job.repository.fullName, job.pullRequestNumber!);
+          await github.setPullRequestLabels(
+            job.repository.fullName,
+            job.pullRequestNumber!,
+            replacePullRequestLabels(labels, config, [trigger]),
+          );
+          await github.addIssueComment(
+            job.repository.fullName,
+            job.pullRequestNumber!,
+            `Retry was not queued because the pull request advanced from ${job.headSha} to ${currentPullRequest.headSha}. The ${trigger} trigger was restored for the current head.`,
+          );
+        } catch (error) {
+          await events.record({
+            type: "GITHUB_RECONCILIATION_REQUIRED",
+            level: "ERROR",
+            message: `Could not restore the pull request retry trigger for ${job.repository.fullName}#${job.pullRequestNumber}: ${redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
+            jobId: job.id,
+            repositoryId: job.repositoryId,
+            metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber, headSha: currentPullRequest.headSha },
+          });
+          return context.json({ error: "Could not restore the pull request retry trigger" }, 502);
+        }
+        return context.json({ error: "Pull request head changed; retry was not queued" }, 409);
+      }
+
       let requeued;
       try {
         requeued = await jobRepository.requeueForRetry(job.id, config.APP_ENV);
@@ -420,10 +464,12 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       if (!requeued) {
         const current = await prisma.job.findFirst({
           where: { id: job.id, environment: config.APP_ENV },
-          select: { status: true },
+          select: { status: true, workerId: true, worktreePath: true },
         });
+        const cleanupPending = current?.workerId !== null
+          || (current?.status !== "FAILED" && current?.worktreePath !== null);
         return current
-          ? context.json({ error: current.status === "QUEUED" || current.status === "RUNNING" ? "Retry is already in progress" : "Job is no longer retryable" }, 409)
+          ? context.json({ error: current.status === "QUEUED" || current.status === "RUNNING" ? "Retry is already in progress" : cleanupPending ? "Job cleanup is still in progress" : "Job is no longer retryable" }, 409)
           : context.json({ error: "Not found" }, 404);
       }
       const sessionResumed = Boolean(requeued.sessionId);
@@ -448,10 +494,11 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       if (job.subjectType === "PULL_REQUEST" && job.pullRequestNumber) {
         try {
           const labels = await github.getPullRequestLabels(job.repository.fullName, job.pullRequestNumber);
+          const trigger = job.jobType === "REVIEW" ? config.PR_REVIEW_REQUESTED_LABEL : config.PR_FIX_REQUESTED_LABEL;
           await github.setPullRequestLabels(
             job.repository.fullName,
             job.pullRequestNumber,
-            replacePullRequestLabels(labels, config, []),
+            replacePullRequestLabels(labels, config, [trigger]),
           );
           await github.addIssueComment(
             job.repository.fullName,

@@ -233,7 +233,12 @@ integration("job runner", () => {
     await didStart;
     expect(await jobs.cancel(job.id)).toBe(true);
     expect(await running).toBe(false);
-    expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("CANCELLED");
+    expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } }))).toMatchObject({
+      status: "CANCELLED",
+      workerId: null,
+      worktreePath: null,
+    });
+    expect(await jobs.requeueForRetry(job.id, environment)).not.toBeNull();
   });
 
 
