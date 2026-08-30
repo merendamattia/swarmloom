@@ -67,8 +67,8 @@ integration("PostgreSQL job lifecycle", () => {
     expect(claimed?.provider).toBe("CODEX");
     expect(claimed?.model).toBe("gpt-5.6-luna");
 
-    expect(await jobs.complete(claimed!.id, { outcome: "implemented" }, 0)).toBe(true);
-    expect(await jobs.complete(claimed!.id, { outcome: "duplicate" }, 0)).toBe(false);
+    expect(await jobs.complete(claimed!.id, claimed!.claimToken!, { outcome: "implemented" }, 0)).toBe(true);
+    expect(await jobs.complete(claimed!.id, claimed!.claimToken!, { outcome: "duplicate" }, 0)).toBe(false);
     expect((await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).activeIssueKey)
       .toBeNull();
     const retry = await jobs.tryCreateQueued(input);
@@ -106,10 +106,41 @@ integration("PostgreSQL job lifecycle", () => {
     });
     expect(await jobs.requeueForRetry(claimed!.id, environment)).toBeNull();
 
-    expect(await jobs.claim(claimed!.id, environment, "test-worker")).not.toBeNull();
+    const retryClaim = (await jobs.claim(claimed!.id, environment, "test-worker"))!;
+    expect(retryClaim).not.toBeNull();
     await prisma.job.update({ where: { id: claimed!.id }, data: { errorMessage: "stale retry error" } });
-    expect(await jobs.complete(claimed!.id, { outcome: "implemented" }, 0)).toBe(true);
+    expect(await jobs.complete(claimed!.id, retryClaim.claimToken!, { outcome: "implemented" }, 0)).toBe(true);
     expect((await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).errorMessage).toBeNull();
+  });
+
+  test("rejects every stale claim transition after the same job is reclaimed", async () => {
+    const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 22));
+    const first = await jobs.claim(queued!.id, environment, "same-worker");
+    await prisma.job.update({
+      where: { id: queued!.id },
+      data: { heartbeatAt: new Date(Date.now() - 120_000) },
+    });
+
+    expect(await jobs.recoverStaleBefore(environment, new Date(Date.now() - 60_000))).toHaveLength(1);
+    expect(await jobs.releaseWorker(queued!.id, "same-worker", first!.claimToken!)).toBe(true);
+    expect(await jobs.requeueForRetry(queued!.id, environment)).not.toBeNull();
+    const second = await jobs.claim(queued!.id, environment, "same-worker");
+    expect(second?.claimToken).not.toBe(first?.claimToken);
+
+    expect(await jobs.finishRunning(queued!.id, first!.claimToken!, "FAILED", { errorMessage: "stale" })).toBe(false);
+    expect(await jobs.heartbeat(queued!.id, "same-worker", first!.claimToken!)).toBe(false);
+    expect(await jobs.setSessionId(queued!.id, first!.claimToken!, "stale-session")).toBe(false);
+    expect(await jobs.setExecutionResult(queued!.id, first!.claimToken!, "stale-session", 1)).toBe(false);
+    expect(await jobs.setWorktree(queued!.id, first!.claimToken!, "/tmp/stale-worktree")).toBe(false);
+    expect(await jobs.releaseWorker(queued!.id, "same-worker", first!.claimToken!)).toBe(false);
+
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: queued!.id } })).toMatchObject({
+      status: "RUNNING",
+      workerId: "same-worker",
+      claimToken: second!.claimToken,
+      sessionId: null,
+      errorMessage: null,
+    });
   });
 
   test("does not requeue a cancelled worker until its cleanup releases the retained worktree", async () => {
@@ -129,16 +160,33 @@ integration("PostgreSQL job lifecycle", () => {
       worktreePath,
     });
 
-    expect(await jobs.releaseWorker(claimed!.id, "test-worker")).toBe(false);
-    expect(await jobs.clearWorktree(claimed!.id)).toBe(true);
-    expect(await jobs.releaseWorker(claimed!.id, "test-worker")).toBe(true);
+    expect(await jobs.releaseWorker(claimed!.id, "test-worker", claimed!.claimToken!)).toBe(false);
+    const cleanup = await jobs.claimWorktreeCleanup(claimed!.id, "test-worker", claimed!.claimToken!, worktreePath);
+    expect(cleanup).toMatchObject({ path: worktreePath });
+    expect(await jobs.clearWorktree(claimed!.id, claimed!.claimToken!, cleanup!.cleanupToken)).toBe(true);
+    expect(await jobs.releaseWorker(claimed!.id, "test-worker", claimed!.claimToken!)).toBe(true);
 
-    expect(await jobs.requeueForRetry(claimed!.id, environment)).toMatchObject({
+    const requeued = await jobs.requeueForRetry(claimed!.id, environment);
+    expect(requeued).toMatchObject({
       id: claimed!.id,
       status: "QUEUED",
       worktreePath: null,
       sessionId: null,
     });
+    expect(await jobs.cancel(claimed!.id)).toBe(true);
+  });
+
+  test("reconciles queued jobs that have no BullMQ delivery", async () => {
+    const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 23));
+    const deliveries: string[][] = [];
+    const { reconcileQueuedJobs } = await import("../src/worker/service.ts");
+
+    expect(await reconcileQueuedJobs(environment, {
+      enqueueMissing: async (jobIds) => { deliveries.push(jobIds); },
+    })).toBe(1);
+    expect(deliveries).toEqual([[queued!.id]]);
+
+    expect(await jobs.cancel(queued!.id)).toBe(true);
   });
 
   test("deduplicates PR jobs by repository, PR, head SHA, and job kind", async () => {
@@ -172,7 +220,7 @@ integration("PostgreSQL job lifecycle", () => {
     const cancelled = await jobs.tryCreateQueued(queuedJob(issuePrefix + 2));
     expect(await jobs.cancel(cancelled!.id)).toBe(true);
     expect(await jobs.claim(cancelled!.id, environment, "test-worker")).toBeNull();
-    expect(await jobs.complete(cancelled!.id, { outcome: "wrong" }, 0)).toBe(false);
+    expect(await jobs.complete(cancelled!.id, "wrong-token", { outcome: "wrong" }, 0)).toBe(false);
   });
 
   test("stale recovery blocks an issue job while preserving unrelated labels", async () => {

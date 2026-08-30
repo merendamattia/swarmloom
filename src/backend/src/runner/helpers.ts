@@ -70,6 +70,7 @@ export async function executeRole(
   let sessionId: string | null = null;
   let resumedEventRecorded = false;
   try {
+    await removeResponseFile(responseFilePath);
     const result = await context.provider.execute({
       role,
       workingDirectory,
@@ -89,7 +90,7 @@ export async function executeRole(
             throw new Error(`Provider resumed session ${observedSessionId} instead of requested ${requestedSessionId}`);
           }
           sessionId = observedSessionId;
-          if (!await jobRepository.setSessionId(job.id, observedSessionId)) {
+          if (!await jobRepository.setSessionId(job.id, job.claimToken!, observedSessionId)) {
             throw new Error(`Could not persist provider session for job ${job.id}`);
           }
           job.sessionId = observedSessionId;
@@ -136,7 +137,7 @@ export async function executeRole(
       throw new Error(result.stderr || `Provider did not resume session ${requestedSessionId}`);
     }
     if (resolvedSessionId && !sessionId) {
-      if (!await jobRepository.setSessionId(job.id, resolvedSessionId)) {
+      if (!await jobRepository.setSessionId(job.id, job.claimToken!, resolvedSessionId)) {
         throw new Error(`Could not persist provider session for job ${job.id}`);
       }
       sessionId = resolvedSessionId;
@@ -161,6 +162,7 @@ export async function executeRole(
       events: diagnosticEvents,
     };
   } catch (error) {
+    await removeResponseFile(responseFilePath);
     throw new AgentExecutionError(safeError(error), {
       stage: error instanceof ProviderProcessError ? "provider_process" : roleStage(role),
       role,

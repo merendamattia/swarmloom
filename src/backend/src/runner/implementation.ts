@@ -38,7 +38,7 @@ export const runImplementation: JobFlow = async (context) => {
   context.state.repositoryPath = localPath;
   context.state.worktreePersisted = !worktree.created;
   if (worktree.created) {
-    if (!await jobRepository.setWorktree(job.id, worktreePath)) return;
+    if (!await jobRepository.setWorktree(job.id, job.claimToken!, worktreePath)) return;
     context.state.worktreePersisted = true;
   }
 
@@ -60,7 +60,7 @@ export const runImplementation: JobFlow = async (context) => {
     signal,
     job,
   );
-  await jobRepository.setExecutionResult(job.id, implementation.sessionId, implementation.exitCode);
+  if (!await jobRepository.setExecutionResult(job.id, job.claimToken!, implementation.sessionId, implementation.exitCode)) return;
   if (implementation.exitCode !== 0) {
     throw new Error(implementation.stderr || `${provider.name} exited with ${implementation.exitCode}`);
   }
@@ -96,7 +96,7 @@ export const runImplementation: JobFlow = async (context) => {
     if (!managedPullRequestId) {
       throw new Error(`Could not persist managed pull request ${fullName}#${pullRequest.number}`);
     }
-    const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "COMPLETED", {
       result: implementation.response,
       exitCode: implementation.exitCode,
       pullRequestNumber: pullRequest.number,
@@ -165,7 +165,7 @@ export const runImplementation: JobFlow = async (context) => {
   }
 
   if (outcome === "requires_decomposition") {
-    const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "COMPLETED", {
       result: implementation.response,
       exitCode: implementation.exitCode,
     });
@@ -211,7 +211,7 @@ export const runImplementation: JobFlow = async (context) => {
   }
 
   if (outcome === "blocked") {
-    const finished = await jobRepository.finishRunning(job.id, "BLOCKED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "BLOCKED", {
       result: implementation.response,
       exitCode: implementation.exitCode,
     });

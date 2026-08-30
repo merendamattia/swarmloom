@@ -68,7 +68,7 @@ integration("job runner", () => {
       createWorktree: async (input) => input.worktreePath,
     });
 
-    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
     expect(provider.calls.map((call) => call.role)).toEqual(["issue-worker"]);
     expect(provider.calls[0]?.environment).toMatchObject({
       GIT_CONFIG_COUNT: "1",
@@ -116,7 +116,7 @@ integration("job runner", () => {
       createWorktree: async (input) => input.worktreePath,
     });
 
-    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
     expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("COMPLETED");
     expect(enqueued).toHaveLength(1);
     const decomposition = await prisma.job.findUniqueOrThrow({ where: { id: enqueued[0] } });
@@ -141,7 +141,7 @@ integration("job runner", () => {
     const github = fakeGitHub(job.issueNumber, job.branchName, "d".repeat(40));
     const runner = createJobRunner({ config, provider, github, createWorktree: async (input) => input.worktreePath });
 
-    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
     expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("DECOMPOSED");
     expect(provider.calls.map((call) => call.role)).toEqual(["decomposer"]);
     expect(provider.calls[0]?.context).toContain(`Queue-ready label for actionable children: ${config.ISSUE_READY_LABEL}`);
@@ -160,7 +160,7 @@ integration("job runner", () => {
       github: blockedGitHub,
       createWorktree: async (input) => input.worktreePath,
     });
-    expect(await blockedRunner.run(blocked.id, "runner-worker")).toBe(true);
+    expect(await blockedRunner.run(blocked.id, "runner-worker", blocked.claimToken!)).toBe(true);
     expect((await prisma.job.findUniqueOrThrow({ where: { id: blocked.id } })).status).toBe("BLOCKED");
     expect(blockedGitHub.labels).toContain(config.ISSUE_BLOCKED_LABEL);
     expect(blockedGitHub.labels).toContain(config.ISSUE_HUMAN_REVIEW_LABEL);
@@ -176,7 +176,7 @@ integration("job runner", () => {
       github: failedGitHub,
       createWorktree: async (input) => input.worktreePath,
     });
-    expect(await failedRunner.run(failed.id, "runner-worker")).toBe(true);
+    expect(await failedRunner.run(failed.id, "runner-worker", failed.claimToken!)).toBe(true);
     const failedStored = await prisma.job.findUniqueOrThrow({ where: { id: failed.id } });
     expect(failedStored.status).toBe("FAILED");
     expect(failedStored.activeIssueKey).toBe(`${repositoryId}:${failed.issueNumber}`);
@@ -201,7 +201,7 @@ integration("job runner", () => {
       github: diagnosticGitHub,
       createWorktree: async (input) => input.worktreePath,
     });
-    expect(await diagnosticRunner.run(diagnostic.id, "runner-worker")).toBe(true);
+    expect(await diagnosticRunner.run(diagnostic.id, "runner-worker", diagnostic.claimToken!)).toBe(true);
     expect(diagnosticGitHub.createdIssues[0]?.labels).toEqual([config.ISSUE_READY_LABEL]);
     expect(diagnosticGitHub.createdIssues[0]?.body).toContain("Stack trace:");
     expect(diagnosticGitHub.createdIssues[0]?.body).toContain("created automatically");
@@ -229,7 +229,7 @@ integration("job runner", () => {
       createWorktree: async (input) => input.worktreePath,
       heartbeatIntervalMs: 10,
     });
-    const running = runner.run(job.id, "runner-worker");
+    const running = runner.run(job.id, "runner-worker", job.claimToken!);
     await didStart;
     expect(await jobs.cancel(job.id)).toBe(true);
     expect(await running).toBe(false);
@@ -258,7 +258,7 @@ integration("job runner", () => {
         createWorktree: async (input) => input.worktreePath,
       });
 
-      expect(await runner.run(job.id, "runner-worker")).toBe(true);
+      expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
       const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
       expect(stored.status).toBe("FAILED");
       expect(stored.errorMessage).toContain("Agent response must start with");
@@ -301,7 +301,7 @@ integration("job runner", () => {
       createWorktree: async (input) => input.worktreePath,
     });
 
-    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
     const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
     expect(stored.status).toBe("FAILED");
     expect(stored.diagnostics).toMatchObject({
@@ -346,7 +346,7 @@ integration("job runner", () => {
     });
 
     try {
-      expect(await runner.run(job.id, "runner-worker")).toBe(true);
+      expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
       const failed = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
       expect(failed).toMatchObject({ status: "FAILED", sessionId: "resume-session", worktreePath });
       expect(await Bun.file(join(worktreePath, "partial-progress.txt")).text()).toBe("keep this change");
@@ -370,8 +370,9 @@ integration("job runner", () => {
         gcRepository: async () => { gcCalls += 1; },
       });
 
-      expect(await jobs.claim(job.id, environment, "runner-worker")).not.toBeNull();
-      expect(await resumedRunner.run(job.id, "runner-worker")).toBe(true);
+      const resumed = (await jobs.claim(job.id, environment, "runner-worker"))!;
+      expect(resumed).not.toBeNull();
+      expect(await resumedRunner.run(job.id, "runner-worker", resumed.claimToken!)).toBe(true);
       expect(resumedCalls[0]).toMatchObject({ workingDirectory: worktreePath, resumeSessionId: "resume-session" });
       expect(await Bun.file(join(worktreePath, "partial-progress.txt")).exists()).toBe(false);
       expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({ status: "BLOCKED", sessionId: "resume-session", worktreePath: null });
@@ -398,11 +399,55 @@ integration("job runner", () => {
       createWorktree: async (input) => input.worktreePath,
     });
 
-    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
     expect(calls).toBe(2);
     const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
     expect(stored.status).toBe("FAILED");
     expect(stored.errorMessage).toContain("without writing the response");
+  });
+
+  test("does not accept a response left by a failed attempt on a later same-job retry", async () => {
+    const job = await claimed(issueBase + 24, "IMPLEMENTATION", "ISSUE");
+    const worktreePath = await mkdtemp(join(import.meta.dir, "response-retry-worktree-"));
+    await prisma.job.update({ where: { id: job.id }, data: { worktreePath } });
+    let calls = 0;
+    const staleResponse = `Outcome: implemented\nPR: https://github.com/acme/runner/pull/${job.issueNumber}\nTL;DR: stale\nStale response`;
+    const provider: AgentProvider = {
+      name: "codex",
+      execute: async (request) => {
+        calls += 1;
+        if (calls === 1) await Bun.write(request.responseFilePath!, staleResponse);
+        return {
+          provider: "codex",
+          sessionId: "response-session-1",
+          exitCode: calls === 1 ? 1 : 0,
+          finalOutput: "",
+          stderr: calls === 1 ? "provider failed" : "",
+        };
+      },
+    };
+    const runner = createJobRunner({
+      config,
+      provider,
+      github: fakeGitHub(job.issueNumber, job.branchName, "a".repeat(40)),
+      createWorktree: async () => { throw new Error("must reuse the retained worktree"); },
+    });
+
+    try {
+      expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
+      expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("FAILED");
+
+      expect(await jobs.requeueForRetry(job.id, environment)).not.toBeNull();
+      const retry = (await jobs.claim(job.id, environment, "runner-worker"))!;
+      expect(await runner.run(retry.id, "runner-worker", retry.claimToken!)).toBe(true);
+
+      expect(calls).toBe(3);
+      const failed = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+      expect(failed.status).toBe("FAILED");
+      expect(failed.errorMessage).toContain("without writing the response");
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
   });
 
   test("fix updates the existing PR branch, restores review-requested, and rejects a push that never lands", async () => {
@@ -441,7 +486,7 @@ integration("job runner", () => {
       headSha: "1".repeat(40),
       trigger: "REVIEW_CHANGES_REQUESTED",
     });
-    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
     expect(reviewWorktrees).toEqual([prHead]);
     const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
     expect(stored.status).toBe("COMPLETED");
@@ -470,7 +515,7 @@ integration("job runner", () => {
       github: fixGitHub(config, issueBase + 7, prHead, managed.prNumber, "2".repeat(40)),
       createReviewWorktree: async () => "agent/fix-local",
     });
-    expect(await unchangedRunner.run(unchanged.id, "runner-worker")).toBe(true);
+    expect(await unchangedRunner.run(unchanged.id, "runner-worker", unchanged.claimToken!)).toBe(true);
     expect((await prisma.job.findUniqueOrThrow({ where: { id: unchanged.id } })).status).toBe("FAILED");
     expect((await prisma.job.findUniqueOrThrow({ where: { id: unchanged.id } })).errorMessage).toContain("push was not detected");
   });
@@ -508,7 +553,7 @@ integration("job runner", () => {
       createReviewWorktree: async () => "agent/fix-local",
     });
 
-    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
     expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } }))
       .toMatchObject({ status: "BLOCKED", result: response });
     expect(await prisma.managedPullRequest.findUniqueOrThrow({ where: { id: managed.id } }))
@@ -554,7 +599,7 @@ integration("job runner", () => {
       createReviewWorktree: async () => "agent/fix-local",
     });
 
-    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
     expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("COMPLETED");
     expect(await prisma.managedPullRequest.findUniqueOrThrow({ where: { id: managed.id } }))
       .toMatchObject({ blocked: true, fixCycleCount: config.MAX_AUTOMATIC_FIX_CYCLES });
@@ -599,7 +644,7 @@ integration("job runner", () => {
       createReviewWorktree: async () => "agent/review-local",
     });
 
-    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
     const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id }, include: { review: true } });
     expect(stored.status).toBe("COMPLETED");
     expect(stored.review?.status).toBe("PASSED");
@@ -651,7 +696,7 @@ integration("job runner", () => {
       createReviewWorktree: async () => "agent/review-local",
     });
 
-    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
     const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id }, include: { review: true } });
     expect(stored.status).toBe("COMPLETED");
     expect(stored.review?.status).toBe("CHANGES_REQUESTED");
@@ -694,7 +739,7 @@ integration("job runner", () => {
       createReviewWorktree: async () => "agent/review-local",
     });
 
-    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
     expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } }))
       .toMatchObject({ status: "FAILED", errorMessage: "GitHub label write failed" });
     expect(state.labels).toEqual(["bug", config.ISSUE_BLOCKED_LABEL]);
@@ -733,7 +778,7 @@ integration("job runner", () => {
       createReviewWorktree: async () => "agent/review-local",
     });
 
-    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
     const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
     expect(stored.status).toBe("COMPLETED");
     expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "STALE_RESULT_DISCARDED" } })).not.toBeNull();
@@ -775,7 +820,7 @@ integration("job runner", () => {
       createReviewWorktree: async () => "agent/review-local",
     });
 
-    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
     expect(provider.calls).toEqual([]);
     expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("COMPLETED");
     expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "STALE_RESULT_DISCARDED" } })).not.toBeNull();
@@ -814,7 +859,7 @@ integration("job runner", () => {
       createReviewWorktree: async (input) => { await mkdir(input.worktreePath, { recursive: true }); return input.worktreePath; },
     });
     try {
-      expect(await failedRunner.run(failed.id, "runner-worker")).toBe(true);
+      expect(await failedRunner.run(failed.id, "runner-worker", failed.claimToken!)).toBe(true);
       expect((await prisma.job.findUniqueOrThrow({ where: { id: failed.id } })).status).toBe("FAILED");
       expect((await prisma.job.findUniqueOrThrow({ where: { id: implementation.id } })).status).toBe("COMPLETED");
 
@@ -827,7 +872,7 @@ integration("job runner", () => {
         createReviewWorktree: async () => { throw new Error("must reuse the retained review worktree"); },
         removeWorktree: async ({ worktreePath }) => { await rm(worktreePath, { recursive: true, force: true }); },
       });
-      expect(await retriedRunner.run(retried.id, "runner-worker")).toBe(true);
+      expect(await retriedRunner.run(retried.id, "runner-worker", retried.claimToken!)).toBe(true);
       expect((await prisma.job.findUniqueOrThrow({ where: { id: retried.id } })).status).toBe("COMPLETED");
       expect((await prisma.job.findUniqueOrThrow({ where: { id: implementation.id } })).status).toBe("COMPLETED");
     } finally {
@@ -868,7 +913,7 @@ integration("job runner", () => {
       createReviewWorktree: async () => "agent/fix-local",
     });
 
-    expect(await runner.run(job.id, "runner-worker")).toBe(true);
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
     expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("FAILED");
     expect(await prisma.managedPullRequest.findUniqueOrThrow({ where: { id: managed.id } }))
       .toMatchObject({ blocked: true, fixCycleCount: config.MAX_AUTOMATIC_FIX_CYCLES });

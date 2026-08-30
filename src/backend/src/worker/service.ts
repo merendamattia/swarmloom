@@ -5,8 +5,17 @@ import { heartbeatRepository } from "../repositories/heartbeats.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import type { JobQueue } from "../queue/service.ts";
 
-type Runner = { run(jobId: string, workerId: string): Promise<boolean> };
+type Runner = { run(jobId: string, workerId: string, claimToken: string): Promise<boolean> };
 type RecoverStaleJobs = () => Promise<number>;
+
+export async function reconcileQueuedJobs(
+  environment: string,
+  queue: Pick<JobQueue, "enqueueMissing">,
+) {
+  const queued = await jobRepository.findQueued(environment);
+  await queue.enqueueMissing(queued.map((job) => job.id));
+  return queued.length;
+}
 
 export function startWorkerLoops(
   config: Config,
@@ -20,7 +29,7 @@ export function startWorkerLoops(
     await settings.reload();
     worker.concurrency = config.MAX_PARALLEL_JOBS;
     const claimed = await jobRepository.claim(payload.jobId, config.APP_ENV, config.WORKER_ID);
-    if (claimed) await runner.run(claimed.id, config.WORKER_ID);
+    if (claimed?.claimToken) await runner.run(claimed.id, config.WORKER_ID, claimed.claimToken);
   }, config.MAX_PARALLEL_JOBS);
   let refreshing = false;
   const refresh = async () => {
@@ -31,6 +40,7 @@ export function startWorkerLoops(
       worker.concurrency = config.MAX_PARALLEL_JOBS;
       await beat(config);
       await recoverStale?.();
+      await reconcileQueuedJobs(config.APP_ENV, queue);
     } catch (error) {
       logger.error("Worker refresh failed", { error: error instanceof Error ? error.message : String(error) });
     } finally {

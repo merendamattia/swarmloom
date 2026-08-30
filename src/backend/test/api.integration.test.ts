@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { parseConfig } from "../src/core/config-schema.ts";
 import { readApplicationVersion } from "../src/core/version.ts";
 
@@ -371,6 +373,8 @@ integration("operations API", () => {
         workflow: "REVIEW_REQUESTED",
       },
     });
+    const staleWorktreePath = `/tmp/swarmloom-api-stale-${unique}`;
+    await mkdir(staleWorktreePath, { recursive: true });
     const stale = await prisma.job.create({
       data: {
         repositoryId,
@@ -390,6 +394,8 @@ integration("operations API", () => {
         headSha: "a".repeat(40),
         provider: "CODEX",
         model: "gpt-5.6-luna",
+        claimToken: "stale-claim",
+        worktreePath: staleWorktreePath,
         activePrKey: `${repositoryId}:${managed.id}:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:REVIEW`,
       },
     });
@@ -402,7 +408,47 @@ integration("operations API", () => {
     expect(await retry.json()).toEqual({ error: "Pull request head changed; retry was not queued" });
     expect(pullRequestLabels).toEqual(["bug", config.PR_REVIEW_REQUESTED_LABEL]);
     expect(enqueuedJobs).not.toContain(stale.id);
-    expect(await prisma.job.findUniqueOrThrow({ where: { id: stale.id } })).toMatchObject({ status: "FAILED", headSha: "a".repeat(40) });
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: stale.id } })).toMatchObject({
+      status: "FAILED",
+      headSha: "a".repeat(40),
+      worktreePath: null,
+      activePrKey: null,
+    });
+    expect(existsSync(staleWorktreePath)).toBe(false);
+    pullRequestHead = "a".repeat(40);
+  });
+
+  test("removes scanner trigger labels on a normal same-head pull request retry", async () => {
+    const retry = await prisma.job.create({
+      data: {
+        repositoryId,
+        environment: "test",
+        jobType: "REVIEW",
+        subjectType: "PULL_REQUEST",
+        issueNumber: 456,
+        issueTitle: "Pull request retry",
+        issueUrl: `https://github.com/acme/api-${unique}/issues/456`,
+        issueBody: "Review this pull request",
+        status: "FAILED",
+        branchName: "agent/issue-456",
+        baselineCommit: "b".repeat(40),
+        pullRequestNumber: 456,
+        pullRequestUrl: "https://github.com/acme/api-test/pull/456",
+        headSha: "d".repeat(40),
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+      },
+    });
+    pullRequestHead = "d".repeat(40);
+    pullRequestLabels.splice(0, pullRequestLabels.length, "bug", config.PR_REVIEW_REQUESTED_LABEL);
+
+    const response = await app.request(`/api/jobs/${retry.id}/retry`, { method: "POST" });
+
+    expect(response.status).toBe(202);
+    expect(pullRequestLabels).toEqual(["bug"]);
+    expect(enqueuedJobs).toContain(retry.id);
+    expect((await prisma.job.findUniqueOrThrow({ where: { id: retry.id } })).status).toBe("QUEUED");
+    expect((await app.request(`/api/jobs/${retry.id}/cancel`, { method: "POST" })).status).toBe(200);
     pullRequestHead = "a".repeat(40);
   });
 

@@ -356,15 +356,18 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       if (!job) return context.json({ error: "Not found" }, 404);
       if (!await jobRepository.cancel(job.id)) return context.json({ error: "Job is already terminal" }, 409);
       await queue.remove(job.id);
-      const cancelled = await prisma.job.findUnique({ where: { id: job.id }, select: { worktreePath: true, workerId: true } });
+      const cancelled = await prisma.job.findUnique({ where: { id: job.id }, select: { worktreePath: true, workerId: true, claimToken: true } });
       if (cancelled && !cancelled.workerId && cancelled.worktreePath) {
         try {
-          await removeJobWorktree({
-            worktreePath: cancelled.worktreePath,
-            repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
-            gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
-          });
-          await jobRepository.clearWorktree(job.id);
+          const cleanup = await jobRepository.claimWorktreeCleanup(job.id, null, cancelled.claimToken, cancelled.worktreePath);
+          if (cleanup) {
+            await removeJobWorktree({
+              worktreePath: cleanup.path,
+              repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
+              gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
+            });
+            await jobRepository.clearWorktree(job.id, cancelled.claimToken, cleanup.cleanupToken);
+          }
         } catch (error) {
           await events.record({
             type: "GITHUB_RECONCILIATION_REQUIRED",
@@ -427,6 +430,37 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       if (currentPullRequest && job.headSha && currentPullRequest.headSha !== job.headSha) {
         const trigger = job.jobType === "REVIEW" ? config.PR_REVIEW_REQUESTED_LABEL : config.PR_FIX_REQUESTED_LABEL;
         try {
+          const cleanup = job.worktreePath
+            ? await jobRepository.claimWorktreeCleanup(job.id, null, job.claimToken, job.worktreePath)
+            : null;
+          if (job.worktreePath && !cleanup) {
+            return context.json({ error: "Job cleanup is still in progress" }, 409);
+          }
+          if (cleanup) {
+            await removeJobWorktree({
+              worktreePath: cleanup.path,
+              repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
+              gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
+            });
+            if (!await jobRepository.clearWorktree(job.id, job.claimToken, cleanup.cleanupToken)) {
+              return context.json({ error: "Job cleanup is still in progress" }, 409);
+            }
+          }
+          if (!await jobRepository.discardFailedJob(job.id, job.claimToken)) {
+            return context.json({ error: "Job cleanup is still in progress" }, 409);
+          }
+        } catch (error) {
+          await events.record({
+            type: "GITHUB_RECONCILIATION_REQUIRED",
+            level: "ERROR",
+            message: `Could not clean up the obsolete pull request retry for ${job.repository.fullName}#${job.pullRequestNumber}: ${redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
+            jobId: job.id,
+            repositoryId: job.repositoryId,
+            metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber, headSha: currentPullRequest.headSha },
+          });
+          return context.json({ error: "Could not clean up the obsolete pull request retry" }, 502);
+        }
+        try {
           const labels = await github.getPullRequestLabels(job.repository.fullName, job.pullRequestNumber!);
           await github.setPullRequestLabels(
             job.repository.fullName,
@@ -464,9 +498,9 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       if (!requeued) {
         const current = await prisma.job.findFirst({
           where: { id: job.id, environment: config.APP_ENV },
-          select: { status: true, workerId: true, worktreePath: true },
+          select: { status: true, workerId: true, worktreePath: true, cleanupToken: true },
         });
-        const cleanupPending = current?.workerId !== null
+        const cleanupPending = current?.workerId !== null || current?.cleanupToken !== null
           || (current?.status !== "FAILED" && current?.worktreePath !== null);
         return current
           ? context.json({ error: current.status === "QUEUED" || current.status === "RUNNING" ? "Retry is already in progress" : cleanupPending ? "Job cleanup is still in progress" : "Job is no longer retryable" }, 409)
@@ -494,11 +528,10 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       if (job.subjectType === "PULL_REQUEST" && job.pullRequestNumber) {
         try {
           const labels = await github.getPullRequestLabels(job.repository.fullName, job.pullRequestNumber);
-          const trigger = job.jobType === "REVIEW" ? config.PR_REVIEW_REQUESTED_LABEL : config.PR_FIX_REQUESTED_LABEL;
           await github.setPullRequestLabels(
             job.repository.fullName,
             job.pullRequestNumber,
-            replacePullRequestLabels(labels, config, [trigger]),
+            replacePullRequestLabels(labels, config, []),
           );
           await github.addIssueComment(
             job.repository.fullName,

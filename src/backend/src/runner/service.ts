@@ -58,9 +58,10 @@ export function createJobRunner({
 }: RunnerDependencies) {
   const diagnosticEnvironment = { ...globalThis.process.env, SWARMLOOM_GITHUB_TOKEN: config.GITHUB_TOKEN };
 
-  async function run(jobId: string, workerId: string) {
-    const job = await jobRepository.findRunning(jobId, workerId);
-    if (!job) return false;
+  async function run(jobId: string, workerId: string, claimToken: string) {
+    const storedJob = await jobRepository.findRunning(jobId, workerId, claimToken);
+    if (!storedJob?.claimToken) return false;
+    const job = { ...storedJob, claimToken };
     const provider = (providers?.[job.provider.toLowerCase() as AgentProvider["name"]] ?? defaultProvider) as AgentProvider;
 
     const controller = new AbortController();
@@ -70,7 +71,7 @@ export function createJobRunner({
     const heartbeatOnce = async () => {
       if (heartbeatStopped) return;
       try {
-        const active = await jobRepository.heartbeat(job.id, workerId);
+        const active = await jobRepository.heartbeat(job.id, workerId, claimToken);
         if (!active) controller.abort(new Error("Job is no longer running"));
       } finally {
         if (!heartbeatStopped) {
@@ -131,7 +132,7 @@ export function createJobRunner({
             { environment: diagnosticEnvironment },
           ).diagnostics
           : minimalDiagnostics(error, { provider: provider?.name ?? "unconfigured", model: job.model }, diagnosticEnvironment);
-      reachedTerminalState = await jobRepository.finishRunning(job.id, "FAILED", {
+      reachedTerminalState = await jobRepository.finishRunning(job.id, claimToken, "FAILED", {
         errorMessage: message,
         diagnostics: diagnostics as Prisma.InputJsonValue,
       });
@@ -148,13 +149,15 @@ export function createJobRunner({
       if (heartbeatTimer) clearTimeout(heartbeatTimer);
       if (state.worktreeCreated && !retainWorktree) {
         try {
-          await removeWorktree({
-            worktreePath: state.worktreePath!,
-            repositoryPath: state.repositoryPath,
-            gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
-          });
-          await jobRepository.clearWorktree(job.id);
-          worktreeCleanupComplete = true;
+          const cleanup = await jobRepository.claimWorktreeCleanup(job.id, workerId, claimToken, state.worktreePath);
+          if (cleanup) {
+            await removeWorktree({
+              worktreePath: cleanup.path,
+              repositoryPath: state.repositoryPath,
+              gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
+            });
+            worktreeCleanupComplete = await jobRepository.clearWorktree(job.id, claimToken, cleanup.cleanupToken);
+          }
         } catch (error) {
           await events.record({
             type: "GITHUB_RECONCILIATION_REQUIRED",
@@ -167,7 +170,7 @@ export function createJobRunner({
           });
         }
       }
-      if (state.repositoryPath && !retainWorktree) {
+      if (state.repositoryPath && !retainWorktree && worktreeCleanupComplete) {
         try {
           await gc({ repositoryPath: state.repositoryPath, gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl) });
         } catch {
@@ -175,7 +178,7 @@ export function createJobRunner({
         }
       }
       if (!state.worktreeCreated || retainWorktree) worktreeCleanupComplete = true;
-      if (worktreeCleanupComplete) await jobRepository.releaseWorker(job.id, workerId);
+      if (worktreeCleanupComplete) await jobRepository.releaseWorker(job.id, workerId, claimToken);
     }
     return reachedTerminalState;
   }
@@ -232,7 +235,10 @@ function createExecuteRoleWithRetry(events: EventService, config: Config, provid
         resumeSessionId,
       );
       onExecution(result);
-      if (result.exitCode !== 0) return result;
+      if (result.exitCode !== 0) {
+        await removeResponseFile(result.responseFilePath);
+        return result;
+      }
       let response = "";
       try {
         response = await readResponseFile(result.responseFilePath);
