@@ -522,6 +522,53 @@ integration("job runner", () => {
     expect((await prisma.job.findUniqueOrThrow({ where: { id: unchanged.id } })).errorMessage).toContain("push was not detected");
   });
 
+  test("does not execute a fix for a same-head closed or merged pull request", async () => {
+    const cases = [
+      { issueNumber: issueBase + 29, prNumber: 913, merged: false },
+      { issueNumber: issueBase + 30, prNumber: 914, merged: true },
+    ];
+
+    for (const current of cases) {
+      const headSha = "9".repeat(40);
+      const managed = await prisma.managedPullRequest.create({
+        data: {
+          repositoryId,
+          prNumber: current.prNumber,
+          issueNumber: current.issueNumber,
+          issueTitle: `Issue ${current.issueNumber}`,
+          issueUrl: `https://github.com/acme/runner/issues/${current.issueNumber}`,
+          headBranch: `agent/issue-${current.issueNumber}`,
+          headSha,
+          baseBranch: "develop",
+          state: "OPEN",
+          workflow: "FIX_REQUESTED",
+        },
+      });
+      const job = await claimed(current.issueNumber, "FIX", "PULL_REQUEST", {
+        pullRequestId: managed.id,
+        pullRequestNumber: managed.prNumber,
+        pullRequestUrl: `https://github.com/acme/runner/pull/${managed.prNumber}`,
+        headSha,
+        trigger: "REVIEW_CHANGES_REQUESTED",
+      });
+      const provider = new FakeProvider([success("Outcome: implemented\nTL;DR: should not run\nShould not run.", "closed-fix")]);
+      const github = fixGitHub(config, current.issueNumber, managed.headBranch, managed.prNumber, headSha, "closed", current.merged);
+      const runner = createJobRunner({
+        config,
+        provider,
+        github,
+        createReviewWorktree: async () => { throw new Error("must not create a closed pull request worktree"); },
+      });
+
+      expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
+      expect(provider.calls).toEqual([]);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+        status: "COMPLETED",
+        result: expect.stringContaining("no longer open"),
+      });
+    }
+  });
+
   test("a blocked FIX stops without requiring a new pull request head", async () => {
     const issueNumber = issueBase + 15;
     const managed = await prisma.managedPullRequest.create({
@@ -791,6 +838,52 @@ integration("job runner", () => {
     expect(state.comments.some((comment) => comment.issue === managed.prNumber)).toBe(false);
   });
 
+  test("does not execute a review for a same-head closed or merged pull request", async () => {
+    const cases = [
+      { issueNumber: issueBase + 27, prNumber: 911, merged: false },
+      { issueNumber: issueBase + 28, prNumber: 912, merged: true },
+    ];
+
+    for (const current of cases) {
+      const headSha = "8".repeat(40);
+      const managed = await prisma.managedPullRequest.create({
+        data: {
+          repositoryId,
+          prNumber: current.prNumber,
+          issueNumber: current.issueNumber,
+          issueTitle: `Issue ${current.issueNumber}`,
+          issueUrl: `https://github.com/acme/runner/issues/${current.issueNumber}`,
+          headBranch: `agent/issue-${current.issueNumber}`,
+          headSha,
+          baseBranch: "develop",
+          state: "OPEN",
+          workflow: "REVIEW_REQUESTED",
+        },
+      });
+      const job = await claimed(current.issueNumber, "REVIEW", "PULL_REQUEST", {
+        pullRequestId: managed.id,
+        pullRequestNumber: managed.prNumber,
+        pullRequestUrl: `https://github.com/acme/runner/pull/${managed.prNumber}`,
+        headSha,
+      });
+      const provider = new FakeProvider([success("Review: pass\nTL;DR: should not run\nShould not run.", "closed-review")]);
+      const github = reviewGitHub(config, current.issueNumber, managed.headBranch, managed.prNumber, headSha, undefined, "closed", current.merged);
+      const runner = createJobRunner({
+        config,
+        provider,
+        github,
+        createReviewWorktree: async () => { throw new Error("must not create a closed pull request worktree"); },
+      });
+
+      expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
+      expect(provider.calls).toEqual([]);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+        status: "COMPLETED",
+        result: expect.stringContaining("no longer open"),
+      });
+    }
+  });
+
   test("a stale review on a newer head discards the result before any agent session runs", async () => {
     const issueNumber = issueBase + 12;
     const managed = await prisma.managedPullRequest.create({
@@ -882,7 +975,7 @@ integration("job runner", () => {
     await prisma.job.update({ where: { id: job.id }, data: { heartbeatAt: new Date(Date.now() - 120_000) } });
     expect(await jobs.recoverStaleBefore(environment, new Date(Date.now() - 60_000))).toHaveLength(1);
     await prisma.job.update({ where: { id: job.id }, data: { worktreePath: null } });
-    expect(await jobs.releaseWorker(job.id, "runner-worker", job.claimToken!)).toBe(true);
+    expect(await jobs.releaseWorker(job.id, "runner-worker", job.claimToken!, true)).toBe(true);
     expect(await jobs.requeueForRetry(job.id, environment)).not.toBeNull();
     expect(await reviews.finish(firstReview.id, job.claimToken!, "PASSED", { response: reviewResponse })).toBe(false);
     const retry = (await jobs.claim(job.id, environment, "runner-worker"))!;
@@ -1061,7 +1154,7 @@ function success(finalOutput: string, sessionId: string): AgentResult {
   return { provider: "codex", sessionId, exitCode: 0, finalOutput, stderr: "" };
 }
 
-function pullRequestShape(number: number, head: string, issueNumber: number, headSha: string) {
+function pullRequestShape(number: number, head: string, issueNumber: number, headSha: string, state = "open", merged = false) {
   return {
     number,
     title: `Pull request ${number}`,
@@ -1069,8 +1162,8 @@ function pullRequestShape(number: number, head: string, issueNumber: number, hea
     base: "develop",
     head,
     headSha,
-    state: "open",
-    merged: false,
+    state,
+    merged,
     body: `Closes #${issueNumber}`,
     additions: 12,
     deletions: 3,
@@ -1115,38 +1208,55 @@ function fakeGitHub(issueNumber: number, branchName: string, headSha: string) {
   return state;
 }
 
-function fixGitHub(config: ReturnType<typeof parseConfig>, issueNumber: number, prHead: string, prNumber: number, nextSha = "2".repeat(40)) {
-  const state = fakeGitHub(issueNumber, prHead, nextSha);
-  state.prLabels = [config.PR_FIX_REQUESTED_LABEL];
+function fixGitHub(
+  config: ReturnType<typeof parseConfig>,
+  issueNumber: number,
+  prHead: string,
+  prNumber: number,
+  nextSha = "2".repeat(40),
+  state = "open",
+  merged = false,
+) {
+  const githubState = fakeGitHub(issueNumber, prHead, nextSha);
+  githubState.prLabels = [config.PR_FIX_REQUESTED_LABEL];
   return {
-    ...state,
+    ...githubState,
     async getPullRequest(_fullName: string, number: number) {
-      return pullRequestShape(number, prHead, issueNumber, nextSha);
+      return pullRequestShape(number, prHead, issueNumber, nextSha, state, merged);
     },
     async getIssueContext() {
       return {
-        issue: await state.getIssue(),
+        issue: await githubState.getIssue(),
         issueComments: [],
-        pullRequests: [{ ...pullRequestShape(prNumber, prHead, issueNumber, nextSha), diff: "diff --git a/x.ts b/x.ts", reviews: [], comments: [] }],
+        pullRequests: [{ ...pullRequestShape(prNumber, prHead, issueNumber, nextSha, state, merged), diff: "diff --git a/x.ts b/x.ts", reviews: [], comments: [] }],
       };
     },
   };
 }
 
-function reviewGitHub(config: ReturnType<typeof parseConfig>, issueNumber: number, prHead: string, prNumber: number, headSha: string, movedSha?: string) {
-  const state = fakeGitHub(issueNumber, prHead, movedSha ?? headSha);
-  state.prLabels = [config.PR_REVIEW_REQUESTED_LABEL];
+function reviewGitHub(
+  config: ReturnType<typeof parseConfig>,
+  issueNumber: number,
+  prHead: string,
+  prNumber: number,
+  headSha: string,
+  movedSha?: string,
+  state = "open",
+  merged = false,
+) {
+  const githubState = fakeGitHub(issueNumber, prHead, movedSha ?? headSha);
+  githubState.prLabels = [config.PR_REVIEW_REQUESTED_LABEL];
   return {
-    ...state,
+    ...githubState,
     async getPullRequest(_fullName: string, number: number) {
-      return pullRequestShape(number, prHead, issueNumber, movedSha ?? headSha);
+      return pullRequestShape(number, prHead, issueNumber, movedSha ?? headSha, state, merged);
     },
     async getIssueContext() {
       return {
-        issue: await state.getIssue(),
+        issue: await githubState.getIssue(),
         issueComments: [],
         pullRequests: [{
-          ...pullRequestShape(prNumber, prHead, issueNumber, movedSha ?? headSha),
+          ...pullRequestShape(prNumber, prHead, issueNumber, movedSha ?? headSha, state, merged),
           diff: "diff --git a/src/app.ts b/src/app.ts",
           reviews: [],
           comments: [],

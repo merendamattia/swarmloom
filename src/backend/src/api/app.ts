@@ -4,6 +4,7 @@ import { cors } from "hono/cors";
 import { requestId } from "hono/request-id";
 import { secureHeaders } from "hono/secure-headers";
 import { z } from "zod";
+import { existsSync } from "node:fs";
 import type { Config } from "../core/config-schema.ts";
 import type { SettingsService } from "../core/settings-service.ts";
 import { parseRuntimeSettingsPatch, runtimeSettingsView } from "../core/runtime-settings.ts";
@@ -13,7 +14,7 @@ import { logger } from "../core/logger.ts";
 import { redactSecrets } from "../core/secrets.ts";
 import { checkProviderAuthentication, validateStartup } from "../core/startup.ts";
 import type { EventService } from "../events/service.ts";
-import type { GitHubClient } from "../github/client.ts";
+import { isOpenPullRequest, type GitHubClient } from "../github/client.ts";
 import { configuredAgent } from "../providers/index.ts";
 import { createSupportIssue } from "../support-issues/service.ts";
 import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.ts";
@@ -326,17 +327,31 @@ export function createApp({ config, scanner, github, events, startup, queue, set
     })))
     .delete("/repositories/:id", async (context) => {
       const id = context.req.param("id");
-      const existing = await prisma.repository.findUnique({ where: { id }, select: { fullName: true } });
+      const existing = await prisma.repository.findUnique({
+        where: { id },
+        select: { fullName: true, cloneUrl: true, localPath: true },
+      });
       if (!existing) return context.json({ error: "Not found" }, 404);
       const remaining = config.githubRepositories.filter((name) => name !== existing.fullName);
       const configured = remaining.length !== config.githubRepositories.length;
       const result = await repositoryRepository.remove(id, existing.fullName, configured
         ? { environment: config.APP_ENV, value: remaining.length > 0 ? remaining.join(",") : null }
-        : undefined);
+        : undefined,
+      async (worktreePath) => removeJobWorktree({
+        worktreePath,
+        repositoryPath: existing.localPath ?? repositoryPath(config.DATA_DIR, existing.fullName),
+        gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, existing.cloneUrl),
+      }));
       if (result?.blocked) {
         return context.json({
           error: `Cannot remove the repository while ${result.activeJobs} active job${result.activeJobs === 1 ? "" : "s"} ${result.activeJobs === 1 ? "is" : "are"} queued or running. Cancel or finish them first.`,
         }, 409);
+      }
+      if (result?.cleanupRequired) {
+        return context.json({ error: "Cannot remove the repository while retained job worktrees are still being cleaned up." }, 409);
+      }
+      if (result?.cleanupFailed) {
+        return context.json({ error: "Could not clean retained job worktrees before removing the repository." }, 502);
       }
       if (configured) {
         await settings.reload();
@@ -410,6 +425,9 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       if (!["FAILED", "BLOCKED", "CANCELLED", "STALE"].includes(job.status)) {
         return context.json({ error: "Only failed, blocked, cancelled, or stale jobs can be retried" }, 409);
       }
+      if (job.status === "FAILED" && job.worktreePath && !existsSync(job.worktreePath)) {
+        return context.json({ error: "Retained worktree is missing; retry cannot resume the job" }, 409);
+      }
 
       let currentPullRequest;
       if (job.subjectType === "PULL_REQUEST" && job.pullRequestNumber) {
@@ -426,6 +444,9 @@ export function createApp({ config, scanner, github, events, startup, queue, set
           });
           return context.json({ error: "Could not validate the pull request head" }, 502);
         }
+      }
+      if (currentPullRequest && !isOpenPullRequest(currentPullRequest)) {
+        return context.json({ error: "Pull request is closed or merged; retry was not queued" }, 409);
       }
       if (currentPullRequest && job.headSha && currentPullRequest.headSha !== job.headSha) {
         const trigger = job.jobType === "REVIEW" ? config.PR_REVIEW_REQUESTED_LABEL : config.PR_FIX_REQUESTED_LABEL;

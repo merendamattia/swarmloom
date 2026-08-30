@@ -449,24 +449,31 @@ async function clearWorktree(id: string, claimToken: string | null, cleanupToken
   return updated.count === 1;
 }
 
-async function releaseWorker(id: string, workerId: string | null, claimToken: string | null) {
+async function releaseWorker(id: string, workerId: string | null, claimToken: string | null, releaseStale = false) {
   const updated = await prisma.job.updateMany({
     where: {
       id,
       workerId,
       claimToken,
       cleanupToken: null,
-      status: { in: ["COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"] },
+      status: { in: releaseStale ? cleanupStatuses : cleanupStatuses.filter((status) => status !== "STALE") },
       OR: [{ status: "FAILED" }, { worktreePath: null }],
     },
-    data: { workerId: null, claimToken: null, heartbeatAt: null, cleanupLeaseExpiresAt: null },
+    data: {
+      workerId: null,
+      claimToken: null,
+      heartbeatAt: null,
+      cleanupLeaseExpiresAt: null,
+      activeIssueKey: releaseStale ? null : undefined,
+      activePrKey: releaseStale ? null : undefined,
+    },
   });
   return updated.count === 1;
 }
 
 async function discardTerminalJob(id: string, claimToken: string | null) {
   const updated = await prisma.job.updateMany({
-    where: { id, status: { in: retryableStatuses }, claimToken, cleanupToken: null, worktreePath: null },
+    where: { id, status: { in: retryableStatuses }, workerId: null, claimToken, cleanupToken: null, worktreePath: null },
     data: { activeIssueKey: null, activePrKey: null, workerId: null, claimToken: null, heartbeatAt: null },
   });
   return updated.count === 1;
@@ -498,8 +505,6 @@ async function recoverStaleBefore(environment: string, cutoff: Date) {
     data: {
       status: "STALE",
       completedAt: new Date(),
-      activeIssueKey: null,
-      activePrKey: null,
       heartbeatAt: null,
       errorMessage: "Worker heartbeat expired before the job reached a terminal state",
     },

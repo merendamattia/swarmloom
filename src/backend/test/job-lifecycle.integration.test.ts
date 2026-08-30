@@ -124,7 +124,7 @@ integration("PostgreSQL job lifecycle", () => {
     });
 
     expect(await jobs.recoverStaleBefore(environment, new Date(Date.now() - 60_000))).toHaveLength(1);
-    expect(await jobs.releaseWorker(queued!.id, "same-worker", first!.claimToken!)).toBe(true);
+    expect(await jobs.releaseWorker(queued!.id, "same-worker", first!.claimToken!, true)).toBe(true);
     expect(await jobs.requeueForRetry(queued!.id, environment)).not.toBeNull();
     const second = await jobs.claim(queued!.id, environment, "same-worker");
     expect(second?.claimToken).not.toBe(first?.claimToken);
@@ -328,6 +328,40 @@ integration("PostgreSQL job lifecycle", () => {
 
     expect(await recoverStaleJobs(config, github as unknown as GitHubClient, createEventService())).toBe(1);
     expect(labelCalls[0]).toEqual(["bug", config.ISSUE_BLOCKED_LABEL]);
+  });
+
+  test("keeps the stale claim until GitHub reconciliation finishes", async () => {
+    const { recoverStaleJobs } = await import("../src/worker/recovery.ts");
+    const { createEventService } = await import("../src/events/service.ts");
+    const stale = await jobs.tryCreateQueued(queuedJob(issuePrefix + 4, config.APP_ENV));
+    const claimed = await jobs.claim(stale!.id, config.APP_ENV, "dead-worker");
+    await prisma.job.update({
+      where: { id: stale!.id },
+      data: { heartbeatAt: new Date(Date.now() - 120_000) },
+    });
+
+    let releaseLabels!: () => void;
+    let labelsStarted!: () => void;
+    const labelsReleased = new Promise<void>((resolve) => { releaseLabels = resolve; });
+    const reconciliationStarted = new Promise<void>((resolve) => { labelsStarted = resolve; });
+    const github = {
+      getIssue: async () => ({ number: stale!.issueNumber, labels: ["bug", config.ISSUE_WORKING_LABEL] }),
+      setIssueLabels: async () => {
+        labelsStarted();
+        await labelsReleased;
+      },
+      addIssueComment: async () => {},
+    };
+
+    const recovery = recoverStaleJobs(config, github as unknown as GitHubClient, createEventService());
+    await reconciliationStarted;
+
+    expect(await jobs.requeueForRetry(stale!.id, config.APP_ENV)).toBeNull();
+    releaseLabels();
+    expect(await recovery).toBe(1);
+    expect(await jobs.releaseWorker(stale!.id, "dead-worker", claimed!.claimToken!, true)).toBe(false);
+    expect(await jobs.requeueForRetry(stale!.id, config.APP_ENV)).not.toBeNull();
+    expect(await jobs.cancel(stale!.id)).toBe(true);
   });
 
   function queuedJob(issueNumber: number, jobEnvironment = environment) {

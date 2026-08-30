@@ -1,4 +1,5 @@
 import { githubGitEnvironment } from "../github/git-auth.ts";
+import { isOpenPullRequest } from "../github/client.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import { managedPullRequestRepository } from "../repositories/managed-prs.ts";
 import { reviewRepository } from "../repositories/reviews.ts";
@@ -24,23 +25,29 @@ export const runReview: JobFlow = async (context) => {
   }
   const pullRequest = job.pullRequest;
 
-  const stale = async () => {
+  const discard = async (message: string) => {
     const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "COMPLETED", {
-      result: `Stale review: the pull request head moved past ${job.headSha} before this review could apply.`,
+      result: message,
     });
     if (!finished) return;
     await events.record({
       type: "STALE_RESULT_DISCARDED",
-      message: `Discarded the review result for ${fullName}#${pullRequest.prNumber} because the pull request head moved past ${job.headSha}`,
+      message,
       jobId: job.id,
       repositoryId: job.repositoryId,
       scanRunId: job.scanRunId ?? undefined,
       metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl ?? undefined, headSha: job.headSha },
     });
   };
+  const stale = () => discard(`Stale review: the pull request head moved past ${job.headSha} before this review could apply.`);
+  const closed = () => discard(`Skipped review: pull request #${pullRequest.prNumber} is no longer open.`);
 
   const initial = await github.getPullRequest(fullName, pullRequest.prNumber);
   context.state.activePullRequest = { number: initial.number, url: initial.url };
+  if (!isOpenPullRequest(initial)) {
+    await closed();
+    return;
+  }
   if (initial.headSha !== job.headSha) {
     await stale();
     return;
@@ -69,6 +76,17 @@ export const runReview: JobFlow = async (context) => {
   if (worktree.created) {
     if (!await jobRepository.setWorktree(job.id, job.claimToken!, worktreePath)) return;
     context.state.worktreePersisted = true;
+  }
+
+  const beforeExecution = await github.getPullRequest(fullName, pullRequest.prNumber);
+  context.state.activePullRequest = { number: beforeExecution.number, url: beforeExecution.url };
+  if (!isOpenPullRequest(beforeExecution)) {
+    await closed();
+    return;
+  }
+  if (beforeExecution.headSha !== job.headSha) {
+    await stale();
+    return;
   }
 
   await events.record({
@@ -140,6 +158,10 @@ export const runReview: JobFlow = async (context) => {
     });
     if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     const current = await github.getPullRequest(fullName, pullRequest.prNumber);
+    if (!isOpenPullRequest(current)) {
+      await closed();
+      return;
+    }
     if (current.headSha !== job.headSha) {
       await stale();
       return;

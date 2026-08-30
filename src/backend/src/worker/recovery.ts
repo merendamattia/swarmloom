@@ -12,7 +12,6 @@ export async function recoverStaleJobs(config: Config, github: GitHubClient, eve
     new Date(Date.now() - config.STALE_JOB_THRESHOLD_MS),
   );
   for (const job of staleJobs) {
-    let cleanupComplete = !job.worktreePath;
     if (job.worktreePath) {
       const cleanup = await jobRepository.claimWorktreeCleanup(job.id, job.workerId, job.claimToken, job.worktreePath);
       if (cleanup) {
@@ -22,7 +21,7 @@ export async function recoverStaleJobs(config: Config, github: GitHubClient, eve
             repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
             gitEnvironment: undefined,
           });
-          cleanupComplete = await jobRepository.clearWorktree(job.id, job.claimToken, cleanup.cleanupToken);
+          await jobRepository.clearWorktree(job.id, job.claimToken, cleanup.cleanupToken);
         } catch (error) {
           await events.record({
             type: "GITHUB_RECONCILIATION_REQUIRED",
@@ -36,7 +35,6 @@ export async function recoverStaleJobs(config: Config, github: GitHubClient, eve
         }
       }
     }
-    if (cleanupComplete) await jobRepository.releaseWorker(job.id, job.workerId, job.claimToken);
     await events.record({
       type: "JOB_FAILED",
       level: "ERROR",
@@ -84,6 +82,10 @@ export async function recoverStaleJobs(config: Config, github: GitHubClient, eve
         repositoryId: job.repositoryId,
         metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber ?? undefined },
       });
+    } finally {
+      // The claim fences the reconciliation window. If another owner completed cleanup,
+      // releaseWorker still verifies that no cleanup lease remains before releasing it.
+      await jobRepository.releaseWorker(job.id, job.workerId, job.claimToken, true);
     }
   }
   await recoverTerminalWorktrees(config, events);
@@ -105,7 +107,7 @@ export async function recoverTerminalWorktrees(
   for (const job of jobs) {
     if (!job.worktreePath) {
       if (job.completedAt && job.completedAt < staleBefore) {
-        await jobRepository.releaseWorker(job.id, job.workerId, job.claimToken);
+        await jobRepository.releaseWorker(job.id, job.workerId, job.claimToken, job.status === "STALE");
       }
       continue;
     }
@@ -125,7 +127,7 @@ export async function recoverTerminalWorktrees(
         gitEnvironment: undefined,
       });
       if (!await jobRepository.clearWorktree(job.id, null, cleanup.cleanupToken)) continue;
-      await jobRepository.releaseWorker(job.id, null, null);
+      await jobRepository.releaseWorker(job.id, null, null, job.status === "STALE");
       recovered += 1;
     } catch (error) {
       await events.record({

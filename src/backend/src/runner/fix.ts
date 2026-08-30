@@ -1,4 +1,5 @@
 import { githubGitEnvironment } from "../github/git-auth.ts";
+import { isOpenPullRequest } from "../github/client.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import { managedPullRequestRepository } from "../repositories/managed-prs.ts";
 import { safeWorktreePath } from "./paths.ts";
@@ -19,6 +20,25 @@ export const runFix: JobFlow = async (context) => {
     throw new Error("FIX job has no managed pull request association");
   }
   const pullRequest = job.pullRequest;
+  const discard = async (message: string) => {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "COMPLETED", { result: message });
+    if (!finished) return;
+    await events.record({
+      type: "STALE_RESULT_DISCARDED",
+      message,
+      jobId: job.id,
+      repositoryId: job.repositoryId,
+      scanRunId: job.scanRunId ?? undefined,
+      metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl ?? undefined, headSha: job.headSha ?? undefined },
+    });
+  };
+  const closed = () => discard(`Skipped fix: pull request #${pullRequest.prNumber} is no longer open.`);
+  const initial = await github.getPullRequest(fullName, pullRequest.prNumber);
+  context.state.activePullRequest = { number: initial.number, url: initial.url };
+  if (!isOpenPullRequest(initial)) {
+    await closed();
+    return;
+  }
   context.state.liveContext = await github.getIssueContext(fullName, job.issueNumber, job.issueUrl, pullRequest.prNumber);
   const liveContext = context.state.liveContext;
 
@@ -41,6 +61,13 @@ export const runFix: JobFlow = async (context) => {
   if (worktree.created) {
     if (!await jobRepository.setWorktree(job.id, job.claimToken!, worktreePath)) return;
     context.state.worktreePersisted = true;
+  }
+
+  const beforeExecution = await github.getPullRequest(fullName, pullRequest.prNumber);
+  context.state.activePullRequest = { number: beforeExecution.number, url: beforeExecution.url };
+  if (!isOpenPullRequest(beforeExecution)) {
+    await closed();
+    return;
   }
 
   await events.record({
@@ -110,6 +137,10 @@ export const runFix: JobFlow = async (context) => {
 
     const current = await github.getPullRequest(fullName, pullRequest.prNumber);
     context.state.activePullRequest = { number: current.number, url: current.url };
+    if (!isOpenPullRequest(current)) {
+      await closed();
+      return;
+    }
     if (current.headSha === job.headSha) {
       throw new Error(`FIX completed but PR #${current.number} still points at ${current.headSha}; the branch push was not detected`);
     }
