@@ -470,7 +470,16 @@ integration("job runner", () => {
         fixDetails: "The reviewer reproduced CI locally: bun test failed",
       },
     });
-    const state = fixGitHub(config, issueBase + 7, prHead, managed.prNumber);
+    const state = fixGitHub(
+      config,
+      issueBase + 7,
+      prHead,
+      managed.prNumber,
+      "2".repeat(40),
+      "open",
+      false,
+      ["1".repeat(40), "1".repeat(40), "2".repeat(40)],
+    );
     const reviewWorktrees: string[] = [];
 
     const fixedResponse = "Outcome: implemented\nTL;DR: Fixed the failing test and pushed the branch.\nFixed the failing test and pushed to the same branch.";
@@ -569,6 +578,60 @@ integration("job runner", () => {
     }
   });
 
+  test("discards a fix when the open pull request already advanced before execution", async () => {
+    const issueNumber = issueBase + 31;
+    const capturedHead = "a".repeat(40);
+    const currentHead = "b".repeat(40);
+    const managed = await prisma.managedPullRequest.create({
+      data: {
+        repositoryId,
+        prNumber: 915,
+        issueNumber,
+        issueTitle: `Issue ${issueNumber}`,
+        issueUrl: `https://github.com/acme/runner/issues/${issueNumber}`,
+        headBranch: `agent/issue-${issueNumber}`,
+        headSha: capturedHead,
+        baseBranch: "develop",
+        state: "OPEN",
+        workflow: "FIX_REQUESTED",
+        fixReason: "REVIEW_CHANGES_REQUESTED",
+        fixDetails: "The previous review found a failure.",
+      },
+    });
+    const provider = new FakeProvider([success("Outcome: implemented\nTL;DR: should not run\nShould not run.", "advanced-fix")]);
+    const github = fixGitHub(config, issueNumber, managed.headBranch, managed.prNumber, currentHead);
+    let worktreeCalls = 0;
+    const runner = createJobRunner({
+      config,
+      provider,
+      github,
+      createReviewWorktree: async () => {
+        worktreeCalls += 1;
+        return "agent/fix-local";
+      },
+    });
+    const job = await claimed(issueNumber, "FIX", "PULL_REQUEST", {
+      pullRequestId: managed.id,
+      pullRequestNumber: managed.prNumber,
+      pullRequestUrl: `https://github.com/acme/runner/pull/${managed.prNumber}`,
+      headSha: capturedHead,
+      trigger: "REVIEW_CHANGES_REQUESTED",
+    });
+
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
+
+    expect(provider.calls).toEqual([]);
+    expect(worktreeCalls).toBe(0);
+    expect(github.prLabels).toEqual([config.PR_FIX_REQUESTED_LABEL]);
+    expect(await prisma.managedPullRequest.findUniqueOrThrow({ where: { id: managed.id } }))
+      .toMatchObject({ headSha: capturedHead, workflow: "FIX_REQUESTED", fixReason: "REVIEW_CHANGES_REQUESTED" });
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "PR_REVIEW_REQUESTED" } })).toBeNull();
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+      status: "COMPLETED",
+      result: expect.stringContaining(`advanced from ${capturedHead} to ${currentHead}`),
+    });
+  });
+
   test("a blocked FIX stops without requiring a new pull request head", async () => {
     const issueNumber = issueBase + 15;
     const managed = await prisma.managedPullRequest.create({
@@ -633,7 +696,16 @@ integration("job runner", () => {
         fixCycleCount: config.MAX_AUTOMATIC_FIX_CYCLES - 1,
       },
     });
-    const state = fixGitHub(config, issueNumber, `agent/issue-${issueNumber}-existing`, managed.prNumber);
+    const state = fixGitHub(
+      config,
+      issueNumber,
+      `agent/issue-${issueNumber}-existing`,
+      managed.prNumber,
+      "4".repeat(40),
+      "open",
+      false,
+      ["3".repeat(40), "3".repeat(40), "4".repeat(40)],
+    );
     const job = await claimed(issueNumber, "FIX", "PULL_REQUEST", {
       pullRequestId: managed.id,
       pullRequestNumber: managed.prNumber,
@@ -1078,7 +1150,7 @@ integration("job runner", () => {
         fixCycleCount: config.MAX_AUTOMATIC_FIX_CYCLES - 1,
       },
     });
-    const state = fixGitHub(config, issueNumber, `agent/issue-${issueNumber}-existing`, managed.prNumber);
+    const state = fixGitHub(config, issueNumber, `agent/issue-${issueNumber}-existing`, managed.prNumber, "9".repeat(40));
     const job = await claimed(issueNumber, "FIX", "PULL_REQUEST", {
       pullRequestId: managed.id,
       pullRequestNumber: managed.prNumber,
@@ -1216,13 +1288,14 @@ function fixGitHub(
   nextSha = "2".repeat(40),
   state = "open",
   merged = false,
+  headSequence: string[] = [],
 ) {
   const githubState = fakeGitHub(issueNumber, prHead, nextSha);
   githubState.prLabels = [config.PR_FIX_REQUESTED_LABEL];
   return {
     ...githubState,
     async getPullRequest(_fullName: string, number: number) {
-      return pullRequestShape(number, prHead, issueNumber, nextSha, state, merged);
+      return pullRequestShape(number, prHead, issueNumber, headSequence.shift() ?? nextSha, state, merged);
     },
     async getIssueContext() {
       return {

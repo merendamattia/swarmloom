@@ -33,10 +33,17 @@ export const runFix: JobFlow = async (context) => {
     });
   };
   const closed = () => discard(`Skipped fix: pull request #${pullRequest.prNumber} is no longer open.`);
+  const stale = (currentHead: string) => discard(
+    `Skipped fix: pull request #${pullRequest.prNumber} advanced from ${job.headSha} to ${currentHead} before execution.`,
+  );
   const initial = await github.getPullRequest(fullName, pullRequest.prNumber);
   context.state.activePullRequest = { number: initial.number, url: initial.url };
   if (!isOpenPullRequest(initial)) {
     await closed();
+    return;
+  }
+  if (initial.headSha !== job.headSha) {
+    await stale(initial.headSha);
     return;
   }
   context.state.liveContext = await github.getIssueContext(fullName, job.issueNumber, job.issueUrl, pullRequest.prNumber);
@@ -67,6 +74,10 @@ export const runFix: JobFlow = async (context) => {
   context.state.activePullRequest = { number: beforeExecution.number, url: beforeExecution.url };
   if (!isOpenPullRequest(beforeExecution)) {
     await closed();
+    return;
+  }
+  if (beforeExecution.headSha !== job.headSha) {
+    await stale(beforeExecution.headSha);
     return;
   }
 

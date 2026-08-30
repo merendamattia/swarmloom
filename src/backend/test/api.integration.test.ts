@@ -506,6 +506,7 @@ integration("operations API", () => {
     ];
 
     for (const current of cases) {
+      const retainedWorktree = await mkdtemp(`/tmp/swarmloom-api-closed-${unique}-${current.issueNumber}-`);
       const job = await prisma.job.create({
         data: {
           repositoryId,
@@ -524,18 +525,33 @@ integration("operations API", () => {
           headSha: "a".repeat(40),
           provider: "CODEX",
           model: "gpt-5.6-luna",
+          worktreePath: retainedWorktree,
+          activePrKey: `${repositoryId}:closed-pr-${current.issueNumber}`,
         },
       });
       pullRequestHead = "a".repeat(40);
       pullRequestState = current.state;
       pullRequestMerged = current.merged;
 
-      const response = await app.request(`/api/jobs/${job.id}/retry`, { method: "POST" });
+      try {
+        const response = await app.request(`/api/jobs/${job.id}/retry`, { method: "POST" });
 
-      expect(response.status).toBe(409);
-      expect(await response.json()).toEqual({ error: "Pull request is closed or merged; retry was not queued" });
-      expect(enqueuedJobs).not.toContain(job.id);
-      expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({ status: "FAILED" });
+        expect(response.status).toBe(409);
+        expect(await response.json()).toEqual({ error: "Pull request is closed or merged; retry was not queued" });
+        expect(enqueuedJobs).not.toContain(job.id);
+        expect(existsSync(retainedWorktree)).toBe(false);
+        expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+          status: "FAILED",
+          worktreePath: null,
+          activePrKey: null,
+          cleanupToken: null,
+          cleanupLeaseExpiresAt: null,
+          workerId: null,
+          claimToken: null,
+        });
+      } finally {
+        await rm(retainedWorktree, { recursive: true, force: true });
+      }
     }
 
     pullRequestState = "open";

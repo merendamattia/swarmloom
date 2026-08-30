@@ -446,28 +446,27 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         }
       }
       if (currentPullRequest && !isOpenPullRequest(currentPullRequest)) {
+        try {
+          if (!await discardNonResumableRetry(job)) {
+            return context.json({ error: "Job cleanup is still in progress" }, 409);
+          }
+        } catch (error) {
+          await events.record({
+            type: "GITHUB_RECONCILIATION_REQUIRED",
+            level: "ERROR",
+            message: `Could not clean up the non-resumable pull request retry for ${job.repository.fullName}#${job.pullRequestNumber}: ${redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
+            jobId: job.id,
+            repositoryId: job.repositoryId,
+            metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber },
+          });
+          return context.json({ error: "Could not clean up the non-resumable pull request retry" }, 502);
+        }
         return context.json({ error: "Pull request is closed or merged; retry was not queued" }, 409);
       }
       if (currentPullRequest && job.headSha && currentPullRequest.headSha !== job.headSha) {
         const trigger = job.jobType === "REVIEW" ? config.PR_REVIEW_REQUESTED_LABEL : config.PR_FIX_REQUESTED_LABEL;
         try {
-          const cleanup = job.worktreePath
-            ? await jobRepository.claimWorktreeCleanup(job.id, null, job.claimToken, job.worktreePath)
-            : null;
-          if (job.worktreePath && !cleanup) {
-            return context.json({ error: "Job cleanup is still in progress" }, 409);
-          }
-          if (cleanup) {
-            await removeJobWorktree({
-              worktreePath: cleanup.path,
-              repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
-              gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
-            });
-            if (!await jobRepository.clearWorktree(job.id, job.claimToken, cleanup.cleanupToken)) {
-              return context.json({ error: "Job cleanup is still in progress" }, 409);
-            }
-          }
-          if (!await jobRepository.discardTerminalJob(job.id, job.claimToken)) {
+          if (!await discardNonResumableRetry(job)) {
             return context.json({ error: "Job cleanup is still in progress" }, 409);
           }
         } catch (error) {
@@ -642,6 +641,28 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       });
       return false;
     }
+  }
+
+  async function discardNonResumableRetry(job: {
+    id: string;
+    claimToken: string | null;
+    worktreePath: string | null;
+    repositoryId: string;
+    repository: { localPath: string | null; fullName: string; cloneUrl: string };
+  }) {
+    const cleanup = job.worktreePath
+      ? await jobRepository.claimWorktreeCleanup(job.id, null, job.claimToken, job.worktreePath)
+      : null;
+    if (job.worktreePath && !cleanup) return false;
+    if (cleanup) {
+      await removeJobWorktree({
+        worktreePath: cleanup.path,
+        repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
+        gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
+      });
+      if (!await jobRepository.clearWorktree(job.id, job.claimToken, cleanup.cleanupToken)) return false;
+    }
+    return jobRepository.discardTerminalJob(job.id, job.claimToken);
   }
 }
 
