@@ -268,6 +268,34 @@ async function claimTerminalWorktreeCleanup(
   return { path: expectedPath, cleanupToken };
 }
 
+async function claimFailedWorktreeCleanup(
+  id: string,
+  expectedPath: string,
+  leaseMs = WORKTREE_CLEANUP_LEASE_MS,
+) {
+  const now = new Date();
+  const cleanupToken = crypto.randomUUID();
+  const cleanupLeaseExpiresAt = new Date(now.getTime() + leaseMs);
+  const updated = await prisma.job.updateMany({
+    where: {
+      id,
+      status: "FAILED",
+      worktreePath: expectedPath,
+      cleanupToken: { not: null },
+      cleanupLeaseExpiresAt: { lt: now },
+    },
+    data: {
+      cleanupToken,
+      cleanupLeaseExpiresAt,
+      workerId: null,
+      claimToken: null,
+      heartbeatAt: null,
+    },
+  });
+  if (updated.count !== 1) return null;
+  return { path: expectedPath, cleanupToken };
+}
+
 async function findTerminalRecoveryJobs(environment: string) {
   return prisma.job.findMany({
     where: {
@@ -733,6 +761,7 @@ export const jobRepository = {
   findCancelledWorktrees,
   claimWorktreeCleanup,
   claimTerminalWorktreeCleanup,
+  claimFailedWorktreeCleanup,
   findTerminalRecoveryJobs,
   requeueForRetry,
   complete,

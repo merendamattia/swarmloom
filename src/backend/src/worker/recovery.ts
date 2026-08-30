@@ -21,6 +21,30 @@ export async function recoverTerminalJobs(
 
   for (const job of jobs) {
     if (job.status === "FAILED") {
+      if (job.cleanupToken && job.worktreePath) {
+        const cleanup = await jobRepository.claimFailedWorktreeCleanup(job.id, job.worktreePath);
+        if (!cleanup) continue;
+        try {
+          await removeWorktree({
+            worktreePath: cleanup.path,
+            repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
+            gitEnvironment: undefined,
+          });
+          if (!await jobRepository.clearWorktree(job.id, null, cleanup.cleanupToken)) continue;
+          if (await jobRepository.discardFailedJob(job.id, null)) recovered += 1;
+        } catch (error) {
+          await events.record({
+            type: "WORKTREE_CLEANUP_REQUIRED",
+            level: "ERROR",
+            message: `Could not remove failed job worktree ${job.worktreePath}: ${redactSecrets(error instanceof Error ? error.message : String(error))}`,
+            jobId: job.id,
+            repositoryId: job.repositoryId,
+            scanRunId: job.scanRunId ?? undefined,
+            metadata: { issueUrl: job.issueUrl },
+          });
+        }
+        continue;
+      }
       if (!job.cleanupToken && (job.workerId || job.claimToken)
         && await jobRepository.releaseWorker(job.id, job.workerId, job.claimToken)) {
         recovered += 1;

@@ -76,6 +76,57 @@ integration("PostgreSQL job lifecycle", () => {
     expect(await jobs.cancel(retry!.id)).toBe(true);
   });
 
+  test("reclaims an expired failed pull request retry cleanup lease during terminal recovery", async () => {
+    const failed = await jobs.tryCreateQueued(queuedPrJob("REVIEW", "f".repeat(40), config.APP_ENV));
+    const worktreePath = `/data/worktrees/${failed!.id}`;
+    await prisma.job.update({
+      where: { id: failed!.id },
+      data: {
+        status: "FAILED",
+        completedAt: new Date(),
+        worktreePath,
+        activePrKey: `${repositoryId}:${managedPrId}:${"f".repeat(40)}:REVIEW`,
+      },
+    });
+
+    const cleanup = await jobs.claimWorktreeCleanup(failed!.id, null, null, worktreePath);
+    expect(cleanup).toMatchObject({ path: worktreePath });
+
+    const { recoverTerminalJobs } = await import("../src/worker/recovery.ts");
+    const { createEventService } = await import("../src/events/service.ts");
+    const events = createEventService();
+    const failedRemoval = await recoverTerminalJobs(
+      config,
+      events,
+      async () => { throw new Error("worktree remover failed"); },
+    );
+    expect(failedRemoval).toBe(0);
+
+    await prisma.$executeRaw`
+      UPDATE "job"
+      SET "cleanupLeaseExpiresAt" = ${new Date(Date.now() - 1)}
+      WHERE "id" = ${failed!.id}
+    `;
+    const removed: string[] = [];
+    expect(await recoverTerminalJobs(
+      config,
+      events,
+      async ({ worktreePath: path }) => { removed.push(path); },
+    )).toBe(1);
+
+    expect(removed).toEqual([worktreePath]);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: failed!.id } })).toMatchObject({
+      status: "FAILED",
+      activePrKey: null,
+      worktreePath: null,
+      workerId: null,
+      claimToken: null,
+      cleanupToken: null,
+      cleanupLeaseExpiresAt: null,
+    });
+    expect(await jobs.requeueForRetry(failed!.id, config.APP_ENV)).toMatchObject({ status: "QUEUED" });
+  });
+
   test("reclaims a failed cancelled-worktree cleanup after its lease expires", async () => {
     const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 26, config.APP_ENV));
     const claimed = await jobs.claim(queued!.id, config.APP_ENV, "cleanup-worker");
@@ -459,10 +510,10 @@ integration("PostgreSQL job lifecycle", () => {
     };
   }
 
-  function queuedPrJob(jobType: "REVIEW" | "FIX", headSha: string) {
+  function queuedPrJob(jobType: "REVIEW" | "FIX", headSha: string, jobEnvironment = environment) {
     return {
       repositoryId,
-      environment,
+      environment: jobEnvironment,
       jobType,
       subjectType: "PULL_REQUEST" as const,
       issueNumber: issuePrefix,
