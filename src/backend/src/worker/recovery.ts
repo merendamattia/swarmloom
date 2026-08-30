@@ -16,15 +16,31 @@ export async function recoverStaleJobs(config: Config, github: GitHubClient, eve
     new Date(Date.now() - config.STALE_JOB_THRESHOLD_MS),
   );
   for (const job of staleJobs) {
+    let cleanupComplete = !job.worktreePath;
     if (job.worktreePath) {
-      await removeJobWorktree({
-        worktreePath: job.worktreePath,
-        repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
-        gitEnvironment: undefined,
-      });
-      await jobRepository.clearWorktree(job.id);
+      try {
+        const cleanup = await jobRepository.claimWorktreeCleanup(job.id, job.workerId, job.claimToken, job.worktreePath);
+        if (cleanup) {
+          await removeJobWorktree({
+            worktreePath: cleanup.path,
+            repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
+            gitEnvironment: undefined,
+          });
+          cleanupComplete = await jobRepository.clearWorktree(job.id, job.claimToken, cleanup.cleanupToken);
+        }
+      } catch (error) {
+        await events.record({
+          type: "WORKTREE_CLEANUP_REQUIRED",
+          level: "ERROR",
+          message: `Could not remove stale job worktree ${job.worktreePath}: ${redactSecrets(error instanceof Error ? error.message : String(error))}`,
+          jobId: job.id,
+          repositoryId: job.repositoryId,
+          scanRunId: job.scanRunId ?? undefined,
+          metadata: { issueUrl: job.issueUrl },
+        });
+      }
     }
-    if (job.workerId) await jobRepository.releaseWorker(job.id, job.workerId);
+    if (cleanupComplete) await jobRepository.releaseWorker(job.id, job.workerId, job.claimToken);
     await events.record({
       type: "JOB_FAILED",
       level: "ERROR",

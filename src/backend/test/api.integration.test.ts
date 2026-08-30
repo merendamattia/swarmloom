@@ -332,12 +332,21 @@ integration("operations API", () => {
   test("returns the repository PR URL instead of an agent-provided URL", async () => {
     await prisma.job.update({
       where: { id: jobId },
-      data: { pullRequestNumber: 99, pullRequestUrl: "https://github.com/[REDACTED]/wrong/pull/99" },
+      data: {
+        pullRequestNumber: 99,
+        pullRequestUrl: "https://github.com/[REDACTED]/wrong/pull/99",
+        claimToken: "internal-claim-token",
+        cleanupToken: "internal-cleanup-token",
+      },
     });
     const detail = await app.request(`/api/jobs/${jobId}`);
-    expect(await detail.json()).toMatchObject({
+    const body = await detail.json();
+    expect(body).toMatchObject({
       pullRequestUrl: `https://github.com/acme/api-${unique}/pull/99`,
     });
+    expect(body).not.toHaveProperty("claimToken");
+    expect(body).not.toHaveProperty("cleanupToken");
+    await prisma.job.update({ where: { id: jobId }, data: { claimToken: null, cleanupToken: null } });
   });
 
   test("persists runtime settings and never returns Telegram secrets", async () => {
@@ -420,6 +429,7 @@ integration("operations API", () => {
   });
 
   test("rejects a stale pull request retry and restores its current review trigger", async () => {
+    const staleWorktreePath = `/worker_data/worktrees/${crypto.randomUUID()}`;
     const managed = await prisma.managedPullRequest.create({
       data: {
         repositoryId,
@@ -452,6 +462,7 @@ integration("operations API", () => {
         headSha: "a".repeat(40),
         provider: "CODEX",
         model: "gpt-5.6-luna",
+        worktreePath: staleWorktreePath,
         activePrKey: `${repositoryId}:${managed.id}:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:REVIEW`,
       },
     });
@@ -464,7 +475,13 @@ integration("operations API", () => {
     expect(await retry.json()).toEqual({ error: "Pull request head changed; retry was not queued" });
     expect(pullRequestLabels).toEqual(["bug", config.PR_REVIEW_REQUESTED_LABEL]);
     expect(enqueuedJobs).not.toContain(stale.id);
-    expect(await prisma.job.findUniqueOrThrow({ where: { id: stale.id } })).toMatchObject({ status: "FAILED", headSha: "a".repeat(40) });
+    expect(removedWorktrees).toContain(staleWorktreePath);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: stale.id } })).toMatchObject({
+      status: "FAILED",
+      headSha: "a".repeat(40),
+      activePrKey: null,
+      worktreePath: null,
+    });
     pullRequestHead = "a".repeat(40);
   });
 
@@ -783,6 +800,14 @@ integration("operations API", () => {
     expect(blocked.status).toBe(409);
     expect(await blocked.json()).toMatchObject({ error: expect.stringContaining("active job") });
     expect(await prisma.repository.findUnique({ where: { id: active.id } })).not.toBeNull();
+
+    await prisma.job.updateMany({
+      where: { repositoryId: active.id },
+      data: { status: "FAILED", activeIssueKey: null, worktreePath: `/worker_data/worktrees/${crypto.randomUUID()}` },
+    });
+    const retainedWorktreeBlocked = await app.request(`/api/repositories/${active.id}`, { method: "DELETE" });
+    expect(retainedWorktreeBlocked.status).toBe(409);
+    expect(await retainedWorktreeBlocked.json()).toMatchObject({ error: expect.stringContaining("active job") });
 
     const missing = await app.request(`/api/repositories/${crypto.randomUUID()}`, { method: "DELETE" });
     expect(missing.status).toBe(404);

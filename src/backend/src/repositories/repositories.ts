@@ -50,6 +50,7 @@ async function remove(id: string, fullName: string, configuration?: RemoveConfig
       OR: [
         { status: { in: ["QUEUED", "RUNNING", "WAITING_FOR_QUOTA"] } },
         { worktreeCleanupRequired: true },
+        { worktreePath: { not: null } },
       ],
     },
   });

@@ -153,6 +153,8 @@ model Job {
   supportIssueCreatingAt  DateTime?
   supportIssueReconcileRequired Boolean   @default(false)
   workerId                 String?
+  claimToken               String?
+  cleanupToken             String?
   attempts                 Int           @default(0)
   heartbeatAt              DateTime?
   createdAt                DateTime      @default(now())

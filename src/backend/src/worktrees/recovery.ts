@@ -11,6 +11,8 @@ type CancelledWorktreeJob = {
   issueUrl: string;
   scanRunId: string | null;
   worktreePath: string | null;
+  workerId: string | null;
+  claimToken: string | null;
   repository: { fullName: string; localPath: string | null };
 };
 
@@ -24,12 +26,16 @@ export async function cleanupCancelledWorktree(
 ) {
   if (!job.worktreePath) return false;
   try {
+    const cleanup = await jobRepository.claimWorktreeCleanup(job.id, job.workerId, job.claimToken, job.worktreePath);
+    if (!cleanup) return false;
     await removeWorktree({
-      worktreePath: job.worktreePath,
+      worktreePath: cleanup.path,
       repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
       gitEnvironment: undefined,
     });
-    await jobRepository.markWorktreeCleaned(job.id, config.APP_ENV);
+    const cleared = await jobRepository.clearWorktree(job.id, job.claimToken, cleanup.cleanupToken);
+    if (!cleared) return false;
+    await jobRepository.releaseWorker(job.id, job.workerId, job.claimToken);
     return true;
   } catch (error) {
     await events.record({

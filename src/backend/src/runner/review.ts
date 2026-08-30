@@ -26,7 +26,7 @@ export const runReview: JobFlow = async (context) => {
   const pullRequest = job.pullRequest;
 
   const stale = async () => {
-    const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
+      const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: `Stale review: the pull request head moved past ${job.headSha} before this review could apply.`,
     });
     if (!finished) return;
@@ -68,7 +68,7 @@ export const runReview: JobFlow = async (context) => {
   context.state.repositoryPath = localPath;
   context.state.worktreePersisted = !worktree.created;
   if (worktree.created) {
-    if (!await jobRepository.setWorktree(job.id, worktreePath)) return;
+    if (!await jobRepository.setWorktree(job.id, job.claimToken, worktreePath)) return;
     context.state.worktreePersisted = true;
   }
 
@@ -167,7 +167,7 @@ export const runReview: JobFlow = async (context) => {
         });
         throw error;
       }
-      const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
+      const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
         result: result.response,
         exitCode: result.exitCode,
         pullRequestNumber: pullRequest.prNumber,
@@ -239,7 +239,7 @@ export const runReview: JobFlow = async (context) => {
       });
       throw error;
     }
-    const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: result.response,
       exitCode: result.exitCode,
       pullRequestNumber: pullRequest.prNumber,

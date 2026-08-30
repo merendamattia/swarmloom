@@ -8,7 +8,7 @@ import { heartbeatRepository } from "../repositories/heartbeats.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import type { JobQueue } from "../queue/service.ts";
 
-type Runner = { run(jobId: string, workerId: string): Promise<boolean> };
+type Runner = { run(jobId: string, workerId: string, claimToken: string): Promise<boolean> };
 type RecoverStaleJobs = () => Promise<number>;
 type ProviderQuotas = Partial<Record<AgentProvider["name"], ProviderUsageCapability>>;
 
@@ -61,7 +61,7 @@ export function startWorkerLoops(
       }
     }
     const claimed = await jobRepository.claim(payload.jobId, config.APP_ENV, config.WORKER_ID);
-    if (claimed) await runner.run(claimed.id, config.WORKER_ID);
+    if (claimed?.claimToken) await runner.run(claimed.id, config.WORKER_ID, claimed.claimToken);
   }, config.MAX_PARALLEL_JOBS);
   let refreshing = false;
   const refresh = async () => {
