@@ -134,11 +134,11 @@ describe("Codex provider", () => {
         onUsage: (value) => { usage.push(value); },
       });
       expect(usage).toEqual([{
-        inputTokens: 1_000,
-        cachedInputTokens: 400,
-        outputTokens: 120,
-        reasoningOutputTokens: 80,
-        totalTokens: 1_120,
+        inputTokens: 1_000n,
+        cachedInputTokens: 400n,
+        outputTokens: 120n,
+        reasoningOutputTokens: 80n,
+        totalTokens: 1_120n,
       }]);
       expect(result.usage).toEqual(usage[0]);
     } finally {

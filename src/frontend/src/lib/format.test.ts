@@ -49,6 +49,7 @@ test("renders the small Markdown subset used in provider summaries", () => {
 test("formats operational values", () => {
   expect(duration(125_000)).toBe("2m 5s");
   expect(formatTokens(1_120)).toBe("1,120");
+  expect(formatTokens("9007199254740993")).toBe("9,007,199,254,740,993");
   expect(formatTokens(null)).toBe("Not recorded");
   expect(statusLabel("CHANGES_REQUESTED")).toBe("Changes requested");
   expect(shortCommit("1234567890abcdef")).toBe("12345678");

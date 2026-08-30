@@ -16,12 +16,14 @@ export type AgentEvent = {
   metadata?: Record<string, string | number | boolean | null>;
 };
 
+export type AgentTokenCount = number | bigint | null;
+
 export type AgentTokenUsage = {
-  inputTokens: number | null;
-  cachedInputTokens: number | null;
-  outputTokens: number | null;
-  reasoningOutputTokens: number | null;
-  totalTokens: number | null;
+  inputTokens: AgentTokenCount;
+  cachedInputTokens: AgentTokenCount;
+  outputTokens: AgentTokenCount;
+  reasoningOutputTokens: AgentTokenCount;
+  totalTokens: AgentTokenCount;
 };
 
 export type ProviderQuotaWindow = {

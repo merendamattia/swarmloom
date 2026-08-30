@@ -1,7 +1,7 @@
 ALTER TABLE "job"
-  ADD COLUMN "inputTokens" INTEGER,
-  ADD COLUMN "cachedInputTokens" INTEGER,
-  ADD COLUMN "outputTokens" INTEGER,
-  ADD COLUMN "reasoningOutputTokens" INTEGER,
-  ADD COLUMN "totalTokens" INTEGER,
+  ADD COLUMN "inputTokens" BIGINT,
+  ADD COLUMN "cachedInputTokens" BIGINT,
+  ADD COLUMN "outputTokens" BIGINT,
+  ADD COLUMN "reasoningOutputTokens" BIGINT,
+  ADD COLUMN "totalTokens" BIGINT,
   ADD COLUMN "tokenUsageUpdatedAt" TIMESTAMP(3);

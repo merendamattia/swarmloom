@@ -114,33 +114,49 @@ integration("PostgreSQL job lifecycle", () => {
     const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 4));
     const claimed = await jobs.claim(queued!.id, environment, "usage-worker");
     const first = {
-      inputTokens: 1_000,
-      cachedInputTokens: 400,
-      outputTokens: 120,
-      reasoningOutputTokens: 80,
-      totalTokens: 1_120,
+      inputTokens: 1_000n,
+      cachedInputTokens: 400n,
+      outputTokens: 120n,
+      reasoningOutputTokens: 80n,
+      totalTokens: 1_120n,
     };
 
     expect(await jobs.setTokenUsage(claimed!.id, first)).toBe(true);
     expect(await jobs.setTokenUsage(claimed!.id, first)).toBe(true);
     expect(await jobs.setTokenUsage(claimed!.id, {
-      inputTokens: 900,
+      inputTokens: 900n,
       cachedInputTokens: null,
-      outputTokens: 100,
+      outputTokens: 100n,
       reasoningOutputTokens: null,
-      totalTokens: 1_000,
+      totalTokens: 1_000n,
     })).toBe(true);
     expect(await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).toMatchObject(first);
 
+    const int64Boundary = 2_147_483_648n;
+    expect(await jobs.setTokenUsage(claimed!.id, {
+      ...first,
+      inputTokens: int64Boundary,
+      totalTokens: int64Boundary,
+    })).toBe(true);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).toMatchObject({
+      ...first,
+      inputTokens: int64Boundary,
+      totalTokens: int64Boundary,
+    });
+
     expect(await jobs.complete(claimed!.id, { outcome: "complete" }, 0)).toBe(true);
     expect(await jobs.setTokenUsage(claimed!.id, {
-      inputTokens: 2_000,
-      cachedInputTokens: 800,
-      outputTokens: 200,
-      reasoningOutputTokens: 100,
-      totalTokens: 2_200,
+      inputTokens: 2_000n,
+      cachedInputTokens: 800n,
+      outputTokens: 200n,
+      reasoningOutputTokens: 100n,
+      totalTokens: 2_200n,
     })).toBe(false);
-    expect(await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).toMatchObject(first);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).toMatchObject({
+      ...first,
+      inputTokens: int64Boundary,
+      totalTokens: int64Boundary,
+    });
   });
 
   test("stale recovery blocks an issue job while preserving unrelated labels", async () => {

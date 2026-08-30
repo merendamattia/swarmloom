@@ -41,6 +41,7 @@ export type {
   AgentRequest,
   AgentResult,
   AgentRole,
+  AgentTokenCount,
   AgentTokenUsage,
   NormalizedProviderEvent,
   ProviderQuotaWindow,

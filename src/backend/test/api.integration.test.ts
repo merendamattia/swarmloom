@@ -163,13 +163,13 @@ integration("operations API", () => {
       cachedInputTokens: 400,
       outputTokens: 120,
       reasoningOutputTokens: 80,
-      totalTokens: 1_120,
+      totalTokens: 2_147_483_648,
     } });
     expect(await (await app.request("/api/dashboard")).json())
       .toMatchObject({ activeJobs: [{
         id: jobId,
         reasoningEffort: "high",
-        totalTokens: 1_120,
+        totalTokens: 2_147_483_648,
         repository: { fullName: `acme/api-${unique}` },
       }] });
 
@@ -283,7 +283,7 @@ integration("operations API", () => {
         cachedInputTokens: 400,
         outputTokens: 120,
         reasoningOutputTokens: 80,
-        totalTokens: 1_120,
+        totalTokens: 2_147_483_648,
       },
     });
   });

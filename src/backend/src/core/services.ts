@@ -22,7 +22,7 @@ export function createSharedServices(config: Config, queue: JobQueue) {
     }).sendQueued(summary),
   };
   const events = createEventService(notifier);
-  const scanner = createScanService({ config, github, events, queue });
   const providerUsage = createCodexUsageReader();
+  const scanner = createScanService({ config, github, events, queue, providerUsage });
   return { github, events, scanner, providerUsage };
 }

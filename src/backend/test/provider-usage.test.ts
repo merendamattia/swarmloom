@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
   createCodexUsageReader,
   normalizeCodexRateLimits,
+  normalizeCodexTokenUsage,
   readCodexRateLimits,
   readCodexThreadUsage,
 } from "../src/providers/codex-usage.ts";
 import { normalizeCodexEvent } from "../src/providers/codex.ts";
+import { quotaAdmission } from "../src/providers/quota.ts";
 
 describe("Codex account usage", () => {
   test("normalizes five-hour, weekly, and additional windows without model mapping", () => {
@@ -195,11 +197,11 @@ describe("Codex account usage", () => {
       expect(account.windows.map(({ windowDurationMins, remainingPercent }) => ({ windowDurationMins, remainingPercent })))
         .toEqual([{ windowDurationMins: 300, remainingPercent: 75 }, { windowDurationMins: 10_080, remainingPercent: 38 }]);
       expect(await readCodexThreadUsage("thread-1")).toEqual({
-        inputTokens: 1_000,
-        cachedInputTokens: 400,
-        outputTokens: 120,
-        reasoningOutputTokens: 80,
-        totalTokens: 1_120,
+        inputTokens: 1_000n,
+        cachedInputTokens: 400n,
+        outputTokens: 120n,
+        reasoningOutputTokens: 80n,
+        totalTokens: 1_120n,
       });
       expect(requests.find(({ method }) => method === "thread/resume")?.params).toEqual({ threadId: "thread-1" });
       expect(requests).toEqual(expect.arrayContaining([
@@ -227,6 +229,46 @@ describe("Codex account usage", () => {
       expect.objectContaining({ limitId: "model-specific", windowDurationMins: 60, remainingPercent: 90 }),
     ]));
     expect(snapshot.windows).toHaveLength(2);
+  });
+
+  test("does not let an exhausted unmapped bucket block a healthy root allowance", () => {
+    const snapshot = normalizeCodexRateLimits({
+      result: {
+        rateLimits: {
+          limitId: "codex",
+          primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: null },
+        },
+        rateLimitsByLimitId: {
+          codex: {
+            limitId: "codex",
+            primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: null },
+          },
+          "model-specific": {
+            rateLimitReachedType: "unmappedModelLimitReached",
+            primary: { usedPercent: 100, windowDurationMins: 60, resetsAt: null },
+          },
+        },
+      },
+    });
+
+    expect(snapshot.availability).toBe("available");
+    expect(quotaAdmission(snapshot)).toEqual({ kind: "allow" });
+  });
+});
+
+test("accepts provider int64 token counts without narrowing them to 32-bit integers", () => {
+  expect(normalizeCodexTokenUsage({
+    inputTokens: "9223372036854775807",
+    cachedInputTokens: "9223372036854775806",
+    outputTokens: 2_147_483_648,
+    reasoningOutputTokens: null,
+    totalTokens: "9223372036854775807",
+  })).toEqual({
+    inputTokens: BigInt("9223372036854775807"),
+    cachedInputTokens: BigInt("9223372036854775806"),
+    outputTokens: BigInt("2147483648"),
+    reasoningOutputTokens: null,
+    totalTokens: BigInt("9223372036854775807"),
   });
 });
 
@@ -257,11 +299,11 @@ test("normalizes cumulative Codex thread token usage notifications", () => {
 
   expect(normalized).toMatchObject({
     usage: {
-      inputTokens: 1_000,
-      cachedInputTokens: 400,
-      outputTokens: 120,
-      reasoningOutputTokens: 80,
-      totalTokens: 1_120,
+      inputTokens: 1_000n,
+      cachedInputTokens: 400n,
+      outputTokens: 120n,
+      reasoningOutputTokens: 80n,
+      totalTokens: 1_120n,
     },
   });
 });

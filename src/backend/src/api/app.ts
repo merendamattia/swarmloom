@@ -99,6 +99,41 @@ const repositoryJobSummarySelect = {
   ...jobSummaryFields,
   review: { select: { status: true } },
 } satisfies Prisma.JobSelect;
+
+type StoredTokenCount = bigint | number | null | undefined;
+type StoredTokenUsage = {
+  inputTokens: StoredTokenCount;
+  cachedInputTokens: StoredTokenCount;
+  outputTokens: StoredTokenCount;
+  reasoningOutputTokens: StoredTokenCount;
+  totalTokens: StoredTokenCount;
+};
+
+const MAX_SAFE_TOKEN_COUNT = BigInt(Number.MAX_SAFE_INTEGER);
+
+function serializeTokenCount(value: StoredTokenCount) {
+  if (value == null) return null;
+  const count = typeof value === "bigint"
+    ? value
+    : Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
+  if (count === null || count < BigInt(0)) return null;
+  return count <= MAX_SAFE_TOKEN_COUNT ? Number(count) : count.toString();
+}
+
+function serializeTokenUsage(job: StoredTokenUsage) {
+  return {
+    inputTokens: serializeTokenCount(job.inputTokens),
+    cachedInputTokens: serializeTokenCount(job.cachedInputTokens),
+    outputTokens: serializeTokenCount(job.outputTokens),
+    reasoningOutputTokens: serializeTokenCount(job.reasoningOutputTokens),
+    totalTokens: serializeTokenCount(job.totalTokens),
+  };
+}
+
+function serializeJobSummary<T extends { totalTokens: StoredTokenCount }>(job: T) {
+  return { ...job, totalTokens: serializeTokenCount(job.totalTokens) };
+}
+
 export function createApp({ config, scanner, github, events, startup, queue, settings, scheduler, providerUsage }: Dependencies) {
   const app = new Hono().basePath("/api");
   app.use("*", requestId(), secureHeaders(), cors({
@@ -233,9 +268,9 @@ export function createApp({ config, scanner, github, events, startup, queue, set
           telegramConfigured: config.TELEGRAM_ENABLED,
         },
         repositories,
-        activeJobs,
-        recentJobs,
-        exceptionJobs,
+        activeJobs: activeJobs.map(serializeJobSummary),
+        recentJobs: recentJobs.map(serializeJobSummary),
+        exceptionJobs: exceptionJobs.map(serializeJobSummary),
         scans,
         heartbeats,
       });
@@ -268,7 +303,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         }),
         prisma.job.count({ where }),
       ]);
-      return context.json({ items, total, page, pageSize });
+      return context.json({ items: items.map(serializeJobSummary), total, page, pageSize });
     })
     .get("/jobs/:id", async (context) => {
       const job = await prisma.job.findFirst({
@@ -281,17 +316,21 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         },
       });
       return job
-        ? context.json({
-          ...job,
-          pullRequestUrl: canonicalPullRequestUrl(job.repository, job.pullRequestNumber),
-          usage: {
-            inputTokens: job.inputTokens,
-            cachedInputTokens: job.cachedInputTokens,
-            outputTokens: job.outputTokens,
-            reasoningOutputTokens: job.reasoningOutputTokens,
-            totalTokens: job.totalTokens,
-          },
-        })
+        ? (() => {
+          const {
+            inputTokens,
+            cachedInputTokens,
+            outputTokens,
+            reasoningOutputTokens,
+            totalTokens,
+            ...serializedJob
+          } = job;
+          return context.json({
+            ...serializedJob,
+            pullRequestUrl: canonicalPullRequestUrl(job.repository, job.pullRequestNumber),
+            usage: serializeTokenUsage({ inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens, totalTokens }),
+          });
+        })()
         : context.json({ error: "Not found" }, 404);
     })
     .post("/jobs/:id/support-issue", async (context) => {
@@ -325,17 +364,23 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       }).catch(() => {});
       return context.json({ status: "created" as const, issueNumber: issue.number, issueUrl: issue.url }, 201);
     })
-    .get("/repositories", async (context) => context.json(await prisma.repository.findMany({
-      orderBy: { fullName: "asc" },
-      include: {
-        jobs: {
-          where: { environment: config.APP_ENV },
-          orderBy: { createdAt: "desc" },
-          take: 5,
-          select: repositoryJobSummarySelect,
+    .get("/repositories", async (context) => {
+      const repositories = await prisma.repository.findMany({
+        orderBy: { fullName: "asc" },
+        include: {
+          jobs: {
+            where: { environment: config.APP_ENV },
+            orderBy: { createdAt: "desc" },
+            take: 5,
+            select: repositoryJobSummarySelect,
+          },
         },
-      },
-    })))
+      });
+      return context.json(repositories.map((repository) => ({
+        ...repository,
+        jobs: repository.jobs.map(serializeJobSummary),
+      })));
+    })
     .delete("/repositories/:id", async (context) => {
       const id = context.req.param("id");
       const existing = await prisma.repository.findUnique({ where: { id }, select: { fullName: true } });

@@ -20,6 +20,7 @@ type ScanServiceDependencies = {
   github: ScannerShared["github"];
   events?: EventService;
   queue?: Pick<JobQueue, "enqueue">;
+  providerUsage?: ScannerShared["providerUsage"];
   syncRepository?: SyncRepository;
 };
 
@@ -28,6 +29,7 @@ export function createScanService({
   github,
   events = { record: eventRepository.create, notifyQueuedSummary: async () => {} },
   queue = { enqueue: async () => {} },
+  providerUsage,
   syncRepository = syncTargetRepository,
 }: ScanServiceDependencies) {
   const shared: ScannerShared = {
@@ -35,6 +37,7 @@ export function createScanService({
     github,
     events,
     queue,
+    providerUsage,
   };
   const issueScanner = createIssueScanner(shared);
   const pullRequestScanner = createPullRequestScanner(shared);

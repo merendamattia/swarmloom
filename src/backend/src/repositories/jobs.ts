@@ -287,28 +287,28 @@ async function setTokenUsage(id: string, usage: AgentTokenUsage) {
     UPDATE "job"
     SET
       "inputTokens" = CASE
-        WHEN CAST(${usage.inputTokens} AS INTEGER) IS NULL THEN "inputTokens"
-        WHEN "inputTokens" IS NULL OR "inputTokens" < CAST(${usage.inputTokens} AS INTEGER) THEN CAST(${usage.inputTokens} AS INTEGER)
+        WHEN CAST(${usage.inputTokens} AS BIGINT) IS NULL THEN "inputTokens"
+        WHEN "inputTokens" IS NULL OR "inputTokens" < CAST(${usage.inputTokens} AS BIGINT) THEN CAST(${usage.inputTokens} AS BIGINT)
         ELSE "inputTokens"
       END,
       "cachedInputTokens" = CASE
-        WHEN CAST(${usage.cachedInputTokens} AS INTEGER) IS NULL THEN "cachedInputTokens"
-        WHEN "cachedInputTokens" IS NULL OR "cachedInputTokens" < CAST(${usage.cachedInputTokens} AS INTEGER) THEN CAST(${usage.cachedInputTokens} AS INTEGER)
+        WHEN CAST(${usage.cachedInputTokens} AS BIGINT) IS NULL THEN "cachedInputTokens"
+        WHEN "cachedInputTokens" IS NULL OR "cachedInputTokens" < CAST(${usage.cachedInputTokens} AS BIGINT) THEN CAST(${usage.cachedInputTokens} AS BIGINT)
         ELSE "cachedInputTokens"
       END,
       "outputTokens" = CASE
-        WHEN CAST(${usage.outputTokens} AS INTEGER) IS NULL THEN "outputTokens"
-        WHEN "outputTokens" IS NULL OR "outputTokens" < CAST(${usage.outputTokens} AS INTEGER) THEN CAST(${usage.outputTokens} AS INTEGER)
+        WHEN CAST(${usage.outputTokens} AS BIGINT) IS NULL THEN "outputTokens"
+        WHEN "outputTokens" IS NULL OR "outputTokens" < CAST(${usage.outputTokens} AS BIGINT) THEN CAST(${usage.outputTokens} AS BIGINT)
         ELSE "outputTokens"
       END,
       "reasoningOutputTokens" = CASE
-        WHEN CAST(${usage.reasoningOutputTokens} AS INTEGER) IS NULL THEN "reasoningOutputTokens"
-        WHEN "reasoningOutputTokens" IS NULL OR "reasoningOutputTokens" < CAST(${usage.reasoningOutputTokens} AS INTEGER) THEN CAST(${usage.reasoningOutputTokens} AS INTEGER)
+        WHEN CAST(${usage.reasoningOutputTokens} AS BIGINT) IS NULL THEN "reasoningOutputTokens"
+        WHEN "reasoningOutputTokens" IS NULL OR "reasoningOutputTokens" < CAST(${usage.reasoningOutputTokens} AS BIGINT) THEN CAST(${usage.reasoningOutputTokens} AS BIGINT)
         ELSE "reasoningOutputTokens"
       END,
       "totalTokens" = CASE
-        WHEN CAST(${usage.totalTokens} AS INTEGER) IS NULL THEN "totalTokens"
-        WHEN "totalTokens" IS NULL OR "totalTokens" < CAST(${usage.totalTokens} AS INTEGER) THEN CAST(${usage.totalTokens} AS INTEGER)
+        WHEN CAST(${usage.totalTokens} AS BIGINT) IS NULL THEN "totalTokens"
+        WHEN "totalTokens" IS NULL OR "totalTokens" < CAST(${usage.totalTokens} AS BIGINT) THEN CAST(${usage.totalTokens} AS BIGINT)
         ELSE "totalTokens"
       END,
       "tokenUsageUpdatedAt" = CURRENT_TIMESTAMP,
@@ -316,11 +316,11 @@ async function setTokenUsage(id: string, usage: AgentTokenUsage) {
     WHERE "id" = ${id}
       AND "status" = 'RUNNING'
       AND (
-        CAST(${usage.inputTokens} AS INTEGER) IS NOT NULL
-        OR CAST(${usage.cachedInputTokens} AS INTEGER) IS NOT NULL
-        OR CAST(${usage.outputTokens} AS INTEGER) IS NOT NULL
-        OR CAST(${usage.reasoningOutputTokens} AS INTEGER) IS NOT NULL
-        OR CAST(${usage.totalTokens} AS INTEGER) IS NOT NULL
+        CAST(${usage.inputTokens} AS BIGINT) IS NOT NULL
+        OR CAST(${usage.cachedInputTokens} AS BIGINT) IS NOT NULL
+        OR CAST(${usage.outputTokens} AS BIGINT) IS NOT NULL
+        OR CAST(${usage.reasoningOutputTokens} AS BIGINT) IS NOT NULL
+        OR CAST(${usage.totalTokens} AS BIGINT) IS NOT NULL
       )
   `;
   return updated === 1;

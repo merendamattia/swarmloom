@@ -9,6 +9,7 @@ import type {
 const ACCOUNT_RATE_LIMIT_REQUEST_ID = 2;
 const DEFAULT_FRESHNESS_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 10_000;
+const MAX_INT64 = BigInt("9223372036854775807");
 
 type RecordValue = Record<string, unknown>;
 
@@ -26,7 +27,21 @@ function field(value: RecordValue, ...names: string[]) {
 }
 
 function tokenCount(value: unknown) {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  let count: bigint;
+  if (typeof value === "bigint") {
+    count = value;
+  } else if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+    count = BigInt(value);
+  } else if (typeof value === "string" && /^\d+$/.test(value)) {
+    try {
+      count = BigInt(value);
+    } catch {
+      return null;
+    }
+  } else {
+    return null;
+  }
+  return count <= MAX_INT64 ? count : null;
 }
 
 export function normalizeCodexTokenUsage(value: unknown): AgentTokenUsage | null {
@@ -86,13 +101,15 @@ function normalizeWindow(
   limitId: string | null,
   limitName: string | null,
 ): ProviderQuotaWindow {
-  const usedPercent = percentValue(field(source, "usedPercent", "used_percent"));
+  const reportedUsedPercent = percentValue(field(source, "usedPercent", "used_percent"));
+  const reportedRemainingPercent = percentValue(field(source, "remainingPercent", "remaining_percent"));
+  const usedPercent = reportedUsedPercent ?? (reportedRemainingPercent === null ? null : 100 - reportedRemainingPercent);
   return {
     limitId,
     limitName,
     windowType,
     usedPercent,
-    remainingPercent: usedPercent === null ? null : 100 - usedPercent,
+    remainingPercent: reportedRemainingPercent ?? (usedPercent === null ? null : 100 - usedPercent),
     windowDurationMins: durationValue(field(source, "windowDurationMins", "window_duration_mins", "windowMinutes")),
     resetsAt: resetValue(field(source, "resetsAt", "resets_at")),
   };
@@ -112,29 +129,26 @@ function snapshotSource(value: RecordValue) {
   return record(field(value, "rateLimits", "rate_limits")) ?? value;
 }
 
-function usageMetadata(sources: RecordValue[]) {
-  const snapshots = sources.map(snapshotSource);
-  const spendControlValues = snapshots
-    .map((source) => booleanValue(field(source, "spendControlReached", "spend_control_reached")))
-    .filter((value): value is boolean => value !== null);
-  const rateLimitReachedType = snapshots
-    .map((source) => stringValue(field(source, "rateLimitReachedType", "rate_limit_reached_type")))
-    .find((value): value is string => value !== null) ?? null;
+function usageMetadata(source?: RecordValue) {
+  if (!source) {
+    return { spendControlReached: null, rateLimitReachedType: null };
+  }
+  const snapshot = snapshotSource(source);
+  const spendControlReached = booleanValue(field(snapshot, "spendControlReached", "spend_control_reached"));
+  const rateLimitReachedType = stringValue(field(snapshot, "rateLimitReachedType", "rate_limit_reached_type"));
   return {
-    spendControlReached: spendControlValues.includes(true)
-      ? true
-      : spendControlValues.includes(false) ? false : null,
+    spendControlReached,
     rateLimitReachedType,
   };
 }
 
 function usageAvailability(
-  windows: ProviderQuotaWindow[],
+  providerWindows: ProviderQuotaWindow[],
   metadata: ReturnType<typeof usageMetadata>,
 ): ProviderUsageSnapshot["availability"] {
   if (metadata.spendControlReached === true || metadata.rateLimitReachedType !== null) return "exhausted";
-  if (windows.some(({ remainingPercent }) => remainingPercent === 0)) return "exhausted";
-  if (windows.some(({ remainingPercent }) => remainingPercent !== null)) return "available";
+  if (providerWindows.some(({ remainingPercent }) => remainingPercent === 0)) return "exhausted";
+  if (providerWindows.some(({ remainingPercent }) => remainingPercent !== null)) return "available";
   return "unknown";
 }
 
@@ -171,13 +185,11 @@ export function normalizeCodexRateLimits(value: unknown, observedAt = new Date()
     record(source) ?? {},
     stringValue(limitId),
   ));
-  const metadata = usageMetadata([
-    ...(rateLimits ? [rateLimits] : []),
-    ...entries.map(([, source]) => record(source)).filter((source): source is RecordValue => Boolean(source)),
-  ]);
+  const providerWindows = rateLimits ? windowsForSnapshot(rateLimits, rootLimitId) : [];
+  const metadata = usageMetadata(rateLimits);
   return {
     status: "available",
-    availability: usageAvailability(windows, metadata),
+    availability: usageAvailability(providerWindows, metadata),
     ...metadata,
     observedAt: observedAt.toISOString(),
     windows,
