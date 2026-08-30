@@ -155,6 +155,7 @@ model Job {
   workerId                 String?
   claimToken               String?
   cleanupToken             String?
+  cleanupLeaseExpiresAt    DateTime?
   attempts                 Int           @default(0)
   heartbeatAt              DateTime?
   createdAt                DateTime      @default(now())

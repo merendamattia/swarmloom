@@ -892,6 +892,56 @@ integration("job runner", () => {
     expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "STALE_RESULT_DISCARDED" } })).not.toBeNull();
   });
 
+  test("finalizes a quota-waiting review row when its resumed pull request head is stale", async () => {
+    const issueNumber = issueBase + 29;
+    const managed = await prisma.managedPullRequest.create({
+      data: {
+        repositoryId,
+        prNumber: 912,
+        issueNumber,
+        issueTitle: `Issue ${issueNumber}`,
+        issueUrl: `https://github.com/acme/runner/issues/${issueNumber}`,
+        headBranch: `agent/issue-${issueNumber}`,
+        headSha: "a".repeat(40),
+        baseBranch: "develop",
+        state: "OPEN",
+        workflow: "REVIEW_REQUESTED",
+      },
+    });
+    const state = reviewGitHub(config, issueNumber, `agent/issue-${issueNumber}`, managed.prNumber, "a".repeat(40), "b".repeat(40));
+    const job = await claimed(issueNumber, "REVIEW", "PULL_REQUEST", {
+      pullRequestId: managed.id,
+      pullRequestNumber: managed.prNumber,
+      pullRequestUrl: "https://github.com/acme/runner/pull/912",
+      headSha: "a".repeat(40),
+    });
+    await prisma.review.create({
+      data: {
+        jobId: job.id,
+        provider: job.provider,
+        model: job.model,
+        status: "RUNNING",
+        startedAt: new Date(Date.now() - 10_000),
+        pullRequestId: managed.id,
+        pullRequestNumber: managed.prNumber,
+        headSha: job.headSha,
+      },
+    });
+    const runner = createJobRunner({
+      config,
+      provider: new FakeProvider([]),
+      github: state,
+      createReviewWorktree: async () => { throw new Error("stale review must not create a worktree"); },
+    });
+
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
+    expect(await prisma.review.findUniqueOrThrow({ where: { jobId: job.id } })).toMatchObject({
+      status: "FAILED",
+      errorMessage: expect.stringContaining("head moved"),
+      completedAt: expect.any(Date),
+    });
+  });
+
   test("retrying a failed review reuses the same job and never reruns the implementation", async () => {
     const issueNumber = issueBase + 13;
     const implementation = await claimed(issueNumber, "IMPLEMENTATION", "ISSUE");

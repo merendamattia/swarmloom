@@ -76,6 +76,99 @@ integration("PostgreSQL job lifecycle", () => {
     expect(await jobs.cancel(retry!.id)).toBe(true);
   });
 
+  test("reclaims a failed cancelled-worktree cleanup after its lease expires", async () => {
+    const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 26, config.APP_ENV));
+    const claimed = await jobs.claim(queued!.id, config.APP_ENV, "cleanup-worker");
+    const worktreePath = `/data/worktrees/${claimed!.id}`;
+    await prisma.job.update({ where: { id: queued!.id }, data: { worktreePath } });
+    expect(await jobs.cancel(queued!.id)).toBe(true);
+
+    const { recoverCancelledWorktrees } = await import("../src/worktrees/recovery.ts");
+    const { createEventService } = await import("../src/events/service.ts");
+    let removeAttempts = 0;
+    expect(await recoverCancelledWorktrees(
+      config,
+      createEventService(),
+      async () => {
+        removeAttempts += 1;
+        throw new Error("worktree remover failed");
+      },
+    )).toBe(0);
+
+    const [claimedCleanup] = await prisma.$queryRaw<Array<{ cleanupToken: string | null; cleanupLeaseExpiresAt: Date | null }>>`
+      SELECT "cleanupToken", "cleanupLeaseExpiresAt"
+      FROM "job"
+      WHERE "id" = ${queued!.id}
+    `;
+    expect(claimedCleanup?.cleanupToken).not.toBeNull();
+    expect(claimedCleanup?.cleanupLeaseExpiresAt).not.toBeNull();
+
+    await prisma.$executeRaw`
+      UPDATE "job"
+      SET "cleanupLeaseExpiresAt" = ${new Date(Date.now() - 1)}
+      WHERE "id" = ${queued!.id}
+    `;
+    const removed: string[] = [];
+    expect(await recoverCancelledWorktrees(
+      config,
+      createEventService(),
+      async ({ worktreePath: path }) => { removeAttempts += 1; removed.push(path); },
+    )).toBe(1);
+
+    expect(removeAttempts).toBe(2);
+    expect(removed).toEqual([worktreePath]);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: queued!.id } })).toMatchObject({
+      status: "CANCELLED",
+      worktreePath: null,
+      worktreeCleanupRequired: false,
+      workerId: null,
+      claimToken: null,
+      cleanupToken: null,
+    });
+    expect(await jobs.requeueForRetry(queued!.id, config.APP_ENV)).toMatchObject({ status: "QUEUED" });
+  });
+
+  test("reconciles terminal claims left by a crash after finalization and permits retry", async () => {
+    const failed = await jobs.tryCreateQueued(queuedJob(issuePrefix + 27, config.APP_ENV));
+    const failedClaim = await jobs.claim(failed!.id, config.APP_ENV, "terminal-worker");
+    expect(await jobs.finishRunning(failed!.id, failedClaim!.claimToken!, "FAILED", {
+      errorMessage: "provider failed after finalization",
+    })).toBe(true);
+    expect(await jobs.requeueForRetry(failed!.id, environment)).toBeNull();
+
+    const completed = await jobs.tryCreateQueued(queuedJob(issuePrefix + 28, config.APP_ENV));
+    const completedClaim = await jobs.claim(completed!.id, config.APP_ENV, "terminal-worker");
+    const completedPath = `/data/worktrees/${completed!.id}`;
+    expect(await jobs.setWorktree(completed!.id, completedClaim!.claimToken!, completedPath)).toBe(true);
+    expect(await jobs.finishRunning(completed!.id, completedClaim!.claimToken!, "COMPLETED", {
+      result: { outcome: "implemented" },
+    })).toBe(true);
+
+    const { recoverTerminalJobs } = await import("../src/worker/recovery.ts");
+    const { createEventService } = await import("../src/events/service.ts");
+    const removed: string[] = [];
+    expect(await recoverTerminalJobs(
+      config,
+      createEventService(),
+      async ({ worktreePath: path }) => { removed.push(path); },
+    )).toBeGreaterThan(0);
+
+    expect(removed).toContain(completedPath);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: failed!.id } })).toMatchObject({
+      status: "FAILED",
+      workerId: null,
+      claimToken: null,
+    });
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: completed!.id } })).toMatchObject({
+      status: "COMPLETED",
+      worktreePath: null,
+      workerId: null,
+      claimToken: null,
+      cleanupToken: null,
+    });
+    expect(await jobs.requeueForRetry(failed!.id, config.APP_ENV)).toMatchObject({ status: "QUEUED" });
+  });
+
   test("rearms the same failed job and keeps its recovery state", async () => {
     const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 20));
     const claimed = await jobs.claim(queued!.id, environment, "test-worker");

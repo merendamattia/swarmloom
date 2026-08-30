@@ -26,7 +26,8 @@ export const runReview: JobFlow = async (context) => {
   const pullRequest = job.pullRequest;
 
   const stale = async () => {
-      const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
+    await reviewRepository.failStaleForJob(job.id);
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: `Stale review: the pull request head moved past ${job.headSha} before this review could apply.`,
     });
     if (!finished) return;

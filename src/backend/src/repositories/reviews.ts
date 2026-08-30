@@ -65,8 +65,9 @@ async function finish(
 }
 
 const cancellationMessage = "Review cancelled because its quota-waiting job was cancelled by an operator.";
+const staleMessage = "Review discarded because the pull request head moved while the review was waiting for quota.";
 
-async function cancelForJob(jobId: string, errorMessage = cancellationMessage) {
+async function failForJob(jobId: string, errorMessage: string) {
   const review = await prisma.review.findUnique({ where: { jobId }, select: { id: true, startedAt: true } });
   if (!review) return false;
   const completedAt = new Date();
@@ -82,6 +83,14 @@ async function cancelForJob(jobId: string, errorMessage = cancellationMessage) {
   return updated.count === 1;
 }
 
+async function cancelForJob(jobId: string, errorMessage = cancellationMessage) {
+  return failForJob(jobId, errorMessage);
+}
+
+async function failStaleForJob(jobId: string) {
+  return failForJob(jobId, staleMessage);
+}
+
 async function reconcileCancelledJobs() {
   const reviews = await prisma.review.findMany({
     where: { status: "RUNNING", job: { status: "CANCELLED" } },
@@ -94,4 +103,4 @@ async function reconcileCancelledJobs() {
   return finalized;
 }
 
-export const reviewRepository = { start, finish, cancelForJob, reconcileCancelledJobs };
+export const reviewRepository = { start, finish, cancelForJob, failStaleForJob, reconcileCancelledJobs };
