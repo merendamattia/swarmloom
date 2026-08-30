@@ -1,3 +1,6 @@
+ALTER TABLE "job" RENAME COLUMN "implementationSessionId" TO "sessionId";
+ALTER TABLE "job" DROP COLUMN "queueJobId";
+
 ALTER TYPE "JobStatus" ADD VALUE 'WAITING_FOR_QUOTA';
 
 ALTER TABLE "job"

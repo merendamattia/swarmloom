@@ -20,15 +20,15 @@ function event(type: NonNullable<NormalizedProviderEvent["event"]>["type"], fiel
 }
 
 export function buildCodexCommand(request: AgentRequest) {
-  const command = [
-    "codex", "exec", "--json", "--ignore-user-config", "--model", request.model,
-    "--dangerously-bypass-approvals-and-sandbox",
-  ];
+  const command = request.resumeSessionId
+    ? ["codex", "exec", "resume", request.resumeSessionId, "--json", "--ignore-user-config", "--model", request.model,
+      "--dangerously-bypass-approvals-and-sandbox"]
+    : ["codex", "exec", "--json", "--ignore-user-config", "--model", request.model,
+      "--dangerously-bypass-approvals-and-sandbox"];
   if (request.reasoningEffort) {
     command.push("--config", `model_reasoning_effort=\"${request.reasoningEffort}\"`);
   }
-  command.push("--cd", request.workingDirectory);
-  if (request.sessionId) command.push("resume", request.sessionId);
+  if (!request.resumeSessionId) command.push("--cd", request.workingDirectory);
   command.push("-");
   return command;
 }
@@ -84,7 +84,14 @@ export class CodexProvider implements AgentProvider {
     const environment = providerEnvironment({ ...globalThis.process.env, ...request.environment });
     const onJson = async (raw: unknown) => {
       const normalized = normalizeCodexEvent(raw);
-      if (normalized.sessionId) sessionId = normalized.sessionId;
+      if (normalized.sessionId) {
+        if (request.resumeSessionId && normalized.sessionId !== request.resumeSessionId) {
+          sessionError = `Codex resumed session mismatch: requested ${request.resumeSessionId}, received ${normalized.sessionId}`;
+          await request.onEvent?.(event("SESSION_FAILED", { message: sessionError }));
+          return;
+        }
+        sessionId = normalized.sessionId;
+      }
       if (normalized.output) output.push(redactSecrets(normalized.output, environment));
       if (!normalized.event) return;
       if (normalized.event.type === "SESSION_FAILED") sessionError = normalized.event.message;
@@ -102,22 +109,39 @@ export class CodexProvider implements AgentProvider {
         request.signal,
         onJson,
         environment,
+        request.workingDirectory,
       );
     } catch (error) {
       if (!(error instanceof ProviderProcessError)) throw error;
+      const resumeError = request.resumeSessionId && (isResumeMismatch(sessionError) || !sessionId)
+        ? resumeIdentityError(request.resumeSessionId, sessionError)
+        : undefined;
+      if (resumeError) {
+        if (resumeError !== sessionError) await request.onEvent?.(event("SESSION_FAILED", { message: resumeError }));
+        return this.result(sessionId, output, error.exitCode, error.stderr, resumeError, undefined, environment);
+      }
       const quota = await this.readFailureQuota();
       if (!quota || quotaAdmission(quota).kind !== "wait") throw error;
       const message = failureMessage(error.stderr, sessionError) || error.message;
       if (!sessionError) await request.onEvent?.(event("SESSION_FAILED", { message: redactSecrets(message, environment) }));
       return this.result(sessionId, output, error.exitCode, error.stderr, message, quota, environment);
     }
-
+    const resumeError = request.resumeSessionId && (isResumeMismatch(sessionError) || !sessionId)
+      ? resumeIdentityError(request.resumeSessionId, sessionError)
+      : undefined;
+    if (resumeError) {
+      if (resumeError !== sessionError) await request.onEvent?.(event("SESSION_FAILED", { message: resumeError }));
+      sessionError = resumeError;
+    }
     if (result.exitCode !== 0 && !sessionError) {
       await request.onEvent?.(event("SESSION_FAILED", { message: result.stderr || "Codex exited unsuccessfully" }));
     }
     const exitCode = result.exitCode !== 0 ? result.exitCode : sessionError ? 1 : 0;
     if (exitCode === 0) {
       return this.result(sessionId, output, 0, result.stderr, undefined, undefined, environment);
+    }
+    if (resumeError) {
+      return this.result(sessionId, output, exitCode, result.stderr, resumeError, undefined, environment);
     }
     const quota = await this.readFailureQuota();
     const message = failureMessage(result.stderr, sessionError) || "Codex exited unsuccessfully";
@@ -165,4 +189,13 @@ export class CodexProvider implements AgentProvider {
 
 function failureMessage(...messages: Array<string | undefined>) {
   return [...new Set(messages.filter((message): message is string => Boolean(message)))].join("\n");
+}
+
+function resumeIdentityError(requestedSessionId: string, sessionError?: string) {
+  if (sessionError?.startsWith("Codex resumed session mismatch:")) return sessionError;
+  return `Codex did not resume session ${requestedSessionId}${sessionError ? `: ${sessionError}` : ""}`;
+}
+
+function isResumeMismatch(sessionError?: string) {
+  return sessionError?.startsWith("Codex resumed session mismatch:") ?? false;
 }

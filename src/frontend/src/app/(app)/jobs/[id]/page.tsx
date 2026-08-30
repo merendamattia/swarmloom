@@ -30,7 +30,7 @@ export default function JobPage() {
   return (
     <>
       <JobHeader job={data} subject={subject} cancelling={cancel.isPending} retrying={retry.isPending} onCancel={() => cancel.mutate()} onRetry={() => retry.mutate()} />
-      <ActionMessage pending={cancel.isPending || retry.isPending} error={cancel.error || retry.error} success={cancel.isSuccess || retry.isSuccess} pendingText={cancel.isPending ? "Cancelling the job…" : data.subjectType === "PULL_REQUEST" ? "Restoring the pull request label and starting a scan…" : "Restoring the ready label and starting a scan…"} />
+      <ActionMessage pending={cancel.isPending || retry.isPending} error={cancel.error || retry.error} success={cancel.isSuccess || retry.isSuccess} pendingText={cancel.isPending ? "Cancelling the job…" : "Requeueing the job…"} />
       {data.status === "WAITING_FOR_QUOTA" ? <div className="notice" role="status"><Clock3 aria-hidden="true" /><div><strong>Waiting for provider quota</strong><p>{data.quotaMessage ?? "This job will resume automatically when Codex quota is available."}{data.quotaResetAt ? ` Reset at ${new Date(data.quotaResetAt).toLocaleString()}.` : ""}</p></div></div> : data.errorMessage ? <div className="notice" role="alert"><CircleAlert aria-hidden="true" /><div><strong>The job requires attention</strong><p>{data.errorMessage}</p></div></div> : null}
       <div className="detail-grid">
         <div className="detail-main">

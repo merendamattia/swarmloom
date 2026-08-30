@@ -161,9 +161,9 @@ Label flow:
 - stale issue jobs also move the issue to `agent:blocked`; stale PR jobs restore their review/fix
   trigger for the next scan;
 - cancellation removes worker labels while unrelated labels are always preserved;
-- Retry restores the relevant label (`ready` on issues, the requested label on Pull Requests), then
-  a new scan captures fresh state and creates a new history row. The earlier row is never
-  overwritten.
+- Retry rearms the same durable job directly and removes scanner trigger labels. Failed jobs retain
+  their session and worktree when available; jobs without a persisted session restart from the
+  captured workspace or baseline. Attempts and recovery events remain on the original history row.
 
 Only these labels create work during a scan:
 
@@ -373,9 +373,10 @@ same pipeline. A nullable unique `activeEnvironmentKey` in PostgreSQL permits on
 per `APP_ENV`; a competing discovery request is recorded as `SKIPPED`. Issues have a unique active
 key (repository + issue) and Pull Request jobs have a unique active key
 (repository + PR + head SHA + job kind), so duplicate scans cannot create duplicate active work.
-The scanners write the durable PostgreSQL history rows, then enqueue the same `queueJobId` in
-BullMQ. Workers alone perform a guarded `QUEUED` → `RUNNING` transition, so duplicate delivery is
-ignored. If Codex reports an exhausted structured rate-limit window, admission instead performs a
+The scanners write durable PostgreSQL history rows, then enqueue a BullMQ delivery whose payload
+contains the PostgreSQL job ID. Delivery IDs are unique per enqueue so a durable job can be
+requeued, while workers still perform a guarded `QUEUED` → `RUNNING` transition and ignore duplicate
+delivery. If Codex reports an exhausted structured rate-limit window, admission instead performs a
 guarded `QUEUED` → `WAITING_FOR_QUOTA` transition without claiming an execution attempt. The next
 scheduled scan reads the account snapshot once and requeues the same durable job when quota is
 available. Set `MAX_PARALLEL_JOBS=1` for sequential behavior; raising it changes BullMQ worker
@@ -383,7 +384,9 @@ concurrency. BullMQ owns retries and locks while PostgreSQL retains the visible 
 
 At worker startup, expired running jobs become `STALE` and release their active key. For issue jobs
 the issue returns to the unlabelled state; for PR jobs the scanner-facing label is restored so the
-next scan reschedules the work. Use Retry to create a new attempt/history row.
+next scan reschedules the work. Retry rearms the same durable job directly; failed executions retain
+their provider session and worktree for resume, while jobs without a persisted session restart in
+their captured workspace or baseline.
 
 ## Agent runtime
 

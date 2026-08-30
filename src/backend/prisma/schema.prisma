@@ -117,7 +117,6 @@ model Job {
   status                   JobStatus     @default(QUEUED)
   activeIssueKey          String?       @unique
   activePrKey             String?       @unique
-  queueJobId               String        @unique
   queuedAt                DateTime      @default(now())
   startedAt               DateTime?
   activeStartedAt         DateTime?
@@ -143,7 +142,7 @@ model Job {
   provider                AgentProvider
   model                   String
   reasoningEffort         String?
-  implementationSessionId String?
+  sessionId               String?
   exitCode                Int?
   result                   Json?         @db.JsonB
   errorMessage             String?       @db.Text

@@ -6,6 +6,7 @@ import { safeWorktreePath } from "./paths.ts";
 import {
   applyPullRequestLabels,
   parseReviewOutcome,
+  prepareJobWorktree,
   parseTldr,
   reviewContext,
   safeError,
@@ -52,20 +53,24 @@ export const runReview: JobFlow = async (context) => {
 
   if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
   const localPath = job.repository.localPath;
-  const worktreePath = job.worktreePath ?? safeWorktreePath(config.DATA_DIR, job.id);
   const gitEnvironment = githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl);
-  if (!job.worktreePath) {
+  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id), async () => {
     await context.createReviewWorktree({
       repositoryPath: localPath,
-      worktreePath,
+      worktreePath: safeWorktreePath(config.DATA_DIR, job.id),
       branchName: pullRequest.headBranch,
       gitEnvironment,
     });
-  }
+  });
+  const worktreePath = worktree.path;
   context.state.worktreeCreated = true;
   context.state.worktreePath = worktreePath;
   context.state.repositoryPath = localPath;
-  if (!job.worktreePath && !await jobRepository.setWorktree(job.id, worktreePath)) return;
+  context.state.worktreePersisted = !worktree.created;
+  if (worktree.created) {
+    if (!await jobRepository.setWorktree(job.id, worktreePath)) return;
+    context.state.worktreePersisted = true;
+  }
 
   await events.record({
     type: "JOB_STARTED",

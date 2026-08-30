@@ -39,7 +39,7 @@ describe("provider quota admission", () => {
     expect(quotaAdmission(snapshot({ status: "unsupported", availability: "exhausted" }))).toEqual({ kind: "allow" });
   });
 
-  test("normalizes Codex usage windows without assuming a plan allowance", () => {
+  test("normalizes the applicable Codex usage windows without assuming a plan allowance", () => {
     const result = normalizeCodexRateLimits({
       rateLimits: {
         limitId: "codex",
@@ -54,20 +54,40 @@ describe("provider quota admission", () => {
     expect(result).toMatchObject({ status: "available", availability: "exhausted", observedAt: "2026-08-29T20:00:00.000Z" });
     expect(result.windows).toEqual(expect.arrayContaining([
       expect.objectContaining({ limitId: "codex", windowType: "primary", usedPercent: 100, remainingPercent: 0 }),
-      expect.objectContaining({ limitId: "flex", windowType: "primary", usedPercent: 0, remainingPercent: 100 }),
     ]));
+    expect(result.windows.every(({ limitId }) => limitId === "codex")).toBe(true);
     expect(quotaAdmission(result).kind).toBe("wait");
   });
 
-  test("uses limit-map windows when the account snapshot omits a root rate limit", () => {
+  test("ignores an exhausted unmapped limit when the applicable root allowance remains available", () => {
+    const result = normalizeCodexRateLimits({
+      rateLimits: {
+        limitId: "codex",
+        primary: { usedPercent: 10, resetsAt: 1_756_506_000 },
+      },
+      rateLimitsByLimitId: {
+        "model-specific": {
+          limitId: "model-specific",
+          primary: { usedPercent: 100, resetsAt: 1_756_506_000 },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ availability: "available" });
+    expect(quotaAdmission(result)).toEqual({ kind: "allow" });
+    expect(quotaAvailable(result)).toBe(true);
+  });
+
+  test("treats limit-map windows without an applicable root as unknown telemetry", () => {
     const result = normalizeCodexRateLimits({
       rateLimitsByLimitId: {
         codex: { primary: { usedPercent: 100, resetsAt: 1_756_506_000 } },
       },
     });
 
-    expect(result.availability).toBe("exhausted");
-    expect(quotaAdmission(result).kind).toBe("wait");
+    expect(result).toMatchObject({ availability: "unknown", windows: [] });
+    expect(quotaAdmission(result).kind).toBe("allow");
+    expect(quotaAvailable(result)).toBe(false);
   });
 
   test("coalesces concurrent account reads and only releases known available quota", async () => {

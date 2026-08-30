@@ -76,6 +76,71 @@ integration("PostgreSQL job lifecycle", () => {
     expect(await jobs.cancel(retry!.id)).toBe(true);
   });
 
+  test("rearms the same failed job and keeps its recovery state", async () => {
+    const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 20));
+    const claimed = await jobs.claim(queued!.id, environment, "test-worker");
+    const worktreePath = `/data/worktrees/${claimed!.id}`;
+    await prisma.job.update({
+      where: { id: claimed!.id },
+      data: {
+        status: "FAILED",
+        activeIssueKey: null,
+        workerId: null,
+        worktreePath,
+        sessionId: "session-20",
+        errorMessage: "provider failed",
+        completedAt: new Date(),
+      },
+    });
+
+    const rearmed = await jobs.requeueForRetry(claimed!.id, environment);
+
+    expect(rearmed).toMatchObject({
+      id: claimed!.id,
+      status: "QUEUED",
+      activeIssueKey: `${repositoryId}:${issuePrefix + 20}`,
+      worktreePath,
+      sessionId: "session-20",
+      attempts: 1,
+      errorMessage: null,
+    });
+    expect(await jobs.requeueForRetry(claimed!.id, environment)).toBeNull();
+
+    expect(await jobs.claim(claimed!.id, environment, "test-worker")).not.toBeNull();
+    await prisma.job.update({ where: { id: claimed!.id }, data: { errorMessage: "stale retry error" } });
+    expect(await jobs.complete(claimed!.id, { outcome: "implemented" }, 0)).toBe(true);
+    expect((await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).errorMessage).toBeNull();
+  });
+
+  test("does not requeue a cancelled worker until its cleanup releases the retained worktree", async () => {
+    const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 21));
+    const claimed = await jobs.claim(queued!.id, environment, "test-worker");
+    const worktreePath = `/data/worktrees/${claimed!.id}`;
+    await prisma.job.update({
+      where: { id: claimed!.id },
+      data: { worktreePath, sessionId: "cancelled-session" },
+    });
+
+    expect(await jobs.cancel(claimed!.id)).toBe(true);
+    expect(await jobs.requeueForRetry(claimed!.id, environment)).toBeNull();
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).toMatchObject({
+      status: "CANCELLED",
+      workerId: "test-worker",
+      worktreePath,
+    });
+
+    expect(await jobs.releaseWorker(claimed!.id, "test-worker")).toBe(false);
+    expect(await jobs.clearWorktree(claimed!.id)).toBe(true);
+    expect(await jobs.releaseWorker(claimed!.id, "test-worker")).toBe(true);
+
+    expect(await jobs.requeueForRetry(claimed!.id, environment)).toMatchObject({
+      id: claimed!.id,
+      status: "QUEUED",
+      worktreePath: null,
+      sessionId: null,
+    });
+  });
+
   test("deduplicates PR jobs by repository, PR, head SHA, and job kind", async () => {
     const input = queuedPrJob("REVIEW", "c".repeat(40));
     const first = await jobs.tryCreateQueued(input);
@@ -115,7 +180,6 @@ integration("PostgreSQL job lifecycle", () => {
 
     const requeued = await jobs.requeueWaitingForQuota(queued!.id, environment);
     expect(requeued?.id).toBe(queued!.id);
-    expect(requeued?.queueJobId).not.toBe(queued!.queueJobId);
     expect((await prisma.job.findUniqueOrThrow({ where: { id: queued!.id } })).status).toBe("QUEUED");
     expect(await jobs.claim(queued!.id, environment, "test-worker")).not.toBeNull();
   });

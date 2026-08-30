@@ -31,6 +31,7 @@ integration("event notification policy", () => {
       "JOB_DECOMPOSED",
       "JOB_CANCELLED",
       "JOB_RETRY_REQUESTED",
+      "JOB_RESUME_REQUESTED",
       "REPOSITORY_INVALID",
       "REPOSITORY_ERROR",
       "GITHUB_RECONCILIATION_REQUIRED",

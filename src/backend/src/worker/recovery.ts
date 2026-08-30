@@ -22,7 +22,9 @@ export async function recoverStaleJobs(config: Config, github: GitHubClient, eve
         repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
         gitEnvironment: undefined,
       });
+      await jobRepository.clearWorktree(job.id);
     }
+    if (job.workerId) await jobRepository.releaseWorker(job.id, job.workerId);
     await events.record({
       type: "JOB_FAILED",
       level: "ERROR",

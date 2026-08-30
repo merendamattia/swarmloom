@@ -74,17 +74,17 @@ function unavailableSnapshot(message = "Codex quota telemetry is unavailable"): 
   return { status: "unavailable", availability: "unknown", observedAt: null, windows: [], message };
 }
 
+function unknownSnapshot(observedAt: Date, message: string): ProviderUsageSnapshot {
+  return { status: "available", availability: "unknown", observedAt: observedAt.toISOString(), windows: [], message };
+}
+
 function rootAvailability(
   windows: ProviderQuotaWindow[],
-  rateLimits: RecordValue | undefined,
-  additionalSources: RecordValue[] = [],
+  source: RecordValue | undefined,
 ): ProviderUsageSnapshot["availability"] {
-  const sources = [rateLimits, ...additionalSources]
-    .filter((value): value is RecordValue => Boolean(value))
-    .map((value) => record(field(value, "rateLimits", "rate_limits")) ?? value);
-  const exhaustedBySource = sources.some((source) => stringValue(field(source, "rateLimitReachedType", "rate_limit_reached_type"))
+  const exhausted = source && (stringValue(field(source, "rateLimitReachedType", "rate_limit_reached_type"))
     || field(source, "spendControlReached", "spend_control_reached") === true);
-  if (exhaustedBySource || windows.some(({ remainingPercent }) => remainingPercent === 0)) {
+  if (exhausted || windows.some(({ remainingPercent }) => remainingPercent === 0)) {
     return "exhausted";
   }
   if (windows.some(({ remainingPercent }) => remainingPercent !== null)) return "available";
@@ -100,13 +100,15 @@ export function normalizeCodexRateLimits(value: unknown, observedAt = new Date()
   const byLimitId = record(field(result, "rateLimitsByLimitId", "rate_limits_by_limit_id"));
   const mappedEntries = byLimitId ? Object.entries(byLimitId) : [];
   const rootLimitId = rateLimits ? stringValue(field(rateLimits, "limitId", "limit_id")) : null;
-  const rootAlreadyMapped = rootLimitId !== null && mappedEntries.some(([limitId, source]) =>
-    limitId === rootLimitId || stringValue(field(record(source) ?? {}, "limitId", "limit_id")) === rootLimitId);
-  const entries = [
-    ...mappedEntries,
-    ...(rateLimits && !rootAlreadyMapped ? [[rootLimitId, rateLimits] as const] : []),
-  ];
-  if (entries.length === 0) return unavailableSnapshot("Codex did not report any quota windows");
+  if (!rateLimits) {
+    return unknownSnapshot(
+      observedAt,
+      mappedEntries.length > 0
+        ? "Codex reported quota buckets without a reliable applicable mapping"
+        : "Codex did not report any quota windows",
+    );
+  }
+  const entries = [[rootLimitId, rateLimits] as const];
 
   const windows = entries.flatMap(([limitId, source]) => windowsForSnapshot(
     record(source) ?? {},
@@ -114,7 +116,7 @@ export function normalizeCodexRateLimits(value: unknown, observedAt = new Date()
   ));
   return {
     status: "available",
-    availability: rootAvailability(windows, rateLimits, entries.map(([, source]) => record(source) ?? {})),
+    availability: rootAvailability(windows, record(entries[0]?.[1]) ?? undefined),
     observedAt: observedAt.toISOString(),
     windows,
   };

@@ -3,6 +3,7 @@ import { SectionHeading } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import type { Job } from "@/hooks/api";
 import { activeDuration, dateTime, quotaWaitDuration, shortCommit, statusLabel } from "@/lib/format";
+import { recoveryLabel } from "@/lib/job-recovery";
 
 export function JobFacts({ job, subject, trigger }: { job: Job; subject: string; trigger: string | null }) {
   return (
@@ -22,7 +23,8 @@ export function JobFacts({ job, subject, trigger }: { job: Job; subject: string;
           { label: "Quota wait", value: quotaWaitDuration(job.quotaWaitDurationMs, job.quotaWaitStartedAt) },
           ...(job.quotaWindow ? [{ label: "Quota window", value: job.quotaWindow }] : []),
           { label: "Worker", value: job.workerId ?? "Not assigned" },
-          { label: "Session", value: job.implementationSessionId ?? "Not recorded", mono: true },
+          { label: "Recovery", value: recoveryLabel(job) },
+          { label: "Session", value: job.sessionId ?? "Not recorded", mono: true },
         ]} />
       </Panel>
       <Panel>

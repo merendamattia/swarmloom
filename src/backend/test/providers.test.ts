@@ -76,12 +76,100 @@ describe("Codex provider", () => {
     ]);
   });
 
-  test("resumes a persisted Codex session in its existing worktree", () => {
-    expect(buildCodexCommand({ ...request, sessionId: "thread-1" })).toEqual([
-      "codex", "exec", "--json", "--ignore-user-config", "--model", "test-model",
-      "--dangerously-bypass-approvals-and-sandbox", "--config",
-      'model_reasoning_effort="max"', "--cd", "/work/repository", "resume", "thread-1", "-",
+  test("builds a noninteractive command that resumes the requested session", () => {
+    expect(buildCodexCommand({ ...request, resumeSessionId: "thread-1" })).toEqual([
+      "codex", "exec", "resume", "thread-1", "--json", "--ignore-user-config", "--model", "test-model",
+      "--dangerously-bypass-approvals-and-sandbox", "--config", 'model_reasoning_effort="max"', "-",
     ]);
+  });
+
+  test("resumes the requested session in its working directory without falling back", async () => {
+    const original = Bun.spawn;
+    const events: AgentEvent[] = [];
+    const stdout = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ type: "thread.started", thread_id: "other-thread" })}\n`));
+        controller.close();
+      },
+    });
+    const stderr = new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+    let spawned: { args: unknown; options: unknown } | undefined;
+    const fake = mock((args: unknown, options: unknown) => {
+      spawned = { args, options };
+      return {
+        stdin: { write() {}, end() {} },
+        stdout,
+        stderr,
+        exited: Promise.resolve(0),
+        kill() {},
+      };
+    });
+    // @ts-expect-error test-only substitution of the spawn implementation
+    Bun.spawn = fake;
+    try {
+      const result = await new CodexProvider().execute({
+        ...request,
+        resumeSessionId: "thread-1",
+        onEvent: (event) => { events.push(event); },
+      });
+      expect(spawned).toMatchObject({
+        args: ["codex", "exec", "resume", "thread-1", "--json", "--ignore-user-config", "--model", "test-model", "--dangerously-bypass-approvals-and-sandbox", "--config", 'model_reasoning_effort="max"', "-"],
+        options: { cwd: "/work/repository" },
+      });
+      expect(result).toMatchObject({ sessionId: null, exitCode: 1, stderr: expect.stringContaining("requested thread-1") });
+      expect(events).toEqual([expect.objectContaining({ type: "SESSION_FAILED" })]);
+    } finally {
+      Bun.spawn = original;
+    }
+  });
+
+  test("does not classify a missing resumed session as quota exhaustion", async () => {
+    const original = Bun.spawn;
+    const stdout = new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+    const stderr = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("usage limit while resuming"));
+        controller.close();
+      },
+    });
+    const fake = mock((_args: unknown, _options: unknown) => ({
+      stdin: { write() {}, end() {} },
+      stdout,
+      stderr,
+      exited: Promise.resolve(1),
+      kill() {},
+    }));
+    const exhausted: ProviderUsageSnapshot = {
+      status: "available",
+      availability: "exhausted",
+      observedAt: "2026-08-29T20:00:00.000Z",
+      windows: [{
+        limitId: "codex",
+        limitName: "included",
+        windowType: "primary",
+        usedPercent: 100,
+        remainingPercent: 0,
+        windowDurationMins: 300,
+        resetsAt: "2026-08-29T21:00:00.000Z",
+      }],
+    };
+    // @ts-expect-error test-only substitution of the spawn implementation
+    Bun.spawn = fake;
+    try {
+      const result = await new CodexProvider({
+        readAccountUsage: async () => exhausted,
+        refreshAccountUsage: async () => exhausted,
+      }).execute({
+        ...request,
+        resumeSessionId: "missing-thread",
+      });
+      expect(result.failure).toBeUndefined();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("missing-thread");
+      expect(result.stderr).toContain("usage limit while resuming");
+    } finally {
+      Bun.spawn = original;
+    }
   });
 
   test("normalizes session, output, tool and completion events", () => {

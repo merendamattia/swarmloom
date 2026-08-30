@@ -53,7 +53,7 @@ export type AgentRequest = {
   instructions?: string;
   model: string;
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-  sessionId?: string | null;
+  resumeSessionId?: string;
   environment?: Record<string, string | undefined>;
   responseFilePath?: string;
   signal?: AbortSignal;
@@ -87,6 +87,7 @@ export function buildAgentPrompt(request: AgentRequest) {
     `Role: ${request.role}`,
     `Task:\n${request.task}`,
     `Context:\n${request.context}`,
+    request.resumeSessionId && `Recovery: Resume the existing provider session ${request.resumeSessionId} in the current workspace. Continue from the existing filesystem progress; do not repeat completed inspection or discard prior changes.`,
     request.responseFilePath && `Response file: ${request.responseFilePath}`,
   ].filter(Boolean).join("\n\n");
 }

@@ -8,10 +8,10 @@ async function start(
   reasoningEffort?: string | null,
   input: { pullRequestId?: string | null; pullRequestNumber?: number | null; headSha?: string | null } = {},
 ) {
-  const existing = await prisma.review.findUnique({ where: { jobId } });
-  if (existing) return existing;
-  return prisma.review.create({
-    data: {
+  const startedAt = new Date();
+  return prisma.review.upsert({
+    where: { jobId },
+    create: {
       jobId,
       provider,
       model,
@@ -20,7 +20,22 @@ async function start(
       pullRequestNumber: input.pullRequestNumber ?? null,
       headSha: input.headSha ?? null,
       status: "RUNNING",
-      startedAt: new Date(),
+      startedAt,
+    },
+    update: {
+      provider,
+      model,
+      reasoningEffort,
+      pullRequestId: input.pullRequestId ?? null,
+      pullRequestNumber: input.pullRequestNumber ?? null,
+      headSha: input.headSha ?? null,
+      status: "RUNNING",
+      response: null,
+      exitCode: null,
+      errorMessage: null,
+      startedAt,
+      completedAt: null,
+      durationMs: null,
     },
   });
 }

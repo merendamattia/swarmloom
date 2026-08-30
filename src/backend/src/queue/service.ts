@@ -13,17 +13,39 @@ export function queuePayload(jobId: string, environment: string): QueuePayload {
   return { jobId, environment };
 }
 
-export function createJobQueue(config: Pick<Config, "APP_ENV" | "REDIS_URL">) {
+export function createJobQueue(config: { APP_ENV: string; REDIS_URL: Config["REDIS_URL"] }) {
   const name = queueName(config.APP_ENV);
   const prefix = "swarmloom";
   const connection = new IORedis(config.REDIS_URL, { maxRetriesPerRequest: null });
   const queue = new Queue<QueuePayload>(name, { connection, prefix });
   const workers: Array<Worker<QueuePayload>> = [];
   const workerConnections: IORedis[] = [];
+  const deliveryStates = ["waiting", "active", "delayed", "prioritized", "completed", "failed"] as const;
 
-  async function enqueue(jobId: string, deliveryId = jobId) {
+  async function deliveriesFor(jobId: string) {
+    return (await queue.getJobs([...deliveryStates])).filter((job) => job.data.jobId === jobId);
+  }
+
+  async function hasLiveDelivery(jobId: string) {
+    const deliveries = await deliveriesFor(jobId);
+    for (const delivery of deliveries) {
+      const state = await delivery.getState();
+      if (state !== "completed" && state !== "failed") return true;
+    }
+    return false;
+  }
+
+  async function enqueue(jobId: string) {
+    for (const delivery of await deliveriesFor(jobId)) {
+      const state = await delivery.getState();
+      if (state === "completed" || state === "failed") {
+        await delivery.remove();
+        continue;
+      }
+      return;
+    }
+    const deliveryId = `${jobId}-${crypto.randomUUID()}`;
     try {
-      if (await queue.getJob(deliveryId)) return;
       await queue.add("execute", queuePayload(jobId, config.APP_ENV), {
         jobId: deliveryId,
         attempts: 3,
@@ -32,20 +54,23 @@ export function createJobQueue(config: Pick<Config, "APP_ENV" | "REDIS_URL">) {
         removeOnFail: { age: 30 * 24 * 60 * 60, count: 5_000 },
       });
     } catch (error) {
-      if (await queue.getJob(deliveryId)) return;
+      if (await hasLiveDelivery(jobId)) return;
       throw error;
     }
   }
 
   async function remove(jobId: string) {
-    const job = await queue.getJob(jobId);
-    if (!job) return false;
-    try {
-      await job.remove();
-      return true;
-    } catch {
-      return false;
+    const candidates = new Map((await deliveriesFor(jobId)).map((job) => [job.id, job]));
+    let removed = false;
+    for (const job of candidates.values()) {
+      try {
+        await job.remove();
+        removed = true;
+      } catch {
+        // an active delivery is owned by its worker and is stopped by the database transition
+      }
     }
+    return removed;
   }
 
   function createWorker(processor: QueueProcessor, concurrency: number) {

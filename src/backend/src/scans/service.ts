@@ -132,7 +132,7 @@ export function createScanService({
     const queued = await jobRepository.findQueuedJobs(config.APP_ENV);
     for (const job of queued) {
       try {
-        await queue.enqueue(job.id, job.queueJobId);
+        await queue.enqueue(job.id);
       } catch (error) {
         await events.record({
           type: "QUEUE_RECONCILIATION_REQUIRED",
@@ -168,7 +168,7 @@ export function createScanService({
       const requeued = await jobRepository.requeueWaitingForQuota(job.id, config.APP_ENV);
       if (!requeued) continue;
       try {
-        await queue.enqueue(requeued.id, requeued.queueJobId);
+        await queue.enqueue(requeued.id);
       } catch (error) {
         await jobRepository.waitForQuotaQueued(requeued.id, config.APP_ENV, {
           resetAt: job.quotaResetAt?.toISOString(),
