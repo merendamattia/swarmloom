@@ -57,6 +57,12 @@ export type JobFilters = {
 };
 
 const activeStatuses = new Set(["QUEUED", "RUNNING"]);
+const STATUS_USAGE_REFRESH_INTERVAL_MS = 30_000;
+
+export function statusRefetchInterval(authentication: Status["providerAuth"]["status"] | undefined) {
+  if (authentication === undefined) return false;
+  return authentication === "required" ? 5_000 : STATUS_USAGE_REFRESH_INTERVAL_MS;
+}
 
 export function useHealth() {
   return useQuery({ queryKey: ["health"], queryFn: async () => json<Health>(await api.health.$get()) });
@@ -66,7 +72,7 @@ export function useStatus() {
   return useQuery({
     queryKey: ["status"],
     queryFn: async () => json<Status>(await api.status.$get()),
-    refetchInterval: (query) => (query.state.data as Status | undefined)?.providerAuth.status === "required" ? 5_000 : false,
+    refetchInterval: (query) => statusRefetchInterval((query.state.data as Status | undefined)?.providerAuth.status),
   });
 }
 

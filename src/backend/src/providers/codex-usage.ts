@@ -60,6 +60,10 @@ function stringValue(value: unknown) {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
+function booleanValue(value: unknown) {
+  return typeof value === "boolean" ? value : null;
+}
+
 function percentValue(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100
     ? value
@@ -104,8 +108,46 @@ function windowsForSnapshot(source: RecordValue, fallbackLimitId: string | null)
   });
 }
 
-function unavailableSnapshot(message = "Codex quota telemetry is unavailable") : ProviderUsageSnapshot {
-  return { status: "unavailable", observedAt: null, windows: [], message };
+function snapshotSource(value: RecordValue) {
+  return record(field(value, "rateLimits", "rate_limits")) ?? value;
+}
+
+function usageMetadata(sources: RecordValue[]) {
+  const snapshots = sources.map(snapshotSource);
+  const spendControlValues = snapshots
+    .map((source) => booleanValue(field(source, "spendControlReached", "spend_control_reached")))
+    .filter((value): value is boolean => value !== null);
+  const rateLimitReachedType = snapshots
+    .map((source) => stringValue(field(source, "rateLimitReachedType", "rate_limit_reached_type")))
+    .find((value): value is string => value !== null) ?? null;
+  return {
+    spendControlReached: spendControlValues.includes(true)
+      ? true
+      : spendControlValues.includes(false) ? false : null,
+    rateLimitReachedType,
+  };
+}
+
+function usageAvailability(
+  windows: ProviderQuotaWindow[],
+  metadata: ReturnType<typeof usageMetadata>,
+): ProviderUsageSnapshot["availability"] {
+  if (metadata.spendControlReached === true || metadata.rateLimitReachedType !== null) return "exhausted";
+  if (windows.some(({ remainingPercent }) => remainingPercent === 0)) return "exhausted";
+  if (windows.some(({ remainingPercent }) => remainingPercent !== null)) return "available";
+  return "unknown";
+}
+
+function unavailableSnapshot(message = "Codex quota telemetry is unavailable"): ProviderUsageSnapshot {
+  return {
+    status: "unavailable",
+    availability: "unknown",
+    spendControlReached: null,
+    rateLimitReachedType: null,
+    observedAt: null,
+    windows: [],
+    message,
+  };
 }
 
 export function normalizeCodexRateLimits(value: unknown, observedAt = new Date()): ProviderUsageSnapshot {
@@ -125,13 +167,20 @@ export function normalizeCodexRateLimits(value: unknown, observedAt = new Date()
   ];
   if (entries.length === 0) return unavailableSnapshot("Codex did not report any quota windows");
 
+  const windows = entries.flatMap(([limitId, source]) => windowsForSnapshot(
+    record(source) ?? {},
+    stringValue(limitId),
+  ));
+  const metadata = usageMetadata([
+    ...(rateLimits ? [rateLimits] : []),
+    ...entries.map(([, source]) => record(source)).filter((source): source is RecordValue => Boolean(source)),
+  ]);
   return {
     status: "available",
+    availability: usageAvailability(windows, metadata),
+    ...metadata,
     observedAt: observedAt.toISOString(),
-    windows: entries.flatMap(([limitId, source]) => windowsForSnapshot(
-      record(source) ?? {},
-      stringValue(limitId),
-    )),
+    windows,
   };
 }
 
@@ -150,23 +199,28 @@ export function createCodexUsageReader(options: CodexUsageReaderOptions = {}): C
   let cached: { snapshot: ProviderUsageSnapshot; expiresAt: number } | undefined;
   let pending: Promise<ProviderUsageSnapshot> | undefined;
 
+  const readFresh = () => {
+    if (pending) return pending;
+    pending = read().then((snapshot) => {
+      cached = { snapshot, expiresAt: Date.now() + freshnessMs };
+      return snapshot;
+    }).catch(() => {
+      const snapshot = cached
+        ? { ...cached.snapshot, status: "stale" as const, message: "The last Codex quota snapshot may be out of date" }
+        : unavailableSnapshot();
+      cached = { snapshot, expiresAt: Date.now() + freshnessMs };
+      return snapshot;
+    })
+      .finally(() => { pending = undefined; });
+    return pending;
+  };
+
   return {
     async readAccountUsage() {
       if (cached && cached.expiresAt > Date.now()) return cached.snapshot;
-      if (pending) return pending;
-      pending = read().then((snapshot) => {
-        cached = { snapshot, expiresAt: Date.now() + freshnessMs };
-        return snapshot;
-      }).catch(() => {
-        const snapshot = cached
-          ? { ...cached.snapshot, status: "stale" as const, message: "The last Codex quota snapshot may be out of date" }
-          : unavailableSnapshot();
-        cached = { snapshot, expiresAt: Date.now() + freshnessMs };
-        return snapshot;
-      })
-        .finally(() => { pending = undefined; });
-      return pending;
+      return readFresh();
     },
+    refreshAccountUsage: readFresh,
     readThreadUsage,
   };
 }

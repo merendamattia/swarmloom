@@ -492,18 +492,50 @@ async function readProviderUsage(
   capability?: ProviderUsageCapability,
 ): Promise<ProviderUsageSnapshot> {
   if (provider !== "codex") {
-    return { status: "unsupported", observedAt: null, windows: [], message: "Quota telemetry is not supported for this provider" };
+    return {
+      status: "unsupported",
+      availability: "unknown",
+      spendControlReached: null,
+      rateLimitReachedType: null,
+      observedAt: null,
+      windows: [],
+      message: "Quota telemetry is not supported for this provider",
+    };
   }
   if (authentication !== "authenticated") {
-    return { status: "unavailable", observedAt: null, windows: [], message: "Codex authentication is required to read quota" };
+    return {
+      status: "unavailable",
+      availability: "unknown",
+      spendControlReached: null,
+      rateLimitReachedType: null,
+      observedAt: null,
+      windows: [],
+      message: "Codex authentication is required to read quota",
+    };
   }
   if (!capability) {
-    return { status: "unavailable", observedAt: null, windows: [], message: "Codex quota telemetry is not configured" };
+    return {
+      status: "unavailable",
+      availability: "unknown",
+      spendControlReached: null,
+      rateLimitReachedType: null,
+      observedAt: null,
+      windows: [],
+      message: "Codex quota telemetry is not configured",
+    };
   }
   try {
     return await capability.readAccountUsage();
   } catch {
-    return { status: "unavailable", observedAt: null, windows: [], message: "Codex quota telemetry is unavailable" };
+    return {
+      status: "unavailable",
+      availability: "unknown",
+      spendControlReached: null,
+      rateLimitReachedType: null,
+      observedAt: null,
+      windows: [],
+      message: "Codex quota telemetry is unavailable",
+    };
   }
 }
 

@@ -82,6 +82,26 @@ describe("Codex account usage", () => {
     }]);
   });
 
+  test("normalizes explicit exhaustion even when window percentages are non-zero or unknown", () => {
+    const snapshot = normalizeCodexRateLimits({
+      result: {
+        rateLimits: {
+          spendControlReached: true,
+          rateLimitReachedType: "workspaceMemberUsageLimitReached",
+          primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: null },
+          secondary: { usedPercent: null, windowDurationMins: 10_080, resetsAt: null },
+        },
+      },
+    });
+
+    expect(snapshot).toMatchObject({
+      status: "available",
+      availability: "exhausted",
+      spendControlReached: true,
+      rateLimitReachedType: "workspaceMemberUsageLimitReached",
+    });
+  });
+
   test("coalesces concurrent account reads and caches a fresh snapshot", async () => {
     let reads = 0;
     const reader = createCodexUsageReader({
@@ -97,6 +117,8 @@ describe("Codex account usage", () => {
     expect(reads).toBe(1);
     await reader.readAccountUsage();
     expect(reads).toBe(1);
+    await reader.refreshAccountUsage?.();
+    expect(reads).toBe(2);
   });
 
   test("caches unavailable reads for the freshness interval", async () => {

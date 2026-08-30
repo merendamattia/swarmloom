@@ -8,6 +8,9 @@ describe("ProviderUsageCard", () => {
       provider="codex"
       usage={{
         status: "available",
+        availability: "available",
+        spendControlReached: null,
+        rateLimitReachedType: null,
         observedAt: "2026-08-29T20:00:00.000Z",
         windows: [
           {
@@ -44,11 +47,44 @@ describe("ProviderUsageCard", () => {
   test("does not show quota values for unsupported providers", () => {
     const html = renderToStaticMarkup(<ProviderUsageCard
       provider="opencode"
-      usage={{ status: "unsupported", observedAt: null, windows: [], message: "ignored" }}
+      usage={{
+        status: "unsupported",
+        availability: "unknown",
+        spendControlReached: null,
+        rateLimitReachedType: null,
+        observedAt: null,
+        windows: [],
+        message: "ignored",
+      }}
     />);
 
     expect(html).toContain("Quota telemetry is unsupported for this provider.");
     expect(html).not.toContain("ignored");
     expect(html).not.toContain("% remaining");
+  });
+
+  test("calls out provider-confirmed exhaustion separately from window percentages", () => {
+    const html = renderToStaticMarkup(<ProviderUsageCard
+      provider="codex"
+      usage={{
+        status: "available",
+        availability: "exhausted",
+        spendControlReached: true,
+        rateLimitReachedType: "workspaceMemberUsageLimitReached",
+        observedAt: null,
+        windows: [{
+          limitId: "codex",
+          limitName: null,
+          windowType: "primary",
+          usedPercent: 40,
+          remainingPercent: 60,
+          windowDurationMins: 300,
+          resetsAt: null,
+        }],
+      }}
+    />);
+
+    expect(html).toContain("Codex reports this allowance as exhausted.");
+    expect(html).toContain("60% remaining");
   });
 });

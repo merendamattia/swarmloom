@@ -145,7 +145,14 @@ integration("operations API", () => {
     const statusBody = await status.json();
     expect(statusBody).toMatchObject({
       version,
-      providerUsage: { status: "unavailable", observedAt: null, windows: [] },
+      providerUsage: {
+        status: "unavailable",
+        availability: "unknown",
+        spendControlReached: null,
+        rateLimitReachedType: null,
+        observedAt: null,
+        windows: [],
+      },
     });
     expect(JSON.stringify(statusBody)).not.toContain("test-token");
 

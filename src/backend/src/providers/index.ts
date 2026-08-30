@@ -44,6 +44,7 @@ export type {
   AgentTokenUsage,
   NormalizedProviderEvent,
   ProviderQuotaWindow,
+  ProviderUsageAvailability,
   ProviderUsageCapability,
   ProviderUsageSnapshot,
 } from "./types.ts";

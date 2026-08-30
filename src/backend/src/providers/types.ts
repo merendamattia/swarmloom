@@ -34,8 +34,13 @@ export type ProviderQuotaWindow = {
   resetsAt: string | null;
 };
 
+export type ProviderUsageAvailability = "available" | "exhausted" | "unknown";
+
 export type ProviderUsageSnapshot = {
   status: "available" | "unavailable" | "unsupported" | "stale";
+  availability: ProviderUsageAvailability;
+  spendControlReached: boolean | null;
+  rateLimitReachedType: string | null;
   observedAt: string | null;
   windows: ProviderQuotaWindow[];
   message?: string;
@@ -43,6 +48,7 @@ export type ProviderUsageSnapshot = {
 
 export interface ProviderUsageCapability {
   readAccountUsage(): Promise<ProviderUsageSnapshot>;
+  refreshAccountUsage?(): Promise<ProviderUsageSnapshot>;
   readThreadUsage?(threadId: string): Promise<AgentTokenUsage | null>;
 }
 
