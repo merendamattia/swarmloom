@@ -1,10 +1,11 @@
 import { CodexProvider } from "./codex.ts";
+import { createCodexUsageReader } from "./codex-usage.ts";
 import { OpenCodeProvider } from "./opencode.ts";
 import type { AgentProvider, ProviderUsageCapability } from "./types.ts";
 import type { Config } from "../core/config-schema.ts";
 
 export function createAgentProvider(name: "codex" | "opencode", usage?: ProviderUsageCapability): AgentProvider {
-  return name === "codex" ? new CodexProvider(usage) : new OpenCodeProvider();
+  return name === "codex" ? new CodexProvider(usage ?? createCodexUsageReader()) : new OpenCodeProvider();
 }
 
 export type AgentProfile = "coding" | "review";
@@ -46,6 +47,7 @@ export type {
   NormalizedProviderEvent,
   ProviderQuotaWindow,
   ProviderUsageAvailability,
+  ProviderFailure,
   ProviderUsageCapability,
   ProviderUsageSnapshot,
 } from "./types.ts";

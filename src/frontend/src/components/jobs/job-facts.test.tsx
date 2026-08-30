@@ -16,7 +16,7 @@ describe("JobFacts", () => {
         exitCode: 0,
         durationMs: 1_000,
         workerId: "worker-1",
-        implementationSessionId: "thread-1",
+        sessionId: "thread-1",
         baselineCommit: "a".repeat(40),
         branchName: "agent/issue-42",
         pullRequestNumber: null,
@@ -25,6 +25,7 @@ describe("JobFacts", () => {
         startedAt: null,
         completedAt: null,
         heartbeatAt: null,
+        events: [],
         usage: {
           inputTokens: 1_000,
           cachedInputTokens: null,

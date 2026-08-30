@@ -77,6 +77,17 @@ export class OpenCodeProvider implements AgentProvider {
   readonly name = "opencode" as const;
 
   async execute(request: AgentRequest) {
+    if (request.resumeSessionId) {
+      const message = "OpenCode session resume is not supported";
+      await request.onEvent?.(event("SESSION_FAILED", { message }));
+      return {
+        provider: this.name,
+        sessionId: null,
+        finalOutput: "",
+        exitCode: 1,
+        stderr: message,
+      };
+    }
     let sessionId: string | null = null;
     let sessionError: string | undefined;
     const output: string[] = [];
@@ -98,6 +109,7 @@ export class OpenCodeProvider implements AgentProvider {
         }
       },
       environment,
+      request.workingDirectory,
     );
     if (result.exitCode !== 0 && !sessionError) {
       await request.onEvent?.(event("SESSION_FAILED", { message: result.stderr || "OpenCode exited unsuccessfully" }));

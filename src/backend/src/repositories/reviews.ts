@@ -8,8 +8,10 @@ async function start(
   reasoningEffort?: string | null,
   input: { pullRequestId?: string | null; pullRequestNumber?: number | null; headSha?: string | null } = {},
 ) {
-  return prisma.review.create({
-    data: {
+  const startedAt = new Date();
+  return prisma.review.upsert({
+    where: { jobId },
+    create: {
       jobId,
       provider,
       model,
@@ -18,7 +20,22 @@ async function start(
       pullRequestNumber: input.pullRequestNumber ?? null,
       headSha: input.headSha ?? null,
       status: "RUNNING",
-      startedAt: new Date(),
+      startedAt,
+    },
+    update: {
+      provider,
+      model,
+      reasoningEffort,
+      pullRequestId: input.pullRequestId ?? null,
+      pullRequestNumber: input.pullRequestNumber ?? null,
+      headSha: input.headSha ?? null,
+      status: "RUNNING",
+      response: null,
+      exitCode: null,
+      errorMessage: null,
+      startedAt,
+      completedAt: null,
+      durationMs: null,
     },
   });
 }
@@ -47,4 +64,34 @@ async function finish(
   return updated.count === 1;
 }
 
-export const reviewRepository = { start, finish };
+const cancellationMessage = "Review cancelled because its quota-waiting job was cancelled by an operator.";
+
+async function cancelForJob(jobId: string, errorMessage = cancellationMessage) {
+  const review = await prisma.review.findUnique({ where: { jobId }, select: { id: true, startedAt: true } });
+  if (!review) return false;
+  const completedAt = new Date();
+  const updated = await prisma.review.updateMany({
+    where: { id: review.id, status: "RUNNING" },
+    data: {
+      status: "FAILED",
+      errorMessage,
+      completedAt,
+      durationMs: review.startedAt ? Math.max(0, completedAt.getTime() - review.startedAt.getTime()) : null,
+    },
+  });
+  return updated.count === 1;
+}
+
+async function reconcileCancelledJobs() {
+  const reviews = await prisma.review.findMany({
+    where: { status: "RUNNING", job: { status: "CANCELLED" } },
+    select: { jobId: true },
+  });
+  let finalized = 0;
+  for (const review of reviews) {
+    if (await cancelForJob(review.jobId)) finalized += 1;
+  }
+  return finalized;
+}
+
+export const reviewRepository = { start, finish, cancelForJob, reconcileCancelledJobs };

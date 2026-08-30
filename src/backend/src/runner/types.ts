@@ -22,6 +22,8 @@ export type GcRepository = typeof gcRepository;
 export type SessionState = {
   worktreePath?: string;
   worktreeCreated: boolean;
+  preserveWorktree?: boolean;
+  worktreePersisted: boolean;
   repositoryPath?: string;
   activePullRequest?: { number: number; url: string };
   liveContext?: GitHubIssueContext;

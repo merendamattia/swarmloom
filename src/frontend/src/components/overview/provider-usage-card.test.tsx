@@ -87,4 +87,22 @@ describe("ProviderUsageCard", () => {
     expect(html).toContain("Codex reports this allowance as exhausted.");
     expect(html).toContain("60% remaining");
   });
+
+  test("reports a stale empty snapshot instead of treating it as a healthy empty result", () => {
+    const html = renderToStaticMarkup(<ProviderUsageCard
+      provider="codex"
+      usage={{
+        status: "stale",
+        availability: "unknown",
+        spendControlReached: null,
+        rateLimitReachedType: null,
+        observedAt: null,
+        windows: [],
+        message: "The last Codex quota snapshot may be out of date",
+      }}
+    />);
+
+    expect(html).toContain("The last Codex quota snapshot may be out of date");
+    expect(html).not.toContain("No quota windows were reported by Codex.");
+  });
 });

@@ -10,7 +10,7 @@ import { normalizeCodexEvent } from "../src/providers/codex.ts";
 import { quotaAdmission } from "../src/providers/quota.ts";
 
 describe("Codex account usage", () => {
-  test("normalizes five-hour, weekly, and additional windows without model mapping", () => {
+  test("normalizes five-hour and weekly windows without assuming a model mapping", () => {
     const snapshot = normalizeCodexRateLimits({
       result: {
         rateLimits: {
@@ -51,13 +51,6 @@ describe("Codex account usage", () => {
           remainingPercent: 38,
           windowDurationMins: 10_080,
           resetsAt: null,
-        },
-        {
-          limitId: "model-specific",
-          windowType: "primary",
-          usedPercent: 10,
-          remainingPercent: 90,
-          windowDurationMins: 60,
         },
       ],
     });
@@ -214,7 +207,7 @@ describe("Codex account usage", () => {
     }
   });
 
-  test("keeps an unlabelled root window alongside additional limit buckets", () => {
+  test("does not expose additional limit buckets without an applicable mapping", () => {
     const snapshot = normalizeCodexRateLimits({
       result: {
         rateLimits: { primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: null } },
@@ -224,11 +217,9 @@ describe("Codex account usage", () => {
       },
     });
 
-    expect(snapshot.windows).toEqual(expect.arrayContaining([
+    expect(snapshot.windows).toEqual([
       expect.objectContaining({ limitId: null, windowDurationMins: 300, remainingPercent: 60 }),
-      expect.objectContaining({ limitId: "model-specific", windowDurationMins: 60, remainingPercent: 90 }),
-    ]));
-    expect(snapshot.windows).toHaveLength(2);
+    ]);
   });
 
   test("does not let an exhausted unmapped bucket block a healthy root allowance", () => {

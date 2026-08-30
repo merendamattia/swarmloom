@@ -9,6 +9,7 @@ import type {
 const ACCOUNT_RATE_LIMIT_REQUEST_ID = 2;
 const DEFAULT_FRESHNESS_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 10_000;
+const THREAD_USAGE_WAIT_MS = 500;
 const MAX_INT64 = BigInt("9223372036854775807");
 
 type RecordValue = Record<string, unknown>;
@@ -125,33 +126,6 @@ function windowsForSnapshot(source: RecordValue, fallbackLimitId: string | null)
   });
 }
 
-function snapshotSource(value: RecordValue) {
-  return record(field(value, "rateLimits", "rate_limits")) ?? value;
-}
-
-function usageMetadata(source?: RecordValue) {
-  if (!source) {
-    return { spendControlReached: null, rateLimitReachedType: null };
-  }
-  const snapshot = snapshotSource(source);
-  const spendControlReached = booleanValue(field(snapshot, "spendControlReached", "spend_control_reached"));
-  const rateLimitReachedType = stringValue(field(snapshot, "rateLimitReachedType", "rate_limit_reached_type"));
-  return {
-    spendControlReached,
-    rateLimitReachedType,
-  };
-}
-
-function usageAvailability(
-  providerWindows: ProviderQuotaWindow[],
-  metadata: ReturnType<typeof usageMetadata>,
-): ProviderUsageSnapshot["availability"] {
-  if (metadata.spendControlReached === true || metadata.rateLimitReachedType !== null) return "exhausted";
-  if (providerWindows.some(({ remainingPercent }) => remainingPercent === 0)) return "exhausted";
-  if (providerWindows.some(({ remainingPercent }) => remainingPercent !== null)) return "available";
-  return "unknown";
-}
-
 function unavailableSnapshot(message = "Codex quota telemetry is unavailable"): ProviderUsageSnapshot {
   return {
     status: "unavailable",
@@ -164,6 +138,31 @@ function unavailableSnapshot(message = "Codex quota telemetry is unavailable"): 
   };
 }
 
+function unknownSnapshot(observedAt: Date, message: string): ProviderUsageSnapshot {
+  return {
+    status: "available",
+    availability: "unknown",
+    spendControlReached: null,
+    rateLimitReachedType: null,
+    observedAt: observedAt.toISOString(),
+    windows: [],
+    message,
+  };
+}
+
+function rootAvailability(
+  windows: ProviderQuotaWindow[],
+  source: RecordValue,
+): ProviderUsageSnapshot["availability"] {
+  const spendControlReached = field(source, "spendControlReached", "spend_control_reached") === true;
+  const rateLimitReachedType = stringValue(field(source, "rateLimitReachedType", "rate_limit_reached_type"));
+  if (spendControlReached || rateLimitReachedType !== null || windows.some(({ remainingPercent }) => remainingPercent === 0)) {
+    return "exhausted";
+  }
+  if (windows.some(({ remainingPercent }) => remainingPercent !== null)) return "available";
+  return "unknown";
+}
+
 export function normalizeCodexRateLimits(value: unknown, observedAt = new Date()): ProviderUsageSnapshot {
   const root = record(value);
   const result = record(root?.result) ?? root;
@@ -171,26 +170,24 @@ export function normalizeCodexRateLimits(value: unknown, observedAt = new Date()
 
   const rateLimits = record(field(result, "rateLimits", "rate_limits"));
   const byLimitId = record(field(result, "rateLimitsByLimitId", "rate_limits_by_limit_id"));
-  const mappedEntries = byLimitId ? Object.entries(byLimitId) : [];
-  const rootLimitId = rateLimits ? stringValue(field(rateLimits, "limitId", "limit_id")) : null;
-  const rootAlreadyMapped = rootLimitId !== null && mappedEntries.some(([limitId, source]) =>
-    limitId === rootLimitId || stringValue(field(record(source) ?? {}, "limitId", "limit_id")) === rootLimitId);
-  const entries = [
-    ...mappedEntries,
-    ...(rateLimits && !rootAlreadyMapped ? [[rootLimitId, rateLimits] as const] : []),
-  ];
-  if (entries.length === 0) return unavailableSnapshot("Codex did not report any quota windows");
+  if (!rateLimits) {
+    return unknownSnapshot(
+      observedAt,
+      byLimitId
+        ? "Codex reported quota buckets without a reliable applicable mapping"
+        : "Codex did not report any quota windows",
+    );
+  }
 
-  const windows = entries.flatMap(([limitId, source]) => windowsForSnapshot(
-    record(source) ?? {},
-    stringValue(limitId),
-  ));
-  const providerWindows = rateLimits ? windowsForSnapshot(rateLimits, rootLimitId) : [];
-  const metadata = usageMetadata(rateLimits);
+  const limitId = stringValue(field(rateLimits, "limitId", "limit_id"));
+  const windows = windowsForSnapshot(rateLimits, limitId);
+  const spendControlReached = booleanValue(field(rateLimits, "spendControlReached", "spend_control_reached"));
+  const rateLimitReachedType = stringValue(field(rateLimits, "rateLimitReachedType", "rate_limit_reached_type"));
   return {
     status: "available",
-    availability: usageAvailability(providerWindows, metadata),
-    ...metadata,
+    availability: rootAvailability(windows, rateLimits),
+    spendControlReached,
+    rateLimitReachedType,
     observedAt: observedAt.toISOString(),
     windows,
   };
@@ -217,18 +214,19 @@ export function createCodexUsageReader(options: CodexUsageReaderOptions = {}): C
       cached = { snapshot, expiresAt: Date.now() + freshnessMs };
       return snapshot;
     }).catch(() => {
-      const snapshot = cached
-        ? { ...cached.snapshot, status: "stale" as const, message: "The last Codex quota snapshot may be out of date" }
+      const snapshot: ProviderUsageSnapshot = cached
+        ? { ...cached.snapshot, status: "stale", availability: "unknown", message: "The last Codex quota snapshot may be out of date" }
         : unavailableSnapshot();
       cached = { snapshot, expiresAt: Date.now() + freshnessMs };
       return snapshot;
-    })
-      .finally(() => { pending = undefined; });
+    }).finally(() => {
+      pending = undefined;
+    });
     return pending;
   };
 
   return {
-    async readAccountUsage() {
+    readAccountUsage: async () => {
       if (cached && cached.expiresAt > Date.now()) return cached.snapshot;
       return readFresh();
     },
@@ -250,8 +248,6 @@ type CodexAppServerClient = {
   subscribe(listener: (message: RecordValue) => void): () => void;
 };
 
-const THREAD_USAGE_WAIT_MS = 500;
-
 async function withCodexAppServer<T>(operation: (client: CodexAppServerClient) => Promise<T>) {
   const child = Bun.spawn(["codex", "app-server", "--listen", "stdio://"], {
     env: providerEnvironment(globalThis.process.env),
@@ -271,7 +267,7 @@ async function withCodexAppServer<T>(operation: (client: CodexAppServerClient) =
       return;
     }
     if (!message) return;
-    const id = message?.id;
+    const id = message.id;
     const error = record(message.error);
     if (typeof id === "number") {
       const waiter = waiters.get(id);
@@ -280,11 +276,8 @@ async function withCodexAppServer<T>(operation: (client: CodexAppServerClient) =
         return;
       }
       waiters.delete(id);
-      if (error) {
-        waiter.reject(new Error("Codex App Server request failed"));
-        return;
-      }
-      waiter.resolve(message.result);
+      if (error) waiter.reject(new Error("Codex App Server request failed"));
+      else waiter.resolve(message.result);
       return;
     }
     for (const listener of listeners) listener(message);
@@ -318,9 +311,7 @@ async function withCodexAppServer<T>(operation: (client: CodexAppServerClient) =
       jsonrpc: "2.0",
       id: 1,
       method: "initialize",
-      params: {
-        clientInfo: { name: "swarmloom", title: "Swarmloom", version: "0.1.0" },
-      },
+      params: { clientInfo: { name: "swarmloom", title: "Swarmloom", version: "0.1.0" } },
     });
     await initialized;
     request({ jsonrpc: "2.0", method: "initialized", params: {} });
@@ -364,10 +355,7 @@ export async function readCodexThreadUsage(threadId: string): Promise<AgentToken
       const noUsage = new Promise<null>((resolve) => {
         noUsageTimer = setTimeout(() => resolve(null), THREAD_USAGE_WAIT_MS);
       });
-      return await Promise.race([
-        usage,
-        noUsage,
-      ]);
+      return await Promise.race([usage, noUsage]);
     } finally {
       if (noUsageTimer) clearTimeout(noUsageTimer);
       unsubscribe();

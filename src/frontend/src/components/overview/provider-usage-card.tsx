@@ -52,12 +52,20 @@ export function ProviderUsageCard({ provider, usage }: { provider: Status["provi
         <p className="quota-message">Quota telemetry is unsupported for this provider.</p>
       ) : usage.status === "unavailable" ? (
         <p className="quota-message">{usage.message ?? "Quota telemetry is unavailable."}</p>
+      ) : usage.status === "stale" ? (
+        <>
+          <p className="quota-message">{usage.message ?? "Showing the last known snapshot; the latest refresh failed."}</p>
+          {usage.windows.length > 0 ? (
+            <div className="quota-window-grid">
+              {usage.windows.map((window, index) => <QuotaWindowView key={`${window.limitId ?? "unknown"}-${window.windowType}-${index}`} window={window} />)}
+            </div>
+          ) : null}
+        </>
       ) : usage.windows.length === 0 ? (
         <p className="quota-message">No quota windows were reported by Codex.</p>
       ) : (
         <>
           {usage.availability === "exhausted" ? <p className="quota-message">Codex reports this allowance as exhausted.</p> : null}
-          {usage.status === "stale" ? <p className="quota-message">Showing the last known snapshot; the latest refresh failed.</p> : null}
           <div className="quota-window-grid">
             {usage.windows.map((window, index) => <QuotaWindowView key={`${window.limitId ?? "unknown"}-${window.windowType}-${index}`} window={window} />)}
           </div>

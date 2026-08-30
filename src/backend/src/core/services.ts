@@ -1,8 +1,8 @@
 import { createEventService } from "../events/service.ts";
 import { createGitHubClient } from "../github/client.ts";
 import { createTelegramNotifier } from "../notifications/telegram.ts";
-import { createScanService } from "../scans/service.ts";
 import { createCodexUsageReader } from "../providers/codex-usage.ts";
+import { createScanService } from "../scans/service.ts";
 import type { JobQueue } from "../queue/service.ts";
 import type { Config } from "./config-schema.ts";
 
