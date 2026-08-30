@@ -311,6 +311,46 @@ integration("PostgreSQL job lifecycle", () => {
     });
   });
 
+  test("recovers a cancelled running job after worker loss and allows the retry to complete", async () => {
+    const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 22, config.APP_ENV));
+    const claimed = await jobs.claim(queued!.id, config.APP_ENV, "lost-worker");
+    const worktreePath = `/worker_data/worktrees/${crypto.randomUUID()}`;
+    await prisma.job.update({
+      where: { id: claimed!.id },
+      data: { worktreePath, sessionId: "cancelled-session" },
+    });
+
+    expect(await jobs.cancel(claimed!.id)).toBe(true);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).toMatchObject({
+      status: "CANCELLED",
+      workerId: "lost-worker",
+      worktreePath,
+      worktreeCleanupRequired: true,
+    });
+
+    const removed: string[] = [];
+    const { recoverStaleJobs } = await import("../src/worker/recovery.ts");
+    expect(await recoverStaleJobs(
+      config,
+      {} as GitHubClient,
+      (await import("../src/events/service.ts")).createEventService(),
+      async ({ worktreePath: path }) => { removed.push(path); },
+    )).toBe(0);
+    expect(removed).toEqual([worktreePath]);
+
+    const retried = await jobs.requeueForRetry(claimed!.id, config.APP_ENV);
+    expect(retried).toMatchObject({
+      id: claimed!.id,
+      status: "QUEUED",
+      workerId: null,
+      worktreePath: null,
+      sessionId: null,
+    });
+    const reclaimed = await jobs.claim(claimed!.id, config.APP_ENV, "replacement-worker");
+    expect(reclaimed?.workerId).toBe("replacement-worker");
+    expect(await jobs.complete(claimed!.id, { outcome: "retried" }, 0)).toBe(true);
+  });
+
   function queuedJob(issueNumber: number, jobEnvironment = environment) {
     return {
       repositoryId,

@@ -29,8 +29,7 @@ export async function cleanupCancelledWorktree(
       repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
       gitEnvironment: undefined,
     });
-    await jobRepository.markWorktreeCleaned(job.id, config.APP_ENV);
-    return true;
+    return await jobRepository.markWorktreeCleaned(job.id, config.APP_ENV);
   } catch (error) {
     await events.record({
       type: "WORKTREE_CLEANUP_REQUIRED",

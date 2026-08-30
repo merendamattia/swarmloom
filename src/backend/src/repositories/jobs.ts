@@ -177,7 +177,6 @@ async function findCancelledWorktrees(environment: string) {
     where: {
       environment,
       status: "CANCELLED",
-      worktreeCleanupRequired: true,
       worktreePath: { not: null },
     },
     include: { repository: true },
@@ -185,9 +184,16 @@ async function findCancelledWorktrees(environment: string) {
   });
 }
 
+async function findCancelledWorkers(environment: string) {
+  return prisma.job.findMany({
+    where: { environment, status: "CANCELLED", workerId: { not: null } },
+    select: { id: true, workerId: true },
+  });
+}
+
 async function markWorktreeCleaned(id: string, environment: string) {
   const updated = await prisma.job.updateMany({
-    where: { id, environment, status: "CANCELLED", worktreeCleanupRequired: true },
+    where: { id, environment, status: "CANCELLED", worktreePath: { not: null } },
     data: { worktreeCleanupRequired: false, worktreePath: null },
   });
   return updated.count === 1;
@@ -580,7 +586,7 @@ async function cancel(id: string) {
       durationMs: job.status === "RUNNING" ? activeDurationMs : undefined,
       quotaWaitStartedAt: null,
       quotaWaitDurationMs,
-      worktreeCleanupRequired: job.status === "WAITING_FOR_QUOTA" && Boolean(job.worktreePath),
+      worktreeCleanupRequired: Boolean(job.worktreePath),
       heartbeatAt: null,
     },
   });
@@ -656,6 +662,7 @@ export const jobRepository = {
   findWaitingForQuota,
   requeueWaitingForQuota,
   findCancelledWorktrees,
+  findCancelledWorkers,
   markWorktreeCleaned,
   requeueForRetry,
   complete,

@@ -8,8 +8,16 @@ import { jobRepository } from "../repositories/jobs.ts";
 import { reviewRepository } from "../repositories/reviews.ts";
 import { recoverCancelledWorktrees } from "../worktrees/recovery.ts";
 
-export async function recoverStaleJobs(config: Config, github: GitHubClient, events: EventService) {
-  await recoverCancelledWorktrees(config, events);
+export async function recoverStaleJobs(
+  config: Config,
+  github: GitHubClient,
+  events: EventService,
+  removeWorktree: typeof removeJobWorktree = removeJobWorktree,
+) {
+  await recoverCancelledWorktrees(config, events, removeWorktree);
+  for (const job of await jobRepository.findCancelledWorkers(config.APP_ENV)) {
+    if (job.workerId) await jobRepository.releaseWorker(job.id, job.workerId);
+  }
   await reviewRepository.reconcileCancelledJobs();
   const staleJobs = await jobRepository.recoverStaleBefore(
     config.APP_ENV,
@@ -17,7 +25,7 @@ export async function recoverStaleJobs(config: Config, github: GitHubClient, eve
   );
   for (const job of staleJobs) {
     if (job.worktreePath) {
-      await removeJobWorktree({
+      await removeWorktree({
         worktreePath: job.worktreePath,
         repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
         gitEnvironment: undefined,
