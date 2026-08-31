@@ -26,7 +26,7 @@ jobs:
       - name: Build production application image
         run: docker compose --env-file .env.production.example -f docker-compose.production.yaml build backend
       - name: Verify production agent runtime
-        run: docker compose --env-file .env.production.example -f docker-compose.production.yaml run --rm --no-deps backend sh -c 'test -f /app/agent-runtime/instructions/global-skills.md && test -f /app/agent-runtime/instructions/global.md'
+        run: docker compose --env-file .env.production.example -f docker-compose.production.yaml run --rm --no-deps backend sh -c 'set -eu; test -f /app/agent-runtime/instructions/global-skills.md; test -f /app/agent-runtime/instructions/global.md; for skill in /home/bun/.codex/skills/archify/SKILL.md /home/bun/.config/opencode/skills/archify/SKILL.md /home/bun/.claude/skills/archify/SKILL.md; do test -f "$skill"; done'
       - name: Verify worker CI toolchain
         run: docker compose --env-file .env.production.example -f docker-compose.production.yaml run --rm --no-deps backend sh -c 'set -eu; for command in bun python3 pip pre-commit gcc g++ make pkg-config git gh psql redis-cli; do command -v "$command" >/dev/null; done; codex exec --help | grep -q -- "--dangerously-bypass-approvals-and-sandbox"; test -z "$(find /app/node_modules -type f -path "*/msgpackr-extract/build/Release/*.node" -print -quit)"; cd /app/src/backend; bun -e "import(\"bullmq\")"'
       - name: Verify ephemeral CI services
