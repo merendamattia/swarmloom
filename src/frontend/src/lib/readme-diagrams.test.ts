@@ -98,6 +98,9 @@ describe("README diagrams", () => {
     expect(source.meta?.quality_profile).toBe("showcase");
     expect(image).toContain('<svg');
     expect(image).toContain('xmlns="http://www.w3.org/2000/svg"');
+    const svgRoot = image.match(/^<svg\b[^>]*>/)?.[0] ?? "";
+    expect(svgRoot).toContain('width="1220"');
+    expect(svgRoot).toContain('height="720"');
     expect(image).toContain('data-quality-profile="showcase"');
     expect(image).not.toContain("<script");
 
