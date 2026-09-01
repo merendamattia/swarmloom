@@ -100,7 +100,7 @@ RUN --mount=type=cache,target=/tmp/npx-cache,uid=1000,gid=1000 \
   && rm -rf /tmp/bun-docs-skill \
   && npx --yes skills@latest add https://github.com/better-auth/skills \
       --skill better-auth-best-practices --global --agent codex opencode claude-code --copy --yes \
-  && npx --yes skills@latest add https://github.com/yusukebe/hono-skill --skill hono \
+  && npx --yes skills@latest add https://github.com/honojs/skills --skill hono \
       --global --agent codex opencode claude-code --copy --yes \
   && npx --yes skills@latest add pbakaus/impeccable \
       --global --agent codex opencode claude-code --copy --yes \
@@ -111,6 +111,8 @@ RUN --mount=type=cache,target=/tmp/npx-cache,uid=1000,gid=1000 \
   && npx --yes skills@latest add muthuishere/hand-drawn-diagrams \
       --global --agent codex opencode claude-code --copy --yes \
   && npx --yes skills@latest add ramziddin/solid-skills \
+      --global --agent codex opencode claude-code --copy --yes \
+  && npx --yes skills@latest add tt-a1i/archify --skill archify \
       --global --agent codex opencode claude-code --copy --yes
 
 FROM agent-skills AS build
