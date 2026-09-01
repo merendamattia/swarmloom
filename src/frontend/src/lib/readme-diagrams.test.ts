@@ -96,6 +96,39 @@ describe("README diagrams", () => {
     expect(image).toContain('data-quality-profile="showcase"');
     expect(image).not.toContain("<script");
 
+    const styleStart = image.indexOf("<style>");
+    const styleEnd = image.indexOf("</style>");
+    expect(styleStart).toBeGreaterThanOrEqual(0);
+    expect(styleEnd).toBeGreaterThan(styleStart);
+    const embeddedStyles = image.slice(styleStart, styleEnd);
+    for (const selector of [
+      ".c-mask",
+      ".c-security-group",
+      ".c-grid",
+      ".c-frontend",
+      ".c-backend",
+      ".c-database",
+      ".c-cloud",
+      ".c-messagebus",
+      ".c-external",
+      ".a-default",
+      ".a-emphasis",
+      ".a-dashed",
+      ".t-primary",
+      ".t-muted",
+      ".t-backend",
+      ".t-messagebus",
+      ".t-security",
+      ".m-default",
+      ".m-emphasis",
+      ".m-security",
+      ".m-dashed",
+      ".semantic-sigil",
+      ".sigil-fill",
+    ]) {
+      expect(embeddedStyles).toContain(selector);
+    }
+
     for (const componentDefinition of architectureComponents) {
       expect(source.components?.find(({ id }) => id === componentDefinition.id)).toMatchObject(componentDefinition);
       expect(image).toContain(`data-node-id="${componentDefinition.id}"`);
