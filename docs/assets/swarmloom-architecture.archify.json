@@ -57,9 +57,17 @@
     },
     {
       "id": "providers",
-      "type": "external",
+      "type": "backend",
       "label": "Codex / OpenCode adapters",
       "sublabel": "Shared AgentProvider contract",
+      "pos": [980, 360],
+      "size": [200, 72]
+    },
+    {
+      "id": "provider-runtimes",
+      "type": "external",
+      "label": "Codex + OpenCode CLIs",
+      "sublabel": "External agent runtimes",
       "pos": [980, 100],
       "size": [200, 72]
     },
@@ -92,7 +100,7 @@
     {
       "kind": "security-group",
       "label": "Swarmloom runtime",
-      "wraps": ["dashboard", "scheduler", "api", "queue", "worker", "worktrees"]
+      "wraps": ["dashboard", "scheduler", "api", "queue", "worker", "providers", "worktrees"]
     }
   ],
   "connections": [
@@ -143,9 +151,21 @@
       "from": "worker",
       "to": "providers",
       "label": "execute through contract",
-      "fromSide": "top",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[960, 296], [960, 396]],
+      "labelAt": [1080, 350]
+    },
+    {
+      "id": "providers-to-runtimes",
+      "from": "providers",
+      "to": "provider-runtimes",
+      "label": "invoke CLI runtime",
+      "variant": "dashed",
+      "fromSide": "right",
       "toSide": "bottom",
-      "labelAt": [960, 190]
+      "via": [[1200, 396], [1200, 190], [1080, 190]],
+      "labelAt": [1090, 215]
     },
     {
       "id": "worker-to-postgres",
@@ -181,7 +201,11 @@
       "from": "worker",
       "to": "telegram",
       "label": "selected events",
-      "variant": "dashed"
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[950, 296], [950, 496]],
+      "labelAt": [950, 446]
     }
   ],
   "cards": [

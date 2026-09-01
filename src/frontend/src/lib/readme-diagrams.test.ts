@@ -26,16 +26,17 @@ const diagrams = [
 ] as const;
 
 const architectureComponents = [
-  { id: "github", label: "GitHub", sublabel: "Issues + pull requests" },
-  { id: "dashboard", label: "Dashboard", sublabel: "Next.js reads the API" },
-  { id: "api", label: "API", sublabel: "Hono routes + state access" },
-  { id: "scheduler", label: "Scheduler + scanners", sublabel: "Cron reconciliation" },
-  { id: "queue", label: "BullMQ + Redis/Valkey", sublabel: "Durable delivery + lock" },
-  { id: "worker", label: "Workers + job runner", sublabel: "Only durable-job executor" },
-  { id: "postgres", label: "PostgreSQL", sublabel: "Durable state + history" },
-  { id: "worktrees", label: "Repository worktrees", sublabel: "Isolated worker storage" },
-  { id: "providers", label: "Codex / OpenCode adapters", sublabel: "Shared AgentProvider contract" },
-  { id: "telegram", label: "Telegram", sublabel: "Optional notifications" },
+  { id: "github", type: "external", label: "GitHub", sublabel: "Issues + pull requests" },
+  { id: "dashboard", type: "frontend", label: "Dashboard", sublabel: "Next.js reads the API" },
+  { id: "api", type: "backend", label: "API", sublabel: "Hono routes + state access" },
+  { id: "scheduler", type: "backend", label: "Scheduler + scanners", sublabel: "Cron reconciliation" },
+  { id: "queue", type: "messagebus", label: "BullMQ + Redis/Valkey", sublabel: "Durable delivery + lock" },
+  { id: "worker", type: "backend", label: "Workers + job runner", sublabel: "Only durable-job executor" },
+  { id: "postgres", type: "database", label: "PostgreSQL", sublabel: "Durable state + history" },
+  { id: "worktrees", type: "cloud", label: "Repository worktrees", sublabel: "Isolated worker storage" },
+  { id: "providers", type: "backend", label: "Codex / OpenCode adapters", sublabel: "Shared AgentProvider contract" },
+  { id: "provider-runtimes", type: "external", label: "Codex + OpenCode CLIs", sublabel: "External agent runtimes" },
+  { id: "telegram", type: "external", label: "Telegram", sublabel: "Optional notifications" },
 ] as const;
 
 const architectureConnections = [
@@ -45,6 +46,7 @@ const architectureConnections = [
   { from: "queue", to: "worker", label: "deliver jobs" },
   { from: "worker", to: "github", label: "labels, comments + PRs" },
   { from: "worker", to: "providers", label: "execute through contract" },
+  { from: "providers", to: "provider-runtimes", label: "invoke CLI runtime" },
   { from: "worker", to: "postgres", label: "guard claims + history" },
   { from: "worker", to: "worktrees", label: "isolate repository work" },
   { from: "api", to: "postgres", label: "read + record state" },
@@ -76,6 +78,7 @@ describe("README diagrams", () => {
   });
 
   test("keeps the Archify architecture source and static SVG synchronized", async () => {
+    const readme = await Bun.file(resolve(repositoryRoot, "README.md")).text();
     const sourcePath = resolve(repositoryRoot, "docs/assets/swarmloom-architecture.archify.json");
     const imagePath = resolve(repositoryRoot, "docs/assets/swarmloom-architecture.svg");
     const sourceText = await Bun.file(sourcePath).text();
@@ -83,11 +86,13 @@ describe("README diagrams", () => {
       schema_version?: number;
       diagram_type?: string;
       meta?: { quality_profile?: string };
-      components?: Array<{ id?: string; label?: string; sublabel?: string }>;
+      components?: Array<{ id?: string; type?: string; label?: string; sublabel?: string }>;
+      boundaries?: Array<{ label?: string; wraps?: string[] }>;
       connections?: Array<{ from?: string; to?: string; label?: string }>;
     };
     const image = await Bun.file(imagePath).text();
 
+    expect(readme).toContain("![Swarmloom runtime architecture](docs/assets/swarmloom-architecture.svg)");
     expect(source.schema_version).toBe(1);
     expect(source.diagram_type).toBe("architecture");
     expect(source.meta?.quality_profile).toBe("showcase");
@@ -134,6 +139,10 @@ describe("README diagrams", () => {
       expect(image).toContain(`data-node-id="${componentDefinition.id}"`);
       expect(image).toContain(`data-node-label="${componentDefinition.label}"`);
     }
+
+    expect(source.boundaries?.find(({ label }) => label === "Swarmloom runtime")?.wraps).toEqual(
+      expect.arrayContaining(["providers"]),
+    );
 
     for (const connection of architectureConnections) {
       expect(source.connections?.find(({ from, to }) => from === connection.from && to === connection.to)).toMatchObject(connection);
