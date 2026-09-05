@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { Config } from "../core/config-schema.ts";
 import type { SettingsService } from "../core/settings-service.ts";
 import { parseRuntimeSettingsPatch, runtimeSettingsView } from "../core/runtime-settings.ts";
+import { CodexCatalogValidationError, generationOptions } from "../core/codex-catalog.ts";
 import { prisma } from "../core/db.ts";
 import { buildHealthServices } from "./health.ts";
 import { logger } from "../core/logger.ts";
@@ -166,6 +167,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         requiredBranch: "develop",
       });
     })
+    .get("/codex/generation-options", async (context) => context.json(await generationOptions()))
     .get("/settings", (context) => context.json(settings.view()))
     .patch("/settings", async (context) => {
       let body: unknown;
@@ -179,7 +181,9 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         scheduler.restart();
         return context.json(runtimeSettingsView(updated));
       } catch (error) {
-        if (error instanceof z.ZodError) return context.json({ error: "Invalid settings" }, 400);
+        if (error instanceof z.ZodError || error instanceof CodexCatalogValidationError) {
+          return context.json({ error: "Invalid settings" }, 400);
+        }
         throw error;
       }
     })
