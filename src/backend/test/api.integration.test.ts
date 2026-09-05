@@ -10,6 +10,7 @@ integration("operations API", () => {
   let repositoryId = "";
   let jobId = "";
   let scanCalls = 0;
+  const enqueuedJobs: string[] = [];
   let restartCalls = 0;
   let version = "";
   const unique = crypto.randomUUID();
@@ -22,6 +23,9 @@ integration("operations API", () => {
   let afterCreateIssue: (() => Promise<void>) | undefined;
   let reconciledIssue: { number: number; url: string } | undefined;
   let findIssueCalls = 0;
+  const removedWorktrees: string[] = [];
+  let pullRequestHead = "a".repeat(40);
+  const pullRequestLabels = ["agent:review-requested"];
   const config = parseConfig({
     APP_ENV: "test",
     NODE_ENV: "test",
@@ -59,7 +63,6 @@ integration("operations API", () => {
         issueBody: "Acceptance criteria",
         status: "QUEUED",
         activeIssueKey: `${repositoryId}:99`,
-        queueJobId: apiJobId,
         branchName: "agent/issue-99",
         baselineCommit: "a".repeat(40),
         provider: "CODEX",
@@ -109,10 +112,31 @@ integration("operations API", () => {
           return reconciledIssue;
         },
         addIssueComment: async () => {},
-        getPullRequestLabels: async () => [],
-        setPullRequestLabels: async () => {},
+        getPullRequest: async (_repository, number) => ({
+          number,
+          title: "Pull request",
+          url: "https://github.com/acme/api-test/pull/456",
+          base: "develop",
+          head: "agent/issue-456",
+          headSha: pullRequestHead,
+          state: "open",
+          merged: false,
+          body: "Closes #456",
+          additions: 1,
+          deletions: 1,
+          changedFiles: 1,
+        }),
+        getPullRequestLabels: async () => [...pullRequestLabels],
+        setPullRequestLabels: async (_repository, _number, next) => {
+          pullRequestLabels.splice(0, pullRequestLabels.length, ...next);
+        },
       },
-      queue: { health: async () => "PONG", remove: async () => true },
+      queue: {
+        health: async () => "PONG",
+        remove: async () => true,
+        enqueue: async (id) => { enqueuedJobs.push(id); },
+      },
+      removeWorktree: async ({ worktreePath }) => { removedWorktrees.push(worktreePath); },
       settings: createSettingsService(config),
       scheduler: { restart: () => { restartCalls += 1; } },
     });
@@ -121,6 +145,7 @@ integration("operations API", () => {
   afterAll(async () => {
     await prisma.jobEvent.deleteMany({ where: { repositoryId } });
     await prisma.job.deleteMany({ where: { repositoryId } });
+    await prisma.managedPullRequest.deleteMany({ where: { repositoryId } });
     await prisma.runtimeSetting.deleteMany({ where: { environment: "test" } });
     await prisma.repository.delete({ where: { id: repositoryId } });
     await prisma.$disconnect();
@@ -157,6 +182,66 @@ integration("operations API", () => {
     expect(await repositories.json()).toMatchObject([{ jobs: [{ id: jobId, reasoningEffort: "high" }] }]);
   });
 
+  test("exposes quota waits as active filterable jobs and allows cancellation", async () => {
+    removedWorktrees.length = 0;
+    const worktreePath = `/worker_data/worktrees/${crypto.randomUUID()}`;
+    const waiting = await prisma.job.create({
+      data: {
+        repositoryId,
+        environment: "test",
+        issueNumber: 199,
+        subjectType: "PULL_REQUEST",
+        jobType: "REVIEW",
+        issueTitle: `Quota wait ${unique}`,
+        issueUrl: `https://github.com/acme/api-${unique}/pull/199`,
+        issueBody: "Quota wait",
+        status: "WAITING_FOR_QUOTA",
+        activePrKey: `${repositoryId}:199:head:REVIEW`,
+        branchName: "agent/issue-199",
+        baselineCommit: "e".repeat(40),
+        pullRequestNumber: 199,
+        worktreePath,
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+        quotaWaitStartedAt: new Date(),
+        quotaResetAt: new Date(Date.now() + 60_000),
+        quotaWindow: "codex:primary",
+        quotaUsedPercent: 100,
+        quotaMessage: "Codex quota exhausted",
+      },
+    });
+    await prisma.review.create({
+      data: {
+        jobId: waiting.id,
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+        status: "RUNNING",
+        startedAt: new Date(Date.now() - 5_000),
+      },
+    });
+
+    const dashboard = await (await app.request("/api/dashboard")).json();
+    expect(dashboard.jobs.WAITING_FOR_QUOTA).toBe(1);
+    expect(dashboard.activeJobs).toEqual(expect.arrayContaining([expect.objectContaining({ id: waiting.id, status: "WAITING_FOR_QUOTA" })]));
+
+    const filtered = await app.request("/api/jobs?status=WAITING_FOR_QUOTA");
+    expect(await filtered.json()).toMatchObject({ total: 1, items: [{ id: waiting.id, status: "WAITING_FOR_QUOTA", quotaWindow: "codex:primary" }] });
+
+    const cancelled = await app.request(`/api/jobs/${waiting.id}/cancel`, { method: "POST" });
+    expect(cancelled.status).toBe(200);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: waiting.id } })).toMatchObject({
+      status: "CANCELLED",
+      activePrKey: null,
+      quotaWaitStartedAt: null,
+      worktreeCleanupRequired: false,
+    });
+    expect(removedWorktrees).toEqual([worktreePath]);
+    expect(await prisma.review.findUniqueOrThrow({ where: { jobId: waiting.id } })).toMatchObject({
+      status: "FAILED",
+      errorMessage: expect.stringContaining("cancelled"),
+    });
+  });
+
   test("returns only the five most recent jobs on the dashboard", async () => {
     const jobIds = Array.from({ length: 6 }, (_, index) => `dashboard-${unique}-${index}`);
     await prisma.job.createMany({
@@ -169,7 +254,6 @@ integration("operations API", () => {
         issueUrl: `https://github.com/acme/api-${unique}/issues/${200 + index}`,
         issueBody: "Dashboard history",
         status: "COMPLETED" as const,
-        queueJobId: id,
         branchName: `agent/issue-${200 + index}`,
         baselineCommit: "d".repeat(40),
         provider: "CODEX" as const,
@@ -193,7 +277,6 @@ integration("operations API", () => {
         issueUrl: `https://github.com/acme/api-${unique}/issues/100`,
         issueBody: "Failure body",
         status: "FAILED",
-        queueJobId: crypto.randomUUID(),
         branchName: "agent/issue-100",
         baselineCommit: "b".repeat(40),
         provider: "CODEX",
@@ -231,7 +314,6 @@ integration("operations API", () => {
         issueUrl: `https://github.com/acme/api-${unique}/issues/101`,
         issueBody: "New failure body",
         status: "STALE",
-        queueJobId: crypto.randomUUID(),
         branchName: "agent/issue-101",
         baselineCommit: "c".repeat(40),
         provider: "CODEX",
@@ -250,12 +332,31 @@ integration("operations API", () => {
   test("returns the repository PR URL instead of an agent-provided URL", async () => {
     await prisma.job.update({
       where: { id: jobId },
-      data: { pullRequestNumber: 99, pullRequestUrl: "https://github.com/[REDACTED]/wrong/pull/99" },
+      data: {
+        pullRequestNumber: 99,
+        pullRequestUrl: "https://github.com/[REDACTED]/wrong/pull/99",
+        claimToken: "internal-claim-token",
+        cleanupToken: "internal-cleanup-token",
+      },
+    });
+    await prisma.review.create({
+      data: {
+        jobId,
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+        status: "RUNNING",
+        claimToken: "internal-review-claim-token",
+      },
     });
     const detail = await app.request(`/api/jobs/${jobId}`);
-    expect(await detail.json()).toMatchObject({
+    const body = await detail.json();
+    expect(body).toMatchObject({
       pullRequestUrl: `https://github.com/acme/api-${unique}/pull/99`,
     });
+    expect(body).not.toHaveProperty("claimToken");
+    expect(body).not.toHaveProperty("cleanupToken");
+    expect(body.review).not.toHaveProperty("claimToken");
+    await prisma.job.update({ where: { id: jobId }, data: { claimToken: null, cleanupToken: null } });
   });
 
   test("returns the enabled Codex catalog with model-specific efforts", async () => {
@@ -344,31 +445,94 @@ integration("operations API", () => {
     expect(secretRows.every(({ value }) => !value.includes("telegram-secret-token") && !value.includes("telegram-chat-id"))).toBe(true);
   });
 
-  test("cancels and retries through GitHub before invoking the shared scanner", async () => {
+  test("cancels and retries the same durable job without invoking the scanner", async () => {
     expect((await app.request(`/api/jobs/${jobId}/cancel`, { method: "POST" })).status).toBe(200);
     expect(labels).toEqual(["bug"]);
     const retry = await app.request(`/api/jobs/${jobId}/retry`, { method: "POST" });
     expect(retry.status).toBe(202);
-    expect(await retry.json()).toEqual({ scanId: "scan-1", scanStatus: "COMPLETED" });
-    expect(labels).toEqual(["bug", "agent:ready"]);
+    expect(await retry.json()).toEqual({ jobId, status: "QUEUED", sessionResumed: false });
+    expect(labels).toEqual(["bug", config.ISSUE_WORKING_LABEL]);
+    expect(enqueuedJobs).toEqual([jobId]);
+    expect((await prisma.job.findUniqueOrThrow({ where: { id: jobId } })).status).toBe("QUEUED");
+    expect((await app.request(`/api/jobs/${jobId}/retry`, { method: "POST" })).status).toBe(409);
   });
 
   test("uses the manual scanner and rejects Telegram tests while disabled", async () => {
     expect((await app.request("/api/scans/run", { method: "POST" })).status).toBe(202);
-    expect(scanCalls).toBe(2);
+    expect(scanCalls).toBe(1);
     expect((await app.request("/api/notifications/test", { method: "POST" })).status).toBe(409);
   });
 
-  test("retry after a terminal failure restores the ready label", async () => {
+  test("retry after a terminal failure requeues the job directly", async () => {
     await prisma.job.update({
       where: { id: jobId },
-      data: { status: "FAILED", activeIssueKey: null },
+      data: { status: "FAILED", activeIssueKey: null, attempts: 1, sessionId: "api-session" },
     });
     labels.splice(0, labels.length, "bug", config.ISSUE_BLOCKED_LABEL);
     const retry = await app.request(`/api/jobs/${jobId}/retry`, { method: "POST" });
     expect(retry.status).toBe(202);
-    expect(await retry.json()).toEqual({ scanId: "scan-3", scanStatus: "COMPLETED" });
-    expect(labels).toEqual(["bug", config.ISSUE_READY_LABEL]);
+    expect(await retry.json()).toEqual({ jobId, status: "QUEUED", sessionResumed: true });
+    expect(labels).toEqual(["bug", config.ISSUE_WORKING_LABEL]);
+    expect(enqueuedJobs).toEqual([jobId, jobId]);
+    expect(await prisma.jobEvent.findFirst({ where: { jobId, type: "JOB_RESUME_REQUESTED" }, orderBy: { createdAt: "desc" } }))
+      .toMatchObject({ metadata: expect.objectContaining({ attempt: 2, sessionId: "api-session", sessionResumed: true }) });
+  });
+
+  test("rejects a stale pull request retry and restores its current review trigger", async () => {
+    const staleWorktreePath = `/worker_data/worktrees/${crypto.randomUUID()}`;
+    const managed = await prisma.managedPullRequest.create({
+      data: {
+        repositoryId,
+        prNumber: 456,
+        issueNumber: 456,
+        issueTitle: "Pull request retry",
+        issueUrl: `https://github.com/acme/api-${unique}/issues/456`,
+        headBranch: "agent/issue-456",
+        headSha: "a".repeat(40),
+        baseBranch: "develop",
+        workflow: "REVIEW_REQUESTED",
+      },
+    });
+    const stale = await prisma.job.create({
+      data: {
+        repositoryId,
+        environment: "test",
+        jobType: "REVIEW",
+        subjectType: "PULL_REQUEST",
+        issueNumber: 456,
+        issueTitle: "Pull request retry",
+        issueUrl: `https://github.com/acme/api-${unique}/issues/456`,
+        issueBody: "Review this pull request",
+        status: "FAILED",
+        branchName: "agent/issue-456",
+        baselineCommit: "b".repeat(40),
+        pullRequestId: managed.id,
+        pullRequestNumber: 456,
+        pullRequestUrl: "https://github.com/acme/api-test/pull/456",
+        headSha: "a".repeat(40),
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+        worktreePath: staleWorktreePath,
+        activePrKey: `${repositoryId}:${managed.id}:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:REVIEW`,
+      },
+    });
+    pullRequestHead = "c".repeat(40);
+    pullRequestLabels.splice(0, pullRequestLabels.length, "bug");
+
+    const retry = await app.request(`/api/jobs/${stale.id}/retry`, { method: "POST" });
+
+    expect(retry.status).toBe(409);
+    expect(await retry.json()).toEqual({ error: "Pull request head changed; retry was not queued" });
+    expect(pullRequestLabels).toEqual(["bug", config.PR_REVIEW_REQUESTED_LABEL]);
+    expect(enqueuedJobs).not.toContain(stale.id);
+    expect(removedWorktrees).toContain(staleWorktreePath);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: stale.id } })).toMatchObject({
+      status: "FAILED",
+      headSha: "a".repeat(40),
+      activePrKey: null,
+      worktreePath: null,
+    });
+    pullRequestHead = "a".repeat(40);
   });
 
   test("creates one sanitized support issue for a failed job and rejects non-failed jobs", async () => {
@@ -629,7 +793,6 @@ integration("operations API", () => {
         issueUrl: `https://github.com/acme/obsolete-${unique}/issues/55`,
         issueBody: "Body",
         status: "COMPLETED",
-        queueJobId: crypto.randomUUID(),
         branchName: "agent/issue-55",
         baselineCommit: "c".repeat(40),
         provider: "CODEX",
@@ -676,7 +839,6 @@ integration("operations API", () => {
         issueUrl: `https://github.com/acme/active-${unique}/issues/77`,
         issueBody: "Body",
         status: "QUEUED",
-        queueJobId: crypto.randomUUID(),
         branchName: "agent/issue-77",
         baselineCommit: "d".repeat(40),
         provider: "CODEX",
@@ -688,6 +850,14 @@ integration("operations API", () => {
     expect(blocked.status).toBe(409);
     expect(await blocked.json()).toMatchObject({ error: expect.stringContaining("active job") });
     expect(await prisma.repository.findUnique({ where: { id: active.id } })).not.toBeNull();
+
+    await prisma.job.updateMany({
+      where: { repositoryId: active.id },
+      data: { status: "FAILED", activeIssueKey: null, worktreePath: `/worker_data/worktrees/${crypto.randomUUID()}` },
+    });
+    const retainedWorktreeBlocked = await app.request(`/api/repositories/${active.id}`, { method: "DELETE" });
+    expect(retainedWorktreeBlocked.status).toBe(409);
+    expect(await retainedWorktreeBlocked.json()).toMatchObject({ error: expect.stringContaining("active job") });
 
     const missing = await app.request(`/api/repositories/${crypto.randomUUID()}`, { method: "DELETE" });
     expect(missing.status).toBe(404);

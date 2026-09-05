@@ -20,14 +20,22 @@ process.env.GIT_COMMITTER_NAME = config.GIT_AUTHOR_NAME;
 process.env.GIT_COMMITTER_EMAIL = config.GIT_AUTHOR_EMAIL;
 const queue = createJobQueue(config);
 await queue.health();
-const { github, events } = createSharedServices(config, queue);
+const { github, events, providerUsage } = createSharedServices(config, queue);
 const staleJobsRecovered = await recoverStaleJobs(config, github, events);
 const providers = {
-  codex: createAgentProvider("codex"),
+  codex: createAgentProvider("codex", providerUsage),
   opencode: createAgentProvider("opencode"),
 };
 const runner = createJobRunner({ config, providers, github, events, queue });
-const worker = startWorkerLoops(config, queue, runner, settings, () => recoverStaleJobs(config, github, events));
+const worker = startWorkerLoops(
+  config,
+  queue,
+  runner,
+  settings,
+  () => recoverStaleJobs(config, github, events),
+  { codex: providerUsage },
+  events,
+);
 logger.info("Worker started", {
   environment: config.APP_ENV,
   provider: config.AGENT_PROVIDER,

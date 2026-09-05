@@ -3,7 +3,7 @@ import Link from "next/link";
 import { EmptyState } from "@/components/ui/empty-state";
 import { JobKindPill, StatusPill } from "@/components/ui/status-pill";
 import type { Jobs } from "@/hooks/api";
-import { dateTime, duration, shortCommit, statusLabel, subjectLabel, triggerLabel } from "@/lib/format";
+import { activeDuration, dateTime, quotaWaitDuration, shortCommit, statusLabel, subjectLabel, triggerLabel } from "@/lib/format";
 
 type JobSummary = Jobs["items"][number];
 
@@ -17,6 +17,7 @@ export function JobTable({ jobs, compact = false }: { jobs: JobSummary[]; compac
         <tbody>
           {jobs.map((job) => {
             const trigger = triggerLabel(job.trigger);
+            const hasQuotaWait = job.status === "WAITING_FOR_QUOTA" || job.quotaWaitDurationMs > 0 || Boolean(job.quotaWaitStartedAt);
             const context = [
               job.headSha ? `head ${shortCommit(job.headSha)}` : null,
               trigger,
@@ -38,7 +39,7 @@ export function JobTable({ jobs, compact = false }: { jobs: JobSummary[]; compac
                 </td>
                 <td data-label="Repository"><span className="job-repository">{job.repository.fullName}</span></td>
                 <td data-label="Agent"><span className="job-agent"><strong>{statusLabel(job.provider)}</strong><span>{job.model}</span><span>{job.reasoningEffort ? `${statusLabel(job.reasoningEffort)} reasoning` : "Provider default"}</span></span></td>
-                <td data-label={compact ? "Started" : "Timing"} className="numeric"><span className="job-timing"><time dateTime={job.createdAt}>{dateTime(job.createdAt)}</time>{compact ? null : <span>{duration(job.durationMs)}</span>}</span></td>
+                <td data-label={compact ? "Started" : "Timing"} className="numeric"><span className="job-timing"><time dateTime={job.createdAt}>{dateTime(job.createdAt)}</time>{compact ? null : hasQuotaWait ? <span>{activeDuration(job.activeDurationMs, job.activeStartedAt)} active · {quotaWaitDuration(job.quotaWaitDurationMs, job.quotaWaitStartedAt)} quota wait</span> : <span>{activeDuration(job.activeDurationMs, job.activeStartedAt)}</span>}</span></td>
               </tr>
             );
           })}

@@ -161,9 +161,9 @@ Label flow:
 - stale issue jobs also move the issue to `agent:blocked`; stale PR jobs restore their review/fix
   trigger for the next scan;
 - cancellation removes worker labels while unrelated labels are always preserved;
-- Retry restores the relevant label (`ready` on issues, the requested label on Pull Requests), then
-  a new scan captures fresh state and creates a new history row. The earlier row is never
-  overwritten.
+- Retry rearms the same durable job directly and removes scanner trigger labels. Failed jobs retain
+  their session and worktree when available; jobs without a persisted session restart from the
+  captured workspace or baseline. Attempts and recovery events remain on the original history row.
 
 Only these labels create work during a scan:
 
@@ -351,13 +351,13 @@ empty, API-unavailable, invalid-repository, stale/failed, and narrow-screen stat
 - `GET /repositories`, `GET /scans`, `GET /events` — operational history;
 - `GET/PATCH /settings` — runtime configuration without exposing Telegram secrets;
 - `POST /scans/run` — the same scanner used by cron;
-- `POST /jobs/:id/cancel` — cancels queued/running work and causes a running provider to abort on
+- `POST /jobs/:id/cancel` — cancels queued, quota-waiting, or running work and causes a running provider to abort on
   the next heartbeat;
 - `POST /jobs/:id/retry` — eligible only for failed, blocked, cancelled, or stale jobs;
 - `POST /notifications/test` — persists and dispatches a Telegram test event.
 
-The dashboard polls only while active work is present. PostgreSQL rows remain authoritative if a
-browser closes or a container restarts.
+The dashboard polls only while active work is present, with a slower cadence for quota-waiting
+jobs. PostgreSQL rows remain authoritative if a browser closes or a container restarts.
 
 ## Scheduler, locking, and parallelism
 
@@ -373,14 +373,20 @@ same pipeline. A nullable unique `activeEnvironmentKey` in PostgreSQL permits on
 per `APP_ENV`; a competing discovery request is recorded as `SKIPPED`. Issues have a unique active
 key (repository + issue) and Pull Request jobs have a unique active key
 (repository + PR + head SHA + job kind), so duplicate scans cannot create duplicate active work.
-The scanners write the durable PostgreSQL history rows, then enqueue the same `queueJobId` in
-BullMQ. Workers alone perform a guarded `QUEUED` → `RUNNING` transition, so duplicate delivery is
-ignored. Set `MAX_PARALLEL_JOBS=1` for sequential behavior; raising it changes BullMQ worker
+The scanners write durable PostgreSQL history rows, then enqueue a BullMQ delivery whose payload
+contains the PostgreSQL job ID. Delivery IDs are unique per enqueue so a durable job can be
+requeued, while workers still perform a guarded `QUEUED` → `RUNNING` transition and ignore duplicate
+delivery. If Codex reports an exhausted structured rate-limit window, admission instead performs a
+guarded `QUEUED` → `WAITING_FOR_QUOTA` transition without claiming an execution attempt. The next
+scheduled scan reads the account snapshot once and requeues the same durable job when quota is
+available. Set `MAX_PARALLEL_JOBS=1` for sequential behavior; raising it changes BullMQ worker
 concurrency. BullMQ owns retries and locks while PostgreSQL retains the visible business state.
 
 At worker startup, expired running jobs become `STALE` and release their active key. For issue jobs
 the issue returns to the unlabelled state; for PR jobs the scanner-facing label is restored so the
-next scan reschedules the work. Use Retry to create a new attempt/history row.
+next scan reschedules the work. Retry rearms the same durable job directly; failed executions retain
+their provider session and worktree for resume, while jobs without a persisted session restart in
+their captured workspace or baseline.
 
 ## Agent runtime
 
@@ -440,10 +446,11 @@ the prior effort is incompatible. The bootstrap `CODEX_*` values are checked aga
 catalog during startup and Settings updates.
 
 Each invocation is a new `codex exec --json` process using `workspace-write`, automatic approval
-review, the role-specific model/reasoning, the assigned worktree, and the response file path. The
-adapter does not resume an earlier thread. Auth persists in `codex_home`; the canonical runtime is
-not stored there. Coding and review reasoning effort are separate so each role can be tuned for its
-quality and cost needs.
+review, the role-specific model/reasoning, the assigned worktree, and the response file path. A
+retry with a persisted session uses `codex exec resume` in the retained worktree; jobs without a
+session start a new thread. Auth persists in `codex_home`; the canonical runtime is not stored
+there. Coding and review reasoning effort are separate so each role can be tuned for its quality
+and cost needs.
 
 OpenAI documents `codex exec`, JSONL, output schemas, and sandbox flags in the official [Codex CLI
 reference](https://developers.openai.com/codex/cli/reference). Account/device login, `CODEX_HOME`,
@@ -476,10 +483,11 @@ OPENCODE_CONFIG_DIR=/data/opencode-config
 OPENCODE_PERMISSION={"*":"allow"}
 ```
 
-The adapter launches a fresh `opencode run --format json` process, sends the prompt on stdin, and
-normalizes raw JSON events. `OPENCODE_PERMISSION` allows required noninteractive repository/GitHub
-tools inside the already isolated worker container. Do not expose the Docker socket or unrelated
-host directories to that container.
+The adapter launches a fresh `opencode run --format json` process for each invocation, sends the
+prompt on stdin, and normalizes raw JSON events; persisted OpenCode sessions are not resumed.
+`OPENCODE_PERMISSION` allows required noninteractive repository/GitHub tools inside the already
+isolated worker container. Do not expose the Docker socket or unrelated host directories to that
+container.
 
 The default uses the [OpenCode Go](https://opencode.ai/docs/go/) subscription (`opencode-go`
 provider) rather than pay-per-token API billing. Authenticate the provider inside the worker

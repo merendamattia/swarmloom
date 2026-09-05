@@ -44,11 +44,27 @@ export function dateTime(value: string | Date | null | undefined) {
 
 export function duration(milliseconds: number | null | undefined) {
   if (milliseconds == null) return "Not recorded";
-  const seconds = Math.round(milliseconds / 1_000);
+  const seconds = Math.max(0, Math.round(milliseconds / 1_000));
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
   return `${minutes}m ${remainder}s`;
+}
+
+export function quotaWaitDuration(
+  accumulatedMs: number | null | undefined,
+  startedAt: string | Date | null | undefined,
+) {
+  const currentMs = startedAt ? Math.max(0, Date.now() - new Date(startedAt).getTime()) : 0;
+  return duration((accumulatedMs ?? 0) + currentMs);
+}
+
+export function activeDuration(
+  accumulatedMs: number | null | undefined,
+  startedAt: string | Date | null | undefined,
+) {
+  const currentMs = startedAt ? Math.max(0, Date.now() - new Date(startedAt).getTime()) : 0;
+  return duration((accumulatedMs ?? 0) + currentMs);
 }
 
 export function statusLabel(value: string) {

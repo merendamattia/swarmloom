@@ -16,6 +16,7 @@ enum RepositoryStatus {
 enum JobStatus {
   QUEUED
   RUNNING
+  WAITING_FOR_QUOTA
   COMPLETED
   FAILED
   BLOCKED
@@ -116,13 +117,21 @@ model Job {
   status                   JobStatus     @default(QUEUED)
   activeIssueKey          String?       @unique
   activePrKey             String?       @unique
-  queueJobId               String        @unique
   queuedAt                DateTime      @default(now())
   startedAt               DateTime?
+  activeStartedAt         DateTime?
   completedAt             DateTime?
   durationMs              Int?
+  activeDurationMs        Int           @default(0)
+  quotaWaitDurationMs     Int           @default(0)
+  quotaWaitStartedAt      DateTime?
+  quotaResetAt            DateTime?
+  quotaWindow             String?
+  quotaUsedPercent        Float?
+  quotaMessage            String?       @db.Text
   branchName              String
   worktreePath            String?
+  worktreeCleanupRequired Boolean       @default(false)
   baselineCommit          String
   pullRequestNumber       Int?
   pullRequestUrl          String?
@@ -133,7 +142,7 @@ model Job {
   provider                AgentProvider
   model                   String
   reasoningEffort         String?
-  implementationSessionId String?
+  sessionId               String?
   exitCode                Int?
   result                   Json?         @db.JsonB
   errorMessage             String?       @db.Text
@@ -144,6 +153,9 @@ model Job {
   supportIssueCreatingAt  DateTime?
   supportIssueReconcileRequired Boolean   @default(false)
   workerId                 String?
+  claimToken               String?
+  cleanupToken             String?
+  cleanupLeaseExpiresAt    DateTime?
   attempts                 Int           @default(0)
   heartbeatAt              DateTime?
   createdAt                DateTime      @default(now())
@@ -156,6 +168,8 @@ model Job {
   @@index([environment, status, queuedAt])
   @@index([provider, createdAt])
   @@index([repositoryId, pullRequestNumber])
+  @@index([environment, status, quotaWaitStartedAt])
+  @@index([environment, status, worktreeCleanupRequired])
   @@map("job")
 }
 
@@ -192,6 +206,7 @@ model Review {
   id               String             @id @default(cuid())
   jobId            String             @unique
   job              Job                @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  claimToken       String?
   pullRequestId    String?
   pullRequest      ManagedPullRequest? @relation(fields: [pullRequestId], references: [id], onDelete: SetNull)
   pullRequestNumber Int?

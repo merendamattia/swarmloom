@@ -18,7 +18,7 @@ export function providerEnvironment(environment: Record<string, string | undefin
   return Object.fromEntries(Object.entries(environment).filter(([key]) => !key.endsWith("_API_KEY")));
 }
 
-async function readLines(
+export async function readLines(
   stream: ReadableStream<Uint8Array>,
   onLine: (line: string) => void | Promise<void>,
 ) {
@@ -42,10 +42,11 @@ export async function runJsonlProcess(
   signal: AbortSignal | undefined,
   onJson: (event: unknown) => void | Promise<void>,
   environment = providerEnvironment(globalThis.process.env),
+  cwd?: string,
 ): Promise<ProcessResult> {
   if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
   const process = Bun.spawn(command, {
-    cwd: undefined,
+    cwd,
     env: environment,
     stdin: "pipe",
     stdout: "pipe",

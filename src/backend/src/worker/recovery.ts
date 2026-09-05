@@ -5,20 +5,120 @@ import { redactSecrets } from "../core/secrets.ts";
 import type { Config } from "../core/config-schema.ts";
 import { removeJobWorktree, repositoryPath } from "../git/repositories.ts";
 import { jobRepository } from "../repositories/jobs.ts";
+import { reviewRepository } from "../repositories/reviews.ts";
+import { recoverCancelledWorktrees } from "../worktrees/recovery.ts";
+
+type RemoveWorktree = typeof removeJobWorktree;
+type TerminalRecoveryConfig = Pick<Config, "APP_ENV" | "DATA_DIR">;
+
+export async function recoverTerminalJobs(
+  config: TerminalRecoveryConfig,
+  events: Pick<EventService, "record">,
+  removeWorktree: RemoveWorktree = removeJobWorktree,
+) {
+  const jobs = await jobRepository.findTerminalRecoveryJobs(config.APP_ENV);
+  let recovered = 0;
+
+  for (const job of jobs) {
+    if (job.status === "FAILED") {
+      if (job.cleanupToken && job.worktreePath) {
+        const cleanup = await jobRepository.claimFailedWorktreeCleanup(job.id, job.worktreePath);
+        if (!cleanup) continue;
+        try {
+          await removeWorktree({
+            worktreePath: cleanup.path,
+            repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
+            gitEnvironment: undefined,
+          });
+          if (!await jobRepository.clearWorktree(job.id, null, cleanup.cleanupToken)) continue;
+          if (await jobRepository.discardFailedJob(job.id, null)) recovered += 1;
+        } catch (error) {
+          await events.record({
+            type: "WORKTREE_CLEANUP_REQUIRED",
+            level: "ERROR",
+            message: `Could not remove failed job worktree ${job.worktreePath}: ${redactSecrets(error instanceof Error ? error.message : String(error))}`,
+            jobId: job.id,
+            repositoryId: job.repositoryId,
+            scanRunId: job.scanRunId ?? undefined,
+            metadata: { issueUrl: job.issueUrl },
+          });
+        }
+        continue;
+      }
+      if (!job.cleanupToken && (job.workerId || job.claimToken)
+        && await jobRepository.releaseWorker(job.id, job.workerId, job.claimToken)) {
+        recovered += 1;
+      }
+      continue;
+    }
+    if (!job.worktreePath) {
+      if (!job.cleanupToken && (job.workerId || job.claimToken)
+        && await jobRepository.releaseWorker(job.id, job.workerId, job.claimToken)) {
+        recovered += 1;
+      }
+      continue;
+    }
+
+    const cleanup = await jobRepository.claimTerminalWorktreeCleanup(job.id, job.worktreePath);
+    if (!cleanup) continue;
+    try {
+      await removeWorktree({
+        worktreePath: cleanup.path,
+        repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
+        gitEnvironment: undefined,
+      });
+      if (!await jobRepository.clearWorktree(job.id, null, cleanup.cleanupToken)) continue;
+      if (await jobRepository.releaseWorker(job.id, null, null)) recovered += 1;
+    } catch (error) {
+      await events.record({
+        type: "WORKTREE_CLEANUP_REQUIRED",
+        level: "ERROR",
+        message: `Could not remove terminal ${job.jobType} worktree ${job.worktreePath}: ${redactSecrets(error instanceof Error ? error.message : String(error))}`,
+        jobId: job.id,
+        repositoryId: job.repositoryId,
+        scanRunId: job.scanRunId ?? undefined,
+        metadata: { issueUrl: job.issueUrl },
+      });
+    }
+  }
+
+  return recovered;
+}
 
 export async function recoverStaleJobs(config: Config, github: GitHubClient, events: EventService) {
+  await recoverTerminalJobs(config, events);
+  await recoverCancelledWorktrees(config, events);
+  await reviewRepository.reconcileCancelledJobs(config.APP_ENV);
   const staleJobs = await jobRepository.recoverStaleBefore(
     config.APP_ENV,
     new Date(Date.now() - config.STALE_JOB_THRESHOLD_MS),
   );
   for (const job of staleJobs) {
+    let cleanupComplete = !job.worktreePath;
     if (job.worktreePath) {
-      await removeJobWorktree({
-        worktreePath: job.worktreePath,
-        repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
-        gitEnvironment: undefined,
-      });
+      try {
+        const cleanup = await jobRepository.claimWorktreeCleanup(job.id, job.workerId, job.claimToken, job.worktreePath);
+        if (cleanup) {
+          await removeJobWorktree({
+            worktreePath: cleanup.path,
+            repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
+            gitEnvironment: undefined,
+          });
+          cleanupComplete = await jobRepository.clearWorktree(job.id, job.claimToken, cleanup.cleanupToken);
+        }
+      } catch (error) {
+        await events.record({
+          type: "WORKTREE_CLEANUP_REQUIRED",
+          level: "ERROR",
+          message: `Could not remove stale job worktree ${job.worktreePath}: ${redactSecrets(error instanceof Error ? error.message : String(error))}`,
+          jobId: job.id,
+          repositoryId: job.repositoryId,
+          scanRunId: job.scanRunId ?? undefined,
+          metadata: { issueUrl: job.issueUrl },
+        });
+      }
     }
+    if (cleanupComplete) await jobRepository.releaseWorker(job.id, job.workerId, job.claimToken);
     await events.record({
       type: "JOB_FAILED",
       level: "ERROR",

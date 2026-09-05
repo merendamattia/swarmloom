@@ -18,14 +18,18 @@ import type { GitHubClient } from "../github/client.ts";
 import { configuredAgent } from "../providers/index.ts";
 import { createSupportIssue } from "../support-issues/service.ts";
 import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.ts";
+import { githubGitEnvironment } from "../github/git-auth.ts";
+import { removeJobWorktree, repositoryPath } from "../git/repositories.ts";
 import { dashboardExceptionRepository } from "../repositories/dashboard-exceptions.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import { repositoryRepository } from "../repositories/repositories.ts";
+import { reviewRepository } from "../repositories/reviews.ts";
 import type { JobQueue } from "../queue/service.ts";
+import { cleanupCancelledWorktree } from "../worktrees/recovery.ts";
 
 type Scanner = { run(source: "SCHEDULED" | "MANUAL"): Promise<{ id: string; status: string }> };
 type ApiGitHub = Pick<GitHubClient,
-  "getIssue" | "setIssueLabels" | "addIssueComment" | "getPullRequestLabels" | "setPullRequestLabels" | "createIssue" | "findIssueByMarker">;
+  "getIssue" | "setIssueLabels" | "addIssueComment" | "getPullRequest" | "getPullRequestLabels" | "setPullRequestLabels" | "createIssue" | "findIssueByMarker">;
 type Scheduler = { restart(): void };
 type Startup = Awaited<ReturnType<typeof validateStartup>>;
 
@@ -35,7 +39,8 @@ type Dependencies = {
   github: ApiGitHub;
   events: EventService;
   startup: Startup;
-  queue: Pick<JobQueue, "health" | "remove">;
+  queue: Pick<JobQueue, "health" | "remove" | "enqueue">;
+  removeWorktree?: typeof removeJobWorktree;
   settings: SettingsService;
   scheduler: Scheduler;
 };
@@ -50,7 +55,7 @@ function configuredAgentProfiles(config: Config) {
 }
 
 const jobQuery = z.object({
-  status: z.enum(["QUEUED", "RUNNING", "COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"]).optional(),
+  status: z.enum(["QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"]).optional(),
   jobType: z.enum(["IMPLEMENTATION", "FIX", "REVIEW", "DECOMPOSITION"]).optional(),
   subjectType: z.enum(["ISSUE", "PULL_REQUEST"]).optional(),
   provider: z.enum(["CODEX", "OPENCODE"]).optional(),
@@ -71,6 +76,13 @@ const jobSummaryFields = {
   status: true,
   completedAt: true,
   durationMs: true,
+  activeDurationMs: true,
+  quotaWaitDurationMs: true,
+  quotaWaitStartedAt: true,
+  quotaResetAt: true,
+  quotaWindow: true,
+  quotaUsedPercent: true,
+  quotaMessage: true,
   branchName: true,
   baselineCommit: true,
   pullRequestNumber: true,
@@ -81,7 +93,9 @@ const jobSummaryFields = {
   model: true,
   reasoningEffort: true,
   startedAt: true,
+  activeStartedAt: true,
   attempts: true,
+  sessionId: true,
   errorMessage: true,
   updatedAt: true,
   createdAt: true,
@@ -97,7 +111,7 @@ const repositoryJobSummarySelect = {
   ...jobSummaryFields,
   review: { select: { status: true } },
 } satisfies Prisma.JobSelect;
-export function createApp({ config, scanner, github, events, startup, queue, settings, scheduler }: Dependencies) {
+export function createApp({ config, scanner, github, events, startup, queue, removeWorktree = removeJobWorktree, settings, scheduler }: Dependencies) {
   const app = new Hono().basePath("/api");
   app.use("*", requestId(), secureHeaders(), cors({
     origin: config.FRONTEND_URL,
@@ -201,7 +215,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         prisma.job.groupBy({ where: { environment: config.APP_ENV }, by: ["status"], _count: true }),
         prisma.repository.findMany({ orderBy: { fullName: "asc" } }),
         prisma.job.findMany({
-          where: { environment: config.APP_ENV, status: "RUNNING" },
+          where: { environment: config.APP_ENV, status: { in: ["RUNNING", "WAITING_FOR_QUOTA"] } },
           orderBy: { startedAt: "asc" },
           select: jobSummarySelect,
         }),
@@ -279,9 +293,10 @@ export function createApp({ config, scanner, github, events, startup, queue, set
           events: { orderBy: { createdAt: "asc" } },
         },
       });
-      return job
-        ? context.json({ ...job, pullRequestUrl: canonicalPullRequestUrl(job.repository, job.pullRequestNumber) })
-        : context.json({ error: "Not found" }, 404);
+      if (!job) return context.json({ error: "Not found" }, 404);
+      const { claimToken: _claimToken, cleanupToken: _cleanupToken, review, ...publicJob } = job;
+      const publicReview = review ? (({ claimToken: _reviewClaimToken, ...safeReview }) => safeReview)(review) : null;
+      return context.json({ ...publicJob, review: publicReview, pullRequestUrl: canonicalPullRequestUrl(job.repository, job.pullRequestNumber) });
     })
     .post("/jobs/:id/support-issue", async (context) => {
       const result = await createSupportIssue({ config, github, jobId: context.req.param("id") });
@@ -336,7 +351,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         : undefined);
       if (result?.blocked) {
         return context.json({
-          error: `Cannot remove the repository while ${result.activeJobs} active job${result.activeJobs === 1 ? "" : "s"} ${result.activeJobs === 1 ? "is" : "are"} queued or running. Cancel or finish them first.`,
+          error: `Cannot remove the repository while ${result.activeJobs} active job${result.activeJobs === 1 ? "" : "s"} ${result.activeJobs === 1 ? "is" : "are"} queued, waiting, or running. Cancel or finish them first.`,
         }, 409);
       }
       if (configured) {
@@ -356,7 +371,13 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       });
       if (!job) return context.json({ error: "Not found" }, 404);
       if (!await jobRepository.cancel(job.id)) return context.json({ error: "Job is already terminal" }, 409);
-      await queue.remove(job.queueJobId);
+      if (job.status === "WAITING_FOR_QUOTA" && job.worktreePath) {
+        await cleanupCancelledWorktree(config, events, job, removeWorktree);
+      }
+      if (job.status === "WAITING_FOR_QUOTA" && job.jobType === "REVIEW") {
+        await reviewRepository.cancelForJob(job.id);
+      }
+      await queue.remove(job.id);
       await events.record({
         type: "JOB_CANCELLED",
         message: `Cancelled ${job.jobType} job for ${job.repository.fullName}#${job.issueNumber}`,
@@ -388,42 +409,158 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       if (!["FAILED", "BLOCKED", "CANCELLED", "STALE"].includes(job.status)) {
         return context.json({ error: "Only failed, blocked, cancelled, or stale jobs can be retried" }, 409);
       }
+
+      let currentPullRequest;
       if (job.subjectType === "PULL_REQUEST" && job.pullRequestNumber) {
         try {
-          const labels = await github.getPullRequestLabels(job.repository.fullName, job.pullRequestNumber);
-          const nextLabels = job.jobType === "REVIEW"
-            ? [config.PR_REVIEW_REQUESTED_LABEL]
-            : [config.PR_FIX_REQUESTED_LABEL];
+          currentPullRequest = await github.getPullRequest(job.repository.fullName, job.pullRequestNumber);
+        } catch (error) {
+          await events.record({
+            type: "GITHUB_RECONCILIATION_REQUIRED",
+            level: "ERROR",
+            message: `Could not validate the pull request head for ${job.repository.fullName}#${job.pullRequestNumber}: ${redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
+            jobId: job.id,
+            repositoryId: job.repositoryId,
+            metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber },
+          });
+          return context.json({ error: "Could not validate the pull request head" }, 502);
+        }
+      }
+      if (currentPullRequest && job.headSha && currentPullRequest.headSha !== job.headSha) {
+        const trigger = job.jobType === "REVIEW" ? config.PR_REVIEW_REQUESTED_LABEL : config.PR_FIX_REQUESTED_LABEL;
+        try {
+          const cleanup = job.worktreePath
+            ? await jobRepository.claimWorktreeCleanup(job.id, null, job.claimToken, job.worktreePath)
+            : null;
+          if (job.worktreePath && !cleanup) {
+            return context.json({ error: "Job cleanup is still in progress" }, 409);
+          }
+          if (cleanup) {
+            await removeWorktree({
+              worktreePath: cleanup.path,
+              repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
+              gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
+            });
+            if (!await jobRepository.clearWorktree(job.id, job.claimToken, cleanup.cleanupToken)) {
+              return context.json({ error: "Job cleanup is still in progress" }, 409);
+            }
+          }
+          if (job.status === "FAILED" && !await jobRepository.discardFailedJob(job.id, job.claimToken)) {
+            return context.json({ error: "Job cleanup is still in progress" }, 409);
+          }
+          const labels = await github.getPullRequestLabels(job.repository.fullName, job.pullRequestNumber!);
           await github.setPullRequestLabels(
             job.repository.fullName,
-            job.pullRequestNumber,
-            replacePullRequestLabels(labels, config, nextLabels),
+            job.pullRequestNumber!,
+            replacePullRequestLabels(labels, config, [trigger]),
+          );
+          await github.addIssueComment(
+            job.repository.fullName,
+            job.pullRequestNumber!,
+            `Retry was not queued because the pull request advanced from ${job.headSha} to ${currentPullRequest.headSha}. The ${trigger} trigger was restored for the current head.`,
           );
         } catch (error) {
           await events.record({
             type: "GITHUB_RECONCILIATION_REQUIRED",
             level: "ERROR",
-            message: `Could not restore the pull request label for ${job.repository.fullName}#${job.pullRequestNumber}: ${redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
+            message: `Could not restore the pull request retry trigger for ${job.repository.fullName}#${job.pullRequestNumber}: ${redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
+            jobId: job.id,
+            repositoryId: job.repositoryId,
+            metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber, headSha: currentPullRequest.headSha },
+          });
+          return context.json({ error: "Could not restore the pull request retry trigger" }, 502);
+        }
+        return context.json({ error: "Pull request head changed; retry was not queued" }, 409);
+      }
+
+      let requeued;
+      try {
+        requeued = await jobRepository.requeueForRetry(job.id, config.APP_ENV);
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+          return context.json({ error: "A job for this issue or pull request is already active" }, 409);
+        }
+        throw error;
+      }
+      if (!requeued) {
+        const current = await prisma.job.findFirst({
+          where: { id: job.id, environment: config.APP_ENV },
+          select: { status: true, workerId: true, cleanupToken: true, worktreePath: true },
+        });
+        const cleanupPending = current?.workerId !== null || current?.cleanupToken !== null
+          || (current?.status !== "FAILED" && current?.worktreePath !== null);
+        return current
+          ? context.json({ error: current.status === "QUEUED" || current.status === "RUNNING" ? "Retry is already in progress" : cleanupPending ? "Job cleanup is still in progress" : "Job is no longer retryable" }, 409)
+          : context.json({ error: "Not found" }, 404);
+      }
+      const sessionResumed = Boolean(requeued.sessionId);
+      await events.record({
+        type: "JOB_RESUME_REQUESTED",
+        message: sessionResumed
+          ? `Retry requested for ${job.jobType} job on ${job.repository.fullName}#${job.issueNumber}; persisted session ${requeued.sessionId} will be resumed`
+          : `Retry requested for ${job.jobType} job on ${job.repository.fullName}#${job.issueNumber}; no provider session was persisted`,
+        jobId: job.id,
+        repositoryId: job.repositoryId,
+        metadata: {
+          issueUrl: job.issueUrl,
+          pullRequestNumber: job.pullRequestNumber ?? undefined,
+          attempt: requeued.attempts + 1,
+          sessionId: requeued.sessionId ?? undefined,
+          sessionResumed,
+        },
+      });
+      const retryComment = sessionResumed
+        ? `Worker retry queued. The existing provider session ${requeued.sessionId} will resume in the retained workspace.`
+        : "Worker retry queued. No provider session was persisted, so execution will restart in the retained workspace.";
+      if (job.subjectType === "PULL_REQUEST" && job.pullRequestNumber) {
+        try {
+          const labels = await github.getPullRequestLabels(job.repository.fullName, job.pullRequestNumber);
+          const trigger = job.jobType === "REVIEW" ? config.PR_REVIEW_REQUESTED_LABEL : config.PR_FIX_REQUESTED_LABEL;
+          await github.setPullRequestLabels(
+            job.repository.fullName,
+            job.pullRequestNumber,
+            replacePullRequestLabels(labels, config, [trigger]),
+          );
+          await github.addIssueComment(
+            job.repository.fullName,
+            job.pullRequestNumber,
+            retryComment,
+          );
+        } catch (error) {
+          await events.record({
+            type: "GITHUB_RECONCILIATION_REQUIRED",
+            level: "ERROR",
+            message: `Could not reconcile the pull request retry for ${job.repository.fullName}#${job.pullRequestNumber}: ${redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
             jobId: job.id,
             repositoryId: job.repositoryId,
             metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber },
           });
         }
+        await reconcileIssue(job, [config.ISSUE_WORKING_LABEL], retryComment);
       } else {
-        if (!await reconcileIssue(job, [config.ISSUE_READY_LABEL],
-          `Retry requested for prior worker job ${job.id}.`)) {
-          return context.json({ error: "Could not restore the GitHub ready label" }, 502);
-        }
+        await reconcileIssue(
+          job,
+          [config.ISSUE_WORKING_LABEL],
+          retryComment,
+        );
       }
-      await events.record({
-        type: "JOB_RETRY_REQUESTED",
-        message: `Retry requested for ${job.jobType} job on ${job.repository.fullName}#${job.issueNumber}`,
-        jobId: job.id,
-        repositoryId: job.repositoryId,
-        metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber ?? undefined },
-      });
-      const scan = await scanner.run("MANUAL");
-      return context.json({ scanId: scan.id, scanStatus: scan.status }, 202);
+      try {
+        await queue.enqueue(job.id);
+      } catch (error) {
+        const message = redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000);
+        if (await jobRepository.failQueued(job.id, message, true)) {
+          await events.record({
+            type: "JOB_FAILED",
+            level: "ERROR",
+            message: `Could not enqueue retry for ${job.repository.fullName}#${job.issueNumber}`,
+            jobId: job.id,
+            repositoryId: job.repositoryId,
+            metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber ?? undefined },
+          });
+        }
+        return context.json({ error: "Could not enqueue the job retry" }, 502);
+      }
+      return context.json({ jobId: job.id, status: "QUEUED", sessionResumed }, 202);
     })
     .get("/scans", async (context) => context.json(await prisma.scanRun.findMany({
       where: { environment: config.APP_ENV }, orderBy: { startedAt: "desc" }, take: 100,
