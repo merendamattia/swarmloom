@@ -1,4 +1,5 @@
 import type { Config } from "./config-schema.ts";
+import { validateCodexConfig } from "./codex-catalog.ts";
 import { decryptSetting, encryptSetting } from "./settings-crypto.ts";
 import {
   applyRuntimeSettings,
@@ -22,7 +23,9 @@ export function createSettingsService(config: Config) {
       row.key,
       row.secret ? decryptSetting(row.value, config.SETTINGS_ENCRYPTION_KEY) : row.value,
     ]));
-    Object.assign(config, applyRuntimeSettings(config, overrides, environmentBase));
+    const candidate = applyRuntimeSettings(config, overrides, environmentBase);
+    await validateCodexConfig(candidate);
+    Object.assign(config, candidate);
     return config;
   }
 
@@ -32,6 +35,7 @@ export function createSettingsService(config: Config) {
     const values = runtimeSettingValues(config);
     const bootstrap = telegramBootstrapValues(config, rows);
     const bootstrapKeys = new Set(Object.keys(bootstrap));
+    await validateCodexConfig(config);
     await settingsRepository.upsertMany(config.APP_ENV, runtimeSettingDefinitions
       .filter(({ key, secret }) => (!existing.has(key) || bootstrapKeys.has(key))
         && (!secret || Boolean(bootstrap[key] ?? values[key])))
@@ -49,6 +53,7 @@ export function createSettingsService(config: Config) {
     const patch = parseRuntimeSettingsPatch(input);
     const environmentPatch = patchToEnvironment(patch);
     const candidate = applyRuntimeSettings(config, environmentPatch);
+    await validateCodexConfig(candidate);
     const values: Record<string, string | undefined> = configEnvironment(candidate);
     await settingsRepository.upsertMany(config.APP_ENV, Object.entries(environmentPatch).map(([key]) => {
       const definition = runtimeSettingDefinitions.find((item) => item.key === key);

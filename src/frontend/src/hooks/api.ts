@@ -12,6 +12,7 @@ export type Job = InferResponseType<typeof api.jobs[":id"]["$get"], 200>;
 export type Repositories = InferResponseType<typeof api.repositories.$get, 200>;
 export type Scans = InferResponseType<typeof api.scans.$get, 200>;
 export type Settings = InferResponseType<typeof api.settings.$get, 200>;
+export type CodexGenerationOptions = InferResponseType<typeof api.codex["generation-options"]["$get"], 200>;
 export type SupportIssue = { status: "created" | "existing"; issueNumber: number; issueUrl: string };
 export type SettingsPatch = {
   githubRepositories?: string;
@@ -35,8 +36,8 @@ export type SettingsPatch = {
   opencodeReviewModel?: string;
   codexCodingModel?: string;
   codexReviewModel?: string;
-  codexCodingReasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-  codexReviewReasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  codexCodingReasoningEffort?: string;
+  codexReviewReasoningEffort?: string;
   telegramEnabled?: boolean;
   telegramBotToken?: string;
   telegramChatId?: string;
@@ -72,6 +73,13 @@ export function useStatus() {
 
 export function useSettings() {
   return useQuery({ queryKey: ["settings"], queryFn: async () => json<Settings>(await api.settings.$get()) });
+}
+
+export function useCodexGenerationOptions() {
+  return useQuery({
+    queryKey: ["codex-generation-options"],
+    queryFn: async () => json<CodexGenerationOptions>(await api.codex["generation-options"].$get()),
+  });
 }
 
 export function useDashboard() {

@@ -220,10 +220,10 @@ validation.
 | `AGENT_RUNTIME_DIR` | `/app/agent-runtime` | Canonical runtime path inside the container |
 | `AGENT_RUNTIME_HOST_PATH` | `./agent-runtime`, local Compose only | Host directory mounted read-only at `AGENT_RUNTIME_DIR` during development |
 | `AGENT_PROVIDER` | required; `codex` example | Exactly `codex` or `opencode` |
-| `CODEX_CODING_MODEL` | `gpt-5.6-luna` | Codex model stored on coding jobs (`IMPLEMENTATION`, `FIX`, and `DECOMPOSITION`) |
-| `CODEX_REVIEW_MODEL` | `gpt-5.6-luna` | Codex model stored on `REVIEW` jobs |
-| `CODEX_CODING_REASONING_EFFORT` | `max` | Codex reasoning setting stored on coding jobs; supports validated CLI values |
-| `CODEX_REVIEW_REASONING_EFFORT` | `max` | Codex reasoning setting stored on review jobs; supports validated CLI values |
+| `CODEX_CODING_MODEL` | `gpt-5.6-luna` | Enabled catalog model stored on coding jobs (`IMPLEMENTATION`, `FIX`, and `DECOMPOSITION`) |
+| `CODEX_REVIEW_MODEL` | `gpt-5.6-luna` | Enabled catalog model stored on `REVIEW` jobs |
+| `CODEX_CODING_REASONING_EFFORT` | `max` | Catalog-supported Codex effort stored on coding jobs |
+| `CODEX_REVIEW_REASONING_EFFORT` | `max` | Catalog-supported Codex effort stored on review jobs |
 | `OPENCODE_CODING_MODEL` | `opencode-go/deepseek-v4-flash` | OpenCode `provider/model` stored on coding jobs |
 | `OPENCODE_REVIEW_MODEL` | `opencode-go/deepseek-v4-flash` | OpenCode `provider/model` stored on `REVIEW` jobs |
 | `CODEX_HOME` | `/data/codex-home` | Persistent Codex auth/config directory |
@@ -431,6 +431,13 @@ CODEX_CODING_REASONING_EFFORT=max
 CODEX_REVIEW_REASONING_EFFORT=max
 CODEX_HOME=/data/codex-home
 ```
+
+The migration seeds four enabled Codex models: `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`, and
+`gpt-6-astra`. Luna, Terra, and Sol support `none`, `low`, `medium`, `high`, `xhigh`, and `max`;
+Astra supports `low`, `medium`, `high`, `xhigh`, and `max` only. Settings shows these catalog values
+in separate coding and review selectors and changes an effort to the selected model's default when
+the prior effort is incompatible. The bootstrap `CODEX_*` values are checked against the same
+catalog during startup and Settings updates.
 
 Each invocation is a new `codex exec --json` process using `workspace-write`, automatic approval
 review, the role-specific model/reasoning, the assigned worktree, and the response file path. The
