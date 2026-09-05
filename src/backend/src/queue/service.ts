@@ -13,15 +13,37 @@ export function queuePayload(jobId: string, environment: string): QueuePayload {
   return { jobId, environment };
 }
 
-export function createJobQueue(config: Pick<Config, "APP_ENV" | "REDIS_URL">) {
+export function createJobQueue(config: { APP_ENV: string; REDIS_URL: Config["REDIS_URL"] }) {
   const name = queueName(config.APP_ENV);
   const prefix = "swarmloom";
   const connection = new IORedis(config.REDIS_URL, { maxRetriesPerRequest: null });
   const queue = new Queue<QueuePayload>(name, { connection, prefix });
   const workers: Array<Worker<QueuePayload>> = [];
   const workerConnections: IORedis[] = [];
+  const deliveryStates = ["waiting", "active", "delayed", "prioritized", "completed", "failed"] as const;
+
+  async function deliveriesFor(jobId: string) {
+    return (await queue.getJobs([...deliveryStates])).filter((job) => job.data.jobId === jobId);
+  }
+
+  async function hasLiveDelivery(jobId: string) {
+    const deliveries = await deliveriesFor(jobId);
+    for (const delivery of deliveries) {
+      const state = await delivery.getState();
+      if (state !== "completed" && state !== "failed") return true;
+    }
+    return false;
+  }
 
   async function enqueue(jobId: string) {
+    for (const delivery of await deliveriesFor(jobId)) {
+      const state = await delivery.getState();
+      if (state === "completed" || state === "failed") {
+        await delivery.remove();
+        continue;
+      }
+      return;
+    }
     const deliveryId = `${jobId}-${crypto.randomUUID()}`;
     try {
       await queue.add("execute", queuePayload(jobId, config.APP_ENV), {
@@ -32,7 +54,7 @@ export function createJobQueue(config: Pick<Config, "APP_ENV" | "REDIS_URL">) {
         removeOnFail: { age: 30 * 24 * 60 * 60, count: 5_000 },
       });
     } catch (error) {
-      if (await queue.getJob(deliveryId)) return;
+      if (await hasLiveDelivery(jobId)) return;
       throw error;
     }
   }
@@ -45,13 +67,7 @@ export function createJobQueue(config: Pick<Config, "APP_ENV" | "REDIS_URL">) {
   }
 
   async function remove(jobId: string) {
-    const direct = await queue.getJob(jobId);
-    const pending = await queue.getJobs(["waiting", "delayed", "prioritized"]);
-    const candidates = new Map(
-      [...(direct ? [direct] : []), ...pending]
-        .filter((job) => job.id === jobId || job.data.jobId === jobId)
-        .map((job) => [job.id, job]),
-    );
+    const candidates = new Map((await deliveriesFor(jobId)).map((job) => [job.id, job]));
     let removed = false;
     for (const job of candidates.values()) {
       try {

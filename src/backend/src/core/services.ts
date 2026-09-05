@@ -1,6 +1,7 @@
 import { createEventService } from "../events/service.ts";
 import { createGitHubClient } from "../github/client.ts";
 import { createTelegramNotifier } from "../notifications/telegram.ts";
+import { createCodexUsageReader } from "../providers/codex-usage.ts";
 import { createScanService } from "../scans/service.ts";
 import type { JobQueue } from "../queue/service.ts";
 import type { Config } from "./config-schema.ts";
@@ -21,6 +22,7 @@ export function createSharedServices(config: Config, queue: JobQueue) {
     }).sendQueued(summary),
   };
   const events = createEventService(notifier);
-  const scanner = createScanService({ config, github, events, queue });
-  return { github, events, scanner };
+  const providerUsage = createCodexUsageReader();
+  const scanner = createScanService({ config, github, events, queue, providerUsage });
+  return { github, events, scanner, providerUsage };
 }

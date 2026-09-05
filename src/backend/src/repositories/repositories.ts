@@ -60,7 +60,14 @@ async function remove(
   removeWorktree?: RemoveWorktree,
 ): Promise<RemoveResult> {
   const activeJobs = await prisma.job.count({
-    where: { repositoryId: id, status: { in: ["QUEUED", "RUNNING"] } },
+    where: {
+      repositoryId: id,
+      OR: [
+        { status: { in: ["QUEUED", "RUNNING", "WAITING_FOR_QUOTA"] } },
+        { worktreeCleanupRequired: true },
+        { status: "FAILED", worktreePath: { not: null } },
+      ],
+    },
   });
   if (activeJobs > 0) return { blocked: true, activeJobs };
 

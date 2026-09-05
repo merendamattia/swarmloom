@@ -9,7 +9,7 @@ import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.
 import { loadAgentInstructions } from "../runtime/instructions.ts";
 import type { AgentRole } from "../providers/index.ts";
 import { ProviderProcessError } from "../providers/process.ts";
-import { AgentExecutionError, causeChain, stackTrace, type DiagnosticEvent, type JobDiagnostics } from "./diagnostics.ts";
+import { AgentExecutionError, causeChain, executionFailure, stackTrace, type DiagnosticEvent, type JobDiagnostics } from "./diagnostics.ts";
 import type { GitHubIssueContext } from "../github/client.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import type { RunningJob, RunnerContext, RunnerGitHub } from "./types.ts";
@@ -78,7 +78,7 @@ export async function executeRole(
       context: contextText,
       instructions: await loadAgentInstructions(context.config.AGENT_RUNTIME_DIR),
       model: job.model,
-      reasoningEffort: job.reasoningEffort as Config["CODEX_CODING_REASONING_EFFORT"] | undefined,
+      reasoningEffort: job.reasoningEffort ?? undefined,
       resumeSessionId: requestedSessionId ?? undefined,
       environment: githubGitEnvironment(context.config.GITHUB_TOKEN, job.repository.cloneUrl),
       responseFilePath,
@@ -91,7 +91,7 @@ export async function executeRole(
             throw new Error(`Provider resumed session ${observedSessionId} instead of requested ${requestedSessionId}`);
           }
           sessionId = observedSessionId;
-          if (!await jobRepository.setSessionId(job.id, job.claimToken!, observedSessionId)) {
+          if (!await jobRepository.setSessionId(job.id, job.claimToken, observedSessionId)) {
             throw new Error(`Could not persist provider session for job ${job.id}`);
           }
           job.sessionId = observedSessionId;
@@ -138,7 +138,7 @@ export async function executeRole(
       throw new Error(result.stderr || `Provider did not resume session ${requestedSessionId}`);
     }
     if (resolvedSessionId && !sessionId) {
-      if (!await jobRepository.setSessionId(job.id, job.claimToken!, resolvedSessionId)) {
+      if (!await jobRepository.setSessionId(job.id, job.claimToken, resolvedSessionId)) {
         throw new Error(`Could not persist provider session for job ${job.id}`);
       }
       sessionId = resolvedSessionId;
@@ -154,7 +154,7 @@ export async function executeRole(
         metadata: { attempt: job.attempts, sessionId: requestedSessionId },
       });
     }
-    return {
+    const execution = {
       ...result,
       role,
       sessionId,
@@ -162,8 +162,26 @@ export async function executeRole(
       response: "",
       events: diagnosticEvents,
     };
+    if (result.failure) {
+      throw executionFailure(
+        roleStage(role),
+        role,
+        job,
+        context.provider,
+        execution,
+        new Error(result.failure.message),
+        {
+          failure: result.failure,
+          finalOutput: result.finalOutput,
+          stderr: result.stderr,
+          environment: { ...globalThis.process.env, SWARMLOOM_GITHUB_TOKEN: context.config.GITHUB_TOKEN },
+        },
+      );
+    }
+    return execution;
   } catch (error) {
     await removeResponseFile(responseFilePath);
+    if (error instanceof AgentExecutionError) throw error;
     throw new AgentExecutionError(safeError(error), {
       stage: error instanceof ProviderProcessError ? "provider_process" : roleStage(role),
       role,
@@ -363,12 +381,6 @@ function roleStage(role: AgentRole): JobDiagnostics["stage"] {
 export function safeError(error: unknown) {
 
   return redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000);
-}
-
-export function duration(startedAt: Date | null) {
-  if (!startedAt) return "an unknown duration";
-  const seconds = Math.max(0, Math.round((Date.now() - startedAt.getTime()) / 1_000));
-  return `${seconds}s`;
 }
 
 export { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome, parseTldr };

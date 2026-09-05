@@ -4,7 +4,7 @@
     "bun": {"source":"bun.sh","sourceType":"well-known","computedHash":"068bc2f89783bdb5e7601feb4fcdd4283e7775cfeb5a1e434d8ef597fdd63330"},
     "find-skills": {"source":"vercel-labs/skills","sourceType":"github","skillPath":"skills/find-skills/SKILL.md","computedHash":"b146008599c31057cef1c145774cea5d5afb30e8f43fa802e47a4b461419aaaf"},
     "frontend-design": {"source":"anthropics/skills","sourceType":"github","skillPath":"skills/frontend-design/SKILL.md","computedHash":"4eabc66183767153e404b39d1b839b1c37f2d82d86f0a0d7e880a579d8d62336"},
-    "hono": {"source":"yusukebe/hono-skill","sourceType":"github","skillPath":"skills/hono/SKILL.md","computedHash":"220e5e1b12bbaeec49ec362b6e2262d77632d0536e9758bba9acbbc323fef990"},
+    "hono": {"source":"honojs/skills","sourceType":"github","skillPath":"skills/hono/SKILL.md","computedHash":"6d5e1b9917e2a35968d5bd0b8ffbb70ec694fc448e3c7623be6aab7dd4310855"},
     "impeccable": {"source":"pbakaus/impeccable","sourceType":"github","skillPath":".agents/skills/impeccable/SKILL.md","computedHash":"76e374fd0acb10959d8cb3375e9682f1681ba72d069cdf7d253c0c53293aeed7"},
     "shadcn": {"source":"shadcn/ui","sourceType":"github","skillPath":"skills/shadcn/SKILL.md","computedHash":"c1a68ee06a668aced9ab2b5fbdea5f989864123794eb2e056b339a072dbb7f10"},
     "solid": {"source":"ramziddin/solid-skills","sourceType":"github","skillPath":"skills/solid/SKILL.md","computedHash":"60de610a3c143f79f69552b7da60298bb46c9e8d80ab16c4c111b025823345d1"},

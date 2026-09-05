@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { resolve } from "node:path";
 import { parseConfig } from "../src/core/config-schema.ts";
-import type { AgentProvider, AgentRequest, AgentResult } from "../src/providers/index.ts";
+import type { AgentProvider, AgentRequest, AgentResult, ProviderUsageSnapshot } from "../src/providers/index.ts";
 import { ProviderProcessError } from "../src/providers/process.ts";
 
 const integration = process.env.RUN_INTEGRATION === "1" ? describe : describe.skip;
@@ -208,6 +208,117 @@ integration("job runner", () => {
     expect(diagnosticGitHub.createdIssues[0]?.body).toContain("Stack trace:");
     expect(diagnosticGitHub.createdIssues[0]?.body).toContain("created automatically");
     expect(diagnosticGitHub.createdIssues[0]?.body).not.toContain("created manually");
+  });
+
+  test("pauses a confirmed quota failure and resumes the same session and worktree", async () => {
+    const job = await claimed(issueBase + 50, "IMPLEMENTATION", "ISSUE");
+    const github = fakeGitHub(job.issueNumber, job.branchName, "a".repeat(40));
+    const created: string[] = [];
+    const removed: string[] = [];
+    const exhausted: ProviderUsageSnapshot = {
+      status: "available",
+      availability: "exhausted",
+      observedAt: "2026-08-29T20:00:00.000Z",
+      windows: [{
+        limitId: "codex",
+        limitName: "included",
+        windowType: "primary",
+        usedPercent: 100,
+        remainingPercent: 0,
+        windowDurationMins: 300,
+        resetsAt: "2026-08-29T21:00:00.000Z",
+      }],
+    };
+    const paused = new FakeProvider([{
+      ...success("", "quota-session"),
+      exitCode: 1,
+      stderr: "You've hit your usage limit",
+      failure: { reason: "QUOTA_EXHAUSTED", message: "You've hit your usage limit", quota: exhausted },
+    }]);
+    const runner = createJobRunner({
+      config: { ...config, CREATE_DIAGNOSTIC_ISSUES: true },
+      provider: paused,
+      github,
+      createWorktree: async (input) => { created.push(input.worktreePath); await mkdir(input.worktreePath, { recursive: true }); return input.worktreePath; },
+      removeWorktree: async (input) => { removed.push(input.worktreePath); },
+      gcRepository: async () => {},
+    });
+
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(false);
+    const waiting = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(waiting).toMatchObject({
+      status: "WAITING_FOR_QUOTA",
+      activeIssueKey: `${repositoryId}:${job.issueNumber}`,
+      sessionId: "quota-session",
+      errorMessage: null,
+      quotaWindow: "codex:primary",
+      quotaUsedPercent: 100,
+      quotaMessage: "You've hit your usage limit",
+      worktreePath: created[0],
+    });
+    expect(waiting.diagnostics).toMatchObject({ stderr: "You've hit your usage limit" });
+    expect(created).toHaveLength(1);
+    expect(created[0]).toBe(resolve(config.DATA_DIR, "worktrees", `${job.id}-attempt-1`));
+    expect(removed).toEqual([]);
+    expect(await Bun.file(resolve(config.DATA_DIR, "outcomes", `${job.id}-issue-worker.txt`)).exists()).toBe(false);
+    expect(github.createdIssues).toEqual([]);
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "JOB_FAILED" } })).toBeNull();
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "JOB_WAITING_FOR_QUOTA" } })).not.toBeNull();
+
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { quotaWaitStartedAt: new Date(Date.now() - 10_000) },
+    });
+    const requeued = await jobs.requeueWaitingForQuota(job.id, environment);
+    expect(requeued?.id).toBe(job.id);
+    expect(requeued?.quotaWaitDurationMs).toBeGreaterThanOrEqual(10_000);
+    const claimedAgain = await jobs.claim(job.id, environment, "runner-worker");
+    expect(claimedAgain?.attempts).toBe(2);
+    const persistedWorktreePath = waiting.worktreePath!;
+    expect(persistedWorktreePath).not.toBeNull();
+    const resumed = new FakeProvider([success([
+      "Outcome: implemented",
+      `PR: https://github.com/acme/runner/pull/${job.issueNumber}`,
+      "TL;DR: Resumed the implementation.",
+      "Resumed the implementation.",
+    ].join("\n"), "quota-session")]);
+    const resumedRunner = createJobRunner({
+      config,
+      provider: resumed,
+      github,
+      createWorktree: async (input) => { created.push(input.worktreePath); return input.worktreePath; },
+      removeWorktree: async (input) => { removed.push(input.worktreePath); },
+      gcRepository: async () => {},
+    });
+
+    expect(await resumedRunner.run(job.id, "runner-worker", claimedAgain!.claimToken!)).toBe(true);
+    expect(resumed.calls[0]?.resumeSessionId).toBe("quota-session");
+    expect(resumed.calls[0]?.workingDirectory).toBe(persistedWorktreePath);
+    expect(created).toHaveLength(1);
+    expect(removed).toEqual([persistedWorktreePath]);
+    const completed = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(completed.status).toBe("COMPLETED");
+    expect(completed.activeDurationMs).toBeLessThan(completed.quotaWaitDurationMs);
+  });
+
+  test("removes a response file when a provider throws after writing it", async () => {
+    const job = await claimed(issueBase + 51, "IMPLEMENTATION", "ISSUE");
+    const provider: AgentProvider = {
+      name: "codex",
+      execute: async (request) => {
+        await Bun.write(request.responseFilePath!, "stale response");
+        throw new Error("provider failed after writing a response");
+      },
+    };
+    const runner = createJobRunner({
+      config,
+      provider,
+      github: fakeGitHub(job.issueNumber, job.branchName, "a".repeat(40)),
+      createWorktree: async (input) => input.worktreePath,
+    });
+
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
+    expect(await Bun.file(resolve(config.DATA_DIR, "outcomes", `${job.id}-issue-worker.txt`)).exists()).toBe(false);
   });
 
   test("aborts an active provider when cancellation makes its heartbeat fail", async () => {
@@ -1078,6 +1189,84 @@ integration("job runner", () => {
     });
   });
 
+  test("finalizes a quota-waiting review row when its resumed pull request head is stale", async () => {
+    const issueNumber = issueBase + 29;
+    const managed = await prisma.managedPullRequest.create({
+      data: {
+        repositoryId,
+        prNumber: 916,
+        issueNumber,
+        issueTitle: `Issue ${issueNumber}`,
+        issueUrl: `https://github.com/acme/runner/issues/${issueNumber}`,
+        headBranch: `agent/issue-${issueNumber}`,
+        headSha: "a".repeat(40),
+        baseBranch: "develop",
+        state: "OPEN",
+        workflow: "REVIEW_REQUESTED",
+      },
+    });
+    const state = reviewGitHub(config, issueNumber, `agent/issue-${issueNumber}`, managed.prNumber, "a".repeat(40), "b".repeat(40));
+    const job = await claimed(issueNumber, "REVIEW", "PULL_REQUEST", {
+      pullRequestId: managed.id,
+      pullRequestNumber: managed.prNumber,
+      pullRequestUrl: "https://github.com/acme/runner/pull/916",
+      headSha: "a".repeat(40),
+    });
+    await prisma.review.create({
+      data: {
+        jobId: job.id,
+        claimToken: job.claimToken,
+        provider: job.provider,
+        model: job.model,
+        status: "RUNNING",
+        startedAt: new Date(Date.now() - 10_000),
+        pullRequestId: managed.id,
+        pullRequestNumber: managed.prNumber,
+        headSha: job.headSha,
+      },
+    });
+    const runner = createJobRunner({
+      config,
+      provider: new FakeProvider([]),
+      github: state,
+      createReviewWorktree: async () => { throw new Error("stale review must not create a worktree"); },
+    });
+
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
+    expect(await prisma.review.findUniqueOrThrow({ where: { jobId: job.id } })).toMatchObject({
+      status: "FAILED",
+      errorMessage: expect.stringContaining("head moved"),
+      completedAt: expect.any(Date),
+    });
+  });
+
+  test("stale review completion cannot overwrite a retried review", async () => {
+    const { reviewRepository } = await import("../src/repositories/reviews.ts");
+    const first = await claimed(issueBase + 52, "REVIEW", "PULL_REQUEST");
+    const firstReview = await reviewRepository.start(first.id, first.claimToken!, first.provider, first.model, first.reasoningEffort, {
+      pullRequestId: null,
+      pullRequestNumber: null,
+      headSha: null,
+    });
+    expect(firstReview).not.toBeNull();
+    expect(await jobs.finishRunning(first.id, first.claimToken!, "FAILED", { errorMessage: "first attempt failed" })).toBe(true);
+    expect(await jobs.releaseWorker(first.id, "runner-worker", first.claimToken!)).toBe(true);
+    expect(await jobs.requeueForRetry(first.id, environment)).not.toBeNull();
+
+    const second = await jobs.claim(first.id, environment, "runner-worker");
+    expect(second).not.toBeNull();
+    expect(await reviewRepository.failStaleForJob(first.id, second!.claimToken!)).toBe(true);
+    const secondReview = await reviewRepository.start(second!.id, second!.claimToken!, second!.provider, second!.model, second!.reasoningEffort, {
+      pullRequestId: null,
+      pullRequestNumber: null,
+      headSha: null,
+    });
+    expect(secondReview).not.toBeNull();
+    expect(secondReview!.id).toBe(firstReview!.id);
+    expect(await reviewRepository.finish(firstReview!.id, first.claimToken!, "PASSED", { response: "stale result" })).toBe(false);
+    expect(await prisma.review.findUniqueOrThrow({ where: { id: firstReview!.id } })).toMatchObject({ status: "RUNNING" });
+  });
+
   test("retrying a failed review reuses the same job and never reruns the implementation", async () => {
     const issueNumber = issueBase + 13;
     const implementation = await claimed(issueNumber, "IMPLEMENTATION", "ISSUE");
@@ -1217,7 +1406,11 @@ class FakeProvider implements AgentProvider {
     if (!result) throw new Error("Missing fake provider result");
     if (result.sessionId) this.sessions.push(result.sessionId);
     if (request.responseFilePath) await Bun.write(request.responseFilePath, result.finalOutput);
-    await request.onEvent?.({ type: "SESSION_STARTED", timestamp: new Date().toISOString() });
+    await request.onEvent?.({
+      type: "SESSION_STARTED",
+      timestamp: new Date().toISOString(),
+      metadata: { sessionId: request.resumeSessionId ?? result.sessionId },
+    });
     return result;
   }
 }

@@ -12,6 +12,7 @@ export type Job = InferResponseType<typeof api.jobs[":id"]["$get"], 200>;
 export type Repositories = InferResponseType<typeof api.repositories.$get, 200>;
 export type Scans = InferResponseType<typeof api.scans.$get, 200>;
 export type Settings = InferResponseType<typeof api.settings.$get, 200>;
+export type CodexGenerationOptions = InferResponseType<typeof api.codex["generation-options"]["$get"], 200>;
 export type SupportIssue = { status: "created" | "existing"; issueNumber: number; issueUrl: string };
 export type SettingsPatch = {
   githubRepositories?: string;
@@ -35,8 +36,8 @@ export type SettingsPatch = {
   opencodeReviewModel?: string;
   codexCodingModel?: string;
   codexReviewModel?: string;
-  codexCodingReasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-  codexReviewReasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  codexCodingReasoningEffort?: string;
+  codexReviewReasoningEffort?: string;
   telegramEnabled?: boolean;
   telegramBotToken?: string;
   telegramChatId?: string;
@@ -56,7 +57,13 @@ export type JobFilters = {
   pageSize: number;
 };
 
-const activeStatuses = new Set(["QUEUED", "RUNNING"]);
+const activeStatuses = new Set(["QUEUED", "RUNNING", "WAITING_FOR_QUOTA"]);
+
+function jobPollingInterval(statuses: Iterable<string>) {
+  const values = [...statuses];
+  if (values.includes("RUNNING")) return 3_000;
+  return values.some((status) => activeStatuses.has(status)) ? 15_000 : false;
+}
 
 export function useHealth() {
   return useQuery({ queryKey: ["health"], queryFn: async () => json<Health>(await api.health.$get()) });
@@ -74,15 +81,23 @@ export function useSettings() {
   return useQuery({ queryKey: ["settings"], queryFn: async () => json<Settings>(await api.settings.$get()) });
 }
 
+export function useCodexGenerationOptions() {
+  return useQuery({
+    queryKey: ["codex-generation-options"],
+    queryFn: async () => json<CodexGenerationOptions>(await api.codex["generation-options"].$get()),
+  });
+}
+
 export function useDashboard() {
   return useQuery({
     queryKey: ["dashboard"],
     queryFn: async () => json<Dashboard>(await api.dashboard.$get()),
     refetchInterval: (query) => {
       const data = query.state.data as Dashboard | undefined;
-      return data && (data.activeJobs.length > 0 || Object.entries(data.jobs).some(([status, count]) => activeStatuses.has(status) && count > 0))
-        ? 3_000
-        : false;
+      return data ? jobPollingInterval([
+        ...data.activeJobs.map((job) => job.status),
+        ...Object.entries(data.jobs).flatMap(([status, count]) => count > 0 ? [status] : []),
+      ]) : false;
     },
   });
 }
@@ -101,7 +116,7 @@ export function useJobs(filters: JobFilters) {
       ...(filters.q ? { q: filters.q } : {}),
     } })),
     placeholderData: (previous) => previous,
-    refetchInterval: (query) => (query.state.data as Jobs | undefined)?.items.some((job) => activeStatuses.has(job.status)) ? 3_000 : false,
+    refetchInterval: (query) => jobPollingInterval((query.state.data as Jobs | undefined)?.items.map((job) => job.status) ?? []),
   });
 }
 
@@ -109,7 +124,10 @@ export function useJob(id: string) {
   return useQuery({
     queryKey: ["jobs", id],
     queryFn: async () => json<Job>(await api.jobs[":id"].$get({ param: { id } })),
-    refetchInterval: (query) => activeStatuses.has((query.state.data as Job | undefined)?.status ?? "") ? 2_000 : false,
+    refetchInterval: (query) => {
+      const status = (query.state.data as Job | undefined)?.status;
+      return status === "RUNNING" ? 2_000 : status === "WAITING_FOR_QUOTA" ? 15_000 : activeStatuses.has(status ?? "") ? 3_000 : false;
+    },
   });
 }
 

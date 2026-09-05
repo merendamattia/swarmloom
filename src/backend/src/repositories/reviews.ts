@@ -96,4 +96,52 @@ async function finish(
   });
 }
 
-export const reviewRepository = { start, finish };
+const cancellationMessage = "Review cancelled because its quota-waiting job was cancelled by an operator.";
+const staleMessage = "Review discarded because the pull request head moved while the review was waiting for quota.";
+
+async function failForJob(jobId: string, errorMessage: string, claimToken?: string) {
+  const where = {
+    jobId,
+    status: "RUNNING" as const,
+    ...(claimToken === undefined ? {} : { job: { is: { status: "RUNNING" as const, claimToken } } }),
+  };
+  const review = await prisma.review.findFirst({ where, select: { id: true, startedAt: true } });
+  if (!review) return false;
+  const completedAt = new Date();
+  const updated = await prisma.review.updateMany({
+    where: {
+      id: review.id,
+      status: "RUNNING",
+      ...(claimToken === undefined ? {} : { job: { is: { status: "RUNNING" as const, claimToken } } }),
+    },
+    data: {
+      status: "FAILED",
+      errorMessage,
+      completedAt,
+      durationMs: review.startedAt ? Math.max(0, completedAt.getTime() - review.startedAt.getTime()) : null,
+    },
+  });
+  return updated.count === 1;
+}
+
+async function cancelForJob(jobId: string, errorMessage = cancellationMessage) {
+  return failForJob(jobId, errorMessage);
+}
+
+async function failStaleForJob(jobId: string, claimToken: string) {
+  return failForJob(jobId, staleMessage, claimToken);
+}
+
+async function reconcileCancelledJobs(environment: string) {
+  const reviews = await prisma.review.findMany({
+    where: { status: "RUNNING", job: { is: { environment, status: "CANCELLED" } } },
+    select: { jobId: true },
+  });
+  let finalized = 0;
+  for (const review of reviews) {
+    if (await cancelForJob(review.jobId)) finalized += 1;
+  }
+  return finalized;
+}
+
+export const reviewRepository = { start, finish, cancelForJob, failStaleForJob, reconcileCancelledJobs };

@@ -4,7 +4,6 @@ import { jobRepository } from "../repositories/jobs.ts";
 import { safeWorktreePath } from "./paths.ts";
 import {
   applyPullRequestLabels,
-  duration,
   implementationContext,
   parseJobOutcome,
   parsePullRequestUrl,
@@ -22,23 +21,22 @@ export const runImplementation: JobFlow = async (context) => {
 
   if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
   const localPath = job.repository.localPath;
-  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id), async () => {
+  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id, job.attempts), async () => {
     await context.createWorktree({
       repositoryPath: localPath,
-      worktreePath: safeWorktreePath(config.DATA_DIR, job.id),
+      worktreePath: safeWorktreePath(config.DATA_DIR, job.id, job.attempts),
       branchName: job.branchName,
       baselineCommit: job.baselineCommit,
       gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
     });
   });
   const worktreePath = worktree.path;
-  const gitEnvironment = githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl);
   context.state.worktreeCreated = true;
   context.state.worktreePath = worktreePath;
   context.state.repositoryPath = localPath;
   context.state.worktreePersisted = !worktree.created;
   if (worktree.created) {
-    if (!await jobRepository.setWorktree(job.id, job.claimToken!, worktreePath)) return;
+    if (!await jobRepository.setWorktree(job.id, job.claimToken, worktreePath)) return;
     context.state.worktreePersisted = true;
   }
 
@@ -60,7 +58,7 @@ export const runImplementation: JobFlow = async (context) => {
     signal,
     job,
   );
-  if (!await jobRepository.setExecutionResult(job.id, job.claimToken!, implementation.sessionId, implementation.exitCode)) return;
+  if (!await jobRepository.setExecutionResult(job.id, job.claimToken, implementation.sessionId, implementation.exitCode)) return;
   if (implementation.exitCode !== 0) {
     throw new Error(implementation.stderr || `${provider.name} exited with ${implementation.exitCode}`);
   }
@@ -98,7 +96,7 @@ export const runImplementation: JobFlow = async (context) => {
       throw new Error(`Could not persist managed pull request ${fullName}#${pullRequest.number}`);
     }
     if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
-    const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "COMPLETED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: implementation.response,
       exitCode: implementation.exitCode,
       pullRequestNumber: pullRequest.number,
@@ -149,7 +147,7 @@ export const runImplementation: JobFlow = async (context) => {
     }
     await events.record({
       type: "JOB_COMPLETED",
-      message: `Completed ${fullName}#${job.issueNumber} with PR #${pullRequest.number} using ${provider.name}/${job.model} in ${duration(job.startedAt)}`,
+      message: `Completed ${fullName}#${job.issueNumber} with PR #${pullRequest.number} using ${provider.name}/${job.model}`,
       jobId: job.id,
       repositoryId: job.repositoryId,
       scanRunId: job.scanRunId ?? undefined,
@@ -167,7 +165,7 @@ export const runImplementation: JobFlow = async (context) => {
   }
 
   if (outcome === "requires_decomposition") {
-    const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "COMPLETED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: implementation.response,
       exitCode: implementation.exitCode,
     });
@@ -213,7 +211,7 @@ export const runImplementation: JobFlow = async (context) => {
   }
 
   if (outcome === "blocked") {
-    const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "BLOCKED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "BLOCKED", {
       result: implementation.response,
       exitCode: implementation.exitCode,
     });

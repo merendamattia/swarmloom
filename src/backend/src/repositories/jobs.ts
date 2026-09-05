@@ -23,6 +23,16 @@ export type QueuedJobInput = {
   reasoningEffort?: string;
 };
 
+export type QuotaWaitInput = {
+  resetAt?: string | null;
+  window?: string | null;
+  usedPercent?: number | null;
+  message?: string | null;
+  diagnostics?: Prisma.InputJsonValue;
+  sessionId?: string | null;
+  exitCode?: number | null;
+};
+
 function activeIssueKey(input: QueuedJobInput) {
   return input.subjectType === "ISSUE" ? `${input.repositoryId}:${input.issueNumber}` : null;
 }
@@ -66,6 +76,7 @@ async function claim(id: string, environment: string, workerId: string) {
         "cleanupLeaseExpiresAt" = NULL,
         "attempts" = "attempts" + 1,
         "startedAt" = COALESCE("startedAt", CURRENT_TIMESTAMP),
+        "activeStartedAt" = CURRENT_TIMESTAMP,
         "heartbeatAt" = CURRENT_TIMESTAMP,
         "updatedAt" = CURRENT_TIMESTAMP
     WHERE "id" = ${id}
@@ -76,7 +87,274 @@ async function claim(id: string, environment: string, workerId: string) {
   return job ?? null;
 }
 
-const retryableStatuses: JobStatus[] = ["FAILED", "BLOCKED", "CANCELLED", "STALE"];
+async function findQueued(id: string, environment: string) {
+  return prisma.job.findFirst({
+    where: { id, environment, status: "QUEUED" },
+    select: { id: true, provider: true },
+  });
+}
+
+async function findQueuedJobs(environment: string) {
+  return prisma.job.findMany({
+    where: { environment, status: "QUEUED" },
+    select: {
+      id: true,
+      repositoryId: true,
+      issueNumber: true,
+      issueUrl: true,
+      jobType: true,
+    },
+    orderBy: { queuedAt: "asc" },
+  });
+}
+
+function quotaResetAt(value: string | null | undefined) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function quotaWaitData(input: QuotaWaitInput) {
+  return {
+    quotaWaitStartedAt: new Date(),
+    quotaResetAt: quotaResetAt(input.resetAt),
+    quotaWindow: input.window ?? null,
+    quotaUsedPercent: input.usedPercent ?? null,
+    quotaMessage: input.message ?? null,
+    ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
+    ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
+    ...(input.exitCode === undefined ? {} : { exitCode: input.exitCode }),
+  };
+}
+
+async function waitForQuotaQueued(id: string, environment: string, input: QuotaWaitInput) {
+  const updated = await prisma.job.updateMany({
+    where: { id, environment, status: "QUEUED" },
+    data: {
+      status: "WAITING_FOR_QUOTA",
+      ...quotaWaitData(input),
+      workerId: null,
+      claimToken: null,
+      cleanupToken: null,
+      cleanupLeaseExpiresAt: null,
+      heartbeatAt: null,
+      activeStartedAt: null,
+    },
+  });
+  return updated.count === 1;
+}
+
+async function waitForQuotaRunning(id: string, environment: string, workerId: string, claimToken: string, input: QuotaWaitInput) {
+  const job = await prisma.job.findFirst({
+    where: { id, environment, status: "RUNNING", workerId, claimToken },
+    select: { activeStartedAt: true, startedAt: true, activeDurationMs: true },
+  });
+  if (!job) return false;
+  const now = new Date();
+  const activeStartedAt = job.activeStartedAt ?? job.startedAt;
+  const activeDurationMs = (job.activeDurationMs ?? 0) + (activeStartedAt
+    ? Math.max(0, now.getTime() - activeStartedAt.getTime())
+    : 0);
+  const updated = await prisma.job.updateMany({
+    where: { id, environment, status: "RUNNING", workerId, claimToken },
+    data: {
+      status: "WAITING_FOR_QUOTA",
+      ...quotaWaitData(input),
+      activeStartedAt: null,
+      activeDurationMs,
+      durationMs: activeDurationMs,
+      workerId: null,
+      claimToken: null,
+      cleanupToken: null,
+      cleanupLeaseExpiresAt: null,
+      heartbeatAt: null,
+    },
+  });
+  return updated.count === 1;
+}
+
+async function findWaitingForQuota(environment: string, provider: AgentProvider = "CODEX") {
+  return prisma.job.findMany({
+    where: { environment, provider, status: "WAITING_FOR_QUOTA" },
+    include: { repository: true },
+    orderBy: { quotaWaitStartedAt: "asc" },
+  });
+}
+
+async function findCancelledWorktrees(environment: string, staleBefore: Date) {
+  return prisma.job.findMany({
+    where: {
+      environment,
+      status: "CANCELLED",
+      worktreePath: { not: null },
+      OR: [
+        { workerId: null },
+        { heartbeatAt: null },
+        { heartbeatAt: { lt: staleBefore } },
+      ],
+    },
+    include: { repository: true },
+    orderBy: { completedAt: "asc" },
+  });
+}
+
+const cleanupStatuses: JobStatus[] = ["COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"];
+const terminalCleanupStatuses: JobStatus[] = ["COMPLETED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"];
+export const WORKTREE_CLEANUP_LEASE_MS = 5 * 60_000;
+
+async function claimWorktreeCleanup(
+  id: string,
+  workerId: string | null,
+  claimToken: string | null,
+  expectedPath?: string,
+  leaseMs = WORKTREE_CLEANUP_LEASE_MS,
+) {
+  const now = new Date();
+  const cleanupToken = crypto.randomUUID();
+  const cleanupLeaseExpiresAt = new Date(now.getTime() + leaseMs);
+  const updated = await prisma.job.updateMany({
+    where: {
+      id,
+      workerId,
+      claimToken,
+      status: { in: cleanupStatuses },
+      AND: [
+        {
+          OR: [
+            { cleanupToken: null },
+            { cleanupLeaseExpiresAt: null },
+            { cleanupLeaseExpiresAt: { lt: now } },
+          ],
+        },
+        expectedPath
+          ? { OR: [{ worktreePath: expectedPath }, { worktreePath: null }] }
+          : { worktreePath: { not: null } },
+      ],
+    },
+    data: {
+      cleanupToken,
+      cleanupLeaseExpiresAt,
+      ...(expectedPath ? { worktreePath: expectedPath } : {}),
+    },
+  });
+  if (updated.count !== 1) return null;
+  const job = await prisma.job.findUnique({ where: { id }, select: { worktreePath: true } });
+  return job?.worktreePath ? { path: job.worktreePath, cleanupToken } : null;
+}
+
+async function claimTerminalWorktreeCleanup(
+  id: string,
+  expectedPath: string,
+  leaseMs = WORKTREE_CLEANUP_LEASE_MS,
+) {
+  const now = new Date();
+  const cleanupToken = crypto.randomUUID();
+  const cleanupLeaseExpiresAt = new Date(now.getTime() + leaseMs);
+  const updated = await prisma.job.updateMany({
+    where: {
+      id,
+      status: { in: terminalCleanupStatuses },
+      worktreePath: expectedPath,
+      OR: [
+        { cleanupToken: null },
+        { cleanupLeaseExpiresAt: null },
+        { cleanupLeaseExpiresAt: { lt: now } },
+      ],
+    },
+    data: {
+      cleanupToken,
+      cleanupLeaseExpiresAt,
+      workerId: null,
+      claimToken: null,
+      heartbeatAt: null,
+    },
+  });
+  if (updated.count !== 1) return null;
+  return { path: expectedPath, cleanupToken };
+}
+
+async function claimFailedWorktreeCleanup(
+  id: string,
+  expectedPath: string,
+  leaseMs = WORKTREE_CLEANUP_LEASE_MS,
+) {
+  const now = new Date();
+  const cleanupToken = crypto.randomUUID();
+  const cleanupLeaseExpiresAt = new Date(now.getTime() + leaseMs);
+  const updated = await prisma.job.updateMany({
+    where: {
+      id,
+      status: "FAILED",
+      worktreePath: expectedPath,
+      cleanupToken: { not: null },
+      cleanupLeaseExpiresAt: { lt: now },
+    },
+    data: {
+      cleanupToken,
+      cleanupLeaseExpiresAt,
+      workerId: null,
+      claimToken: null,
+      heartbeatAt: null,
+    },
+  });
+  if (updated.count !== 1) return null;
+  return { path: expectedPath, cleanupToken };
+}
+
+async function findTerminalRecoveryJobs(environment: string) {
+  return prisma.job.findMany({
+    where: {
+      environment,
+      status: { in: cleanupStatuses },
+      OR: [
+        { worktreePath: { not: null } },
+        { workerId: { not: null } },
+        { claimToken: { not: null } },
+        { cleanupToken: { not: null } },
+      ],
+    },
+    include: { repository: true },
+  });
+}
+
+async function clearWorktree(id: string, claimToken: string | null, cleanupToken: string) {
+  const updated = await prisma.job.updateMany({
+    where: { id, claimToken, cleanupToken, status: { in: cleanupStatuses }, worktreePath: { not: null } },
+    data: { worktreePath: null, cleanupToken: null, cleanupLeaseExpiresAt: null, worktreeCleanupRequired: false },
+  });
+  return updated.count === 1;
+}
+
+async function requeueWaitingForQuota(id: string, environment: string) {
+  const job = await prisma.job.findFirst({
+    where: { id, environment, status: "WAITING_FOR_QUOTA" },
+    select: { quotaWaitStartedAt: true, quotaWaitDurationMs: true },
+  });
+  if (!job) return null;
+  const now = new Date();
+  const quotaWaitDurationMs = (job.quotaWaitDurationMs ?? 0) + (job.quotaWaitStartedAt
+    ? Math.max(0, now.getTime() - job.quotaWaitStartedAt.getTime())
+    : 0);
+  const updated = await prisma.job.updateMany({
+    where: { id, environment, status: "WAITING_FOR_QUOTA" },
+    data: {
+      status: "QUEUED",
+      completedAt: null,
+      quotaWaitDurationMs,
+      quotaWaitStartedAt: null,
+      activeStartedAt: null,
+      workerId: null,
+      claimToken: null,
+      cleanupToken: null,
+      cleanupLeaseExpiresAt: null,
+      heartbeatAt: null,
+    },
+  });
+  if (updated.count !== 1) return null;
+  return prisma.job.findUnique({ where: { id }, include: { repository: true } });
+}
+
+const retryableStatuses = ["FAILED", "BLOCKED", "CANCELLED", "STALE"] as const;
 
 async function requeueForRetry(id: string, environment: string) {
   const job = await prisma.job.findFirst({ where: { id, environment } });
@@ -84,6 +362,7 @@ async function requeueForRetry(id: string, environment: string) {
     !job
     || !retryableStatuses.includes(job.status as typeof retryableStatuses[number])
     || job.workerId
+    || job.cleanupToken
     || (job.status !== "FAILED" && job.worktreePath)
   ) return null;
 
@@ -93,6 +372,7 @@ async function requeueForRetry(id: string, environment: string) {
       environment,
       status: job.status,
       workerId: null,
+      claimToken: job.claimToken,
       cleanupToken: null,
       ...(job.status !== "FAILED" ? { worktreePath: null } : {}),
     },
@@ -118,6 +398,19 @@ async function requeueForRetry(id: string, environment: string) {
   return updated.count === 1 ? prisma.job.findUnique({ where: { id } }) : null;
 }
 
+async function discardFailedJob(id: string, claimToken: string | null) {
+  const updated = await prisma.job.updateMany({
+    where: { id, status: "FAILED", workerId: null, claimToken, cleanupToken: null, worktreePath: null },
+    data: {
+      activeIssueKey: null,
+      activePrKey: null,
+      claimToken: null,
+      cleanupLeaseExpiresAt: null,
+      worktreeCleanupRequired: false,
+    },
+  });
+  return updated.count === 1;
+}
 async function complete(id: string, claimToken: string, result: Prisma.InputJsonValue, exitCode: number) {
   return finishRunning(id, claimToken, "COMPLETED", { result, exitCode });
 }
@@ -138,10 +431,17 @@ async function finishRunning(
   status: Extract<JobStatus, "COMPLETED" | "FAILED" | "BLOCKED" | "DECOMPOSED">,
   input: FinishInput,
 ) {
-  const job = await prisma.job.findUnique({ where: { id }, select: { startedAt: true } });
+  const job = await prisma.job.findUnique({
+    where: { id },
+    select: { startedAt: true, activeStartedAt: true, activeDurationMs: true },
+  });
   if (!job?.startedAt) return false;
 
   const completedAt = new Date();
+  const activeStartedAt = job.activeStartedAt ?? job.startedAt;
+  const activeDurationMs = (job.activeDurationMs ?? 0) + (activeStartedAt
+    ? Math.max(0, completedAt.getTime() - activeStartedAt.getTime())
+    : 0);
   const updated = await prisma.job.updateMany({
     where: { id, claimToken, status: "RUNNING" },
     data: {
@@ -153,7 +453,9 @@ async function finishRunning(
       pullRequestUrl: input.pullRequestUrl,
       headSha: input.headSha,
       completedAt,
-      durationMs: Math.max(0, completedAt.getTime() - job.startedAt.getTime()),
+      durationMs: activeDurationMs,
+      activeDurationMs,
+      activeStartedAt: null,
       errorMessage: status === "FAILED" ? input.errorMessage ?? null : null,
       activeIssueKey: status === "FAILED" ? undefined : null,
       activePrKey: status === "FAILED" ? undefined : null,
@@ -312,19 +614,6 @@ async function findRunning(id: string, workerId: string, claimToken: string) {
   });
 }
 
-async function findCancelledWorktrees(environment: string, staleBefore: Date) {
-  return prisma.job.findMany({
-    where: {
-      environment,
-      status: "CANCELLED",
-      worktreePath: { not: null },
-      OR: [{ workerId: null }, { heartbeatAt: null }, { heartbeatAt: { lt: staleBefore } }],
-    },
-    include: { repository: true },
-    orderBy: { completedAt: "asc" },
-  });
-}
-
 async function isActiveClaim(id: string, workerId: string | null, claimToken: string | null) {
   if (!workerId || !claimToken) return false;
   const job = await prisma.job.findFirst({
@@ -333,14 +622,6 @@ async function isActiveClaim(id: string, workerId: string | null, claimToken: st
   });
   return job !== null;
 }
-
-async function findQueued(environment: string) {
-  return prisma.job.findMany({
-    where: { environment, status: "QUEUED", workerId: null },
-    select: { id: true },
-  });
-}
-
 async function setWorktree(id: string, claimToken: string, worktreePath: string) {
   const updated = await prisma.job.updateMany({
     where: { id, claimToken, status: "RUNNING" },
@@ -363,41 +644,6 @@ async function setExecutionResult(id: string, claimToken: string, sessionId: str
     data: { sessionId: sessionId ?? undefined, exitCode },
   });
   return updated.count === 1;
-}
-
-const cleanupStatuses: JobStatus[] = ["COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"];
-const terminalCleanupStatuses: JobStatus[] = ["COMPLETED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"];
-export const WORKTREE_CLEANUP_LEASE_MS = 5 * 60_000;
-
-async function claimWorktreeCleanup(
-  id: string,
-  workerId: string | null,
-  claimToken: string | null,
-  expectedPath?: string,
-  leaseMs = WORKTREE_CLEANUP_LEASE_MS,
-) {
-  const cleanupToken = crypto.randomUUID();
-  const cleanupLeaseExpiresAt = new Date(Date.now() + leaseMs);
-  const updated = await prisma.job.updateMany({
-    where: {
-      id,
-      workerId,
-      claimToken,
-      cleanupToken: null,
-      status: { in: cleanupStatuses },
-      ...(expectedPath
-        ? { OR: [{ worktreePath: expectedPath }, { worktreePath: null }] }
-        : { worktreePath: { not: null } }),
-    },
-    data: {
-      cleanupToken,
-      cleanupLeaseExpiresAt,
-      ...(expectedPath ? { worktreePath: expectedPath } : {}),
-    },
-  });
-  if (updated.count !== 1) return null;
-  const job = await prisma.job.findUnique({ where: { id }, select: { worktreePath: true } });
-  return job?.worktreePath ? { path: job.worktreePath, cleanupToken } : null;
 }
 
 async function reclaimTerminalWorktreeCleanup(
@@ -439,29 +685,6 @@ async function reclaimTerminalWorktreeCleanup(
   return job?.worktreePath ? { path: job.worktreePath, cleanupToken } : null;
 }
 
-async function findTerminalRecoveryJobs(environment: string) {
-  return prisma.job.findMany({
-    where: {
-      environment,
-      status: { in: cleanupStatuses },
-      OR: [
-        { worktreePath: { not: null } },
-        { workerId: { not: null } },
-        { cleanupToken: { not: null } },
-      ],
-    },
-    include: { repository: true },
-  });
-}
-
-async function clearWorktree(id: string, claimToken: string | null, cleanupToken: string) {
-  const updated = await prisma.job.updateMany({
-    where: { id, claimToken, cleanupToken, status: { in: cleanupStatuses }, worktreePath: { not: null } },
-    data: { worktreePath: null, cleanupToken: null, cleanupLeaseExpiresAt: null },
-  });
-  return updated.count === 1;
-}
-
 async function releaseWorker(id: string, workerId: string | null, claimToken: string | null, releaseStale = false) {
   const updated = await prisma.job.updateMany({
     where: {
@@ -486,20 +709,48 @@ async function releaseWorker(id: string, workerId: string | null, claimToken: st
 
 async function discardTerminalJob(id: string, claimToken: string | null) {
   const updated = await prisma.job.updateMany({
-    where: { id, status: { in: retryableStatuses }, workerId: null, claimToken, cleanupToken: null, worktreePath: null },
+    where: { id, status: { in: [...retryableStatuses] }, workerId: null, claimToken, cleanupToken: null, worktreePath: null },
     data: { activeIssueKey: null, activePrKey: null, workerId: null, claimToken: null, heartbeatAt: null },
   });
   return updated.count === 1;
 }
 
 async function cancel(id: string) {
+  const job = await prisma.job.findUnique({
+    where: { id },
+    select: {
+      status: true,
+      quotaWaitStartedAt: true,
+      quotaWaitDurationMs: true,
+      activeStartedAt: true,
+      activeDurationMs: true,
+      worktreePath: true,
+      workerId: true,
+      claimToken: true,
+    },
+  });
+  if (!job || !["QUEUED", "RUNNING", "WAITING_FOR_QUOTA"].includes(job.status)) return false;
+  const completedAt = new Date();
+  const activeDurationMs = (job.activeDurationMs ?? 0) + (job.status === "RUNNING" && job.activeStartedAt
+    ? Math.max(0, completedAt.getTime() - job.activeStartedAt.getTime())
+    : 0);
+  const quotaWaitDurationMs = (job.quotaWaitDurationMs ?? 0) + (job.status === "WAITING_FOR_QUOTA" && job.quotaWaitStartedAt
+    ? Math.max(0, completedAt.getTime() - job.quotaWaitStartedAt.getTime())
+    : 0);
   const updated = await prisma.job.updateMany({
-    where: { id, status: { in: ["QUEUED", "RUNNING"] } },
+    where: { id, status: job.status, workerId: job.workerId, claimToken: job.claimToken },
     data: {
       status: "CANCELLED",
-      completedAt: new Date(),
+      completedAt,
       activeIssueKey: null,
       activePrKey: null,
+      activeStartedAt: null,
+      activeDurationMs,
+      durationMs: job.status === "RUNNING" ? activeDurationMs : undefined,
+      quotaWaitStartedAt: null,
+      quotaWaitDurationMs,
+      worktreeCleanupRequired: Boolean(job.worktreePath),
+      heartbeatAt: job.status === "RUNNING" ? undefined : null,
     },
   });
   return updated.count === 1;
@@ -508,22 +759,35 @@ async function cancel(id: string) {
 async function recoverStaleBefore(environment: string, cutoff: Date) {
   const candidates = await prisma.job.findMany({
     where: { environment, status: "RUNNING", heartbeatAt: { lt: cutoff } },
-    select: { id: true },
+    select: { id: true, workerId: true, claimToken: true, activeStartedAt: true, startedAt: true, activeDurationMs: true },
   });
   if (candidates.length === 0) return [];
-  const ids = candidates.map(({ id }) => id);
-  const updated = await prisma.job.updateMany({
-    where: { id: { in: ids }, status: "RUNNING", heartbeatAt: { lt: cutoff } },
-    data: {
-      status: "STALE",
-      completedAt: new Date(),
-      heartbeatAt: null,
-      errorMessage: "Worker heartbeat expired before the job reached a terminal state",
-    },
-  });
-  if (updated.count === 0) return [];
+  const completedAt = new Date();
+  const recoveredIds: string[] = [];
+  for (const candidate of candidates) {
+    const activeStartedAt = candidate.activeStartedAt ?? candidate.startedAt;
+    const activeDurationMs = (candidate.activeDurationMs ?? 0) + (activeStartedAt
+      ? Math.max(0, completedAt.getTime() - activeStartedAt.getTime())
+      : 0);
+    const updated = await prisma.job.updateMany({
+      where: { id: candidate.id, status: "RUNNING", heartbeatAt: { lt: cutoff } },
+      data: {
+        status: "STALE",
+        completedAt,
+        durationMs: activeDurationMs,
+        activeDurationMs,
+        activeStartedAt: null,
+        activeIssueKey: null,
+        activePrKey: null,
+        heartbeatAt: null,
+        errorMessage: "Worker heartbeat expired before the job reached a terminal state",
+      },
+    });
+    if (updated.count === 1) recoveredIds.push(candidate.id);
+  }
+  if (recoveredIds.length === 0) return [];
   return prisma.job.findMany({
-    where: { id: { in: ids }, status: "STALE" },
+    where: { id: { in: recoveredIds }, status: "STALE" },
     include: { repository: true, pullRequest: true },
   });
 }
@@ -553,7 +817,18 @@ async function failQueued(id: string, errorMessage: string, retainActiveKey = fa
 
 export const jobRepository = {
   tryCreateQueued,
+  findQueued,
+  findQueuedJobs,
   claim,
+  waitForQuotaQueued,
+  waitForQuotaRunning,
+  findWaitingForQuota,
+  requeueWaitingForQuota,
+  findCancelledWorktrees,
+  claimWorktreeCleanup,
+  claimTerminalWorktreeCleanup,
+  claimFailedWorktreeCleanup,
+  findTerminalRecoveryJobs,
   requeueForRetry,
   complete,
   cancel,
@@ -561,13 +836,12 @@ export const jobRepository = {
   heartbeat,
   failQueued,
   findRunning,
-  findQueued,
   setWorktree,
   setSessionId,
   setExecutionResult,
-  claimWorktreeCleanup,
   clearWorktree,
   releaseWorker,
+  discardFailedJob,
   discardTerminalJob,
   finishRunning,
   claimSupportIssue,
@@ -577,7 +851,5 @@ export const jobRepository = {
   releaseSupportIssue,
   markSupportIssueForReconciliation,
   isActiveClaim,
-  findTerminalRecoveryJobs,
-  findCancelledWorktrees,
   reclaimTerminalWorktreeCleanup,
 };

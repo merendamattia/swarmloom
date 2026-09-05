@@ -25,6 +25,7 @@ integration("operations API", () => {
   let afterCreateIssue: (() => Promise<void>) | undefined;
   let reconciledIssue: { number: number; url: string } | undefined;
   let findIssueCalls = 0;
+  const removedWorktrees: string[] = [];
   let pullRequestHead = "a".repeat(40);
   let pullRequestState = "open";
   let pullRequestMerged = false;
@@ -139,6 +140,10 @@ integration("operations API", () => {
         remove: async () => true,
         enqueue: async (id) => { enqueuedJobs.push(id); },
       },
+      removeWorktree: async ({ worktreePath }) => {
+        removedWorktrees.push(worktreePath);
+        await rm(worktreePath, { recursive: true, force: true });
+      },
       settings: createSettingsService(config),
       scheduler: { restart: () => { restartCalls += 1; } },
     });
@@ -182,6 +187,66 @@ integration("operations API", () => {
 
     const repositories = await app.request("/api/repositories");
     expect(await repositories.json()).toMatchObject([{ jobs: [{ id: jobId, reasoningEffort: "high" }] }]);
+  });
+
+  test("exposes quota waits as active filterable jobs and allows cancellation", async () => {
+    removedWorktrees.length = 0;
+    const worktreePath = `/worker_data/worktrees/${crypto.randomUUID()}`;
+    const waiting = await prisma.job.create({
+      data: {
+        repositoryId,
+        environment: "test",
+        issueNumber: 199,
+        subjectType: "PULL_REQUEST",
+        jobType: "REVIEW",
+        issueTitle: `Quota wait ${unique}`,
+        issueUrl: `https://github.com/acme/api-${unique}/pull/199`,
+        issueBody: "Quota wait",
+        status: "WAITING_FOR_QUOTA",
+        activePrKey: `${repositoryId}:199:head:REVIEW`,
+        branchName: "agent/issue-199",
+        baselineCommit: "e".repeat(40),
+        pullRequestNumber: 199,
+        worktreePath,
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+        quotaWaitStartedAt: new Date(),
+        quotaResetAt: new Date(Date.now() + 60_000),
+        quotaWindow: "codex:primary",
+        quotaUsedPercent: 100,
+        quotaMessage: "Codex quota exhausted",
+      },
+    });
+    await prisma.review.create({
+      data: {
+        jobId: waiting.id,
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+        status: "RUNNING",
+        startedAt: new Date(Date.now() - 5_000),
+      },
+    });
+
+    const dashboard = await (await app.request("/api/dashboard")).json();
+    expect(dashboard.jobs.WAITING_FOR_QUOTA).toBe(1);
+    expect(dashboard.activeJobs).toEqual(expect.arrayContaining([expect.objectContaining({ id: waiting.id, status: "WAITING_FOR_QUOTA" })]));
+
+    const filtered = await app.request("/api/jobs?status=WAITING_FOR_QUOTA");
+    expect(await filtered.json()).toMatchObject({ total: 1, items: [{ id: waiting.id, status: "WAITING_FOR_QUOTA", quotaWindow: "codex:primary" }] });
+
+    const cancelled = await app.request(`/api/jobs/${waiting.id}/cancel`, { method: "POST" });
+    expect(cancelled.status).toBe(200);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: waiting.id } })).toMatchObject({
+      status: "CANCELLED",
+      activePrKey: null,
+      quotaWaitStartedAt: null,
+      worktreeCleanupRequired: false,
+    });
+    expect(removedWorktrees).toEqual([worktreePath]);
+    expect(await prisma.review.findUniqueOrThrow({ where: { jobId: waiting.id } })).toMatchObject({
+      status: "FAILED",
+      errorMessage: expect.stringContaining("cancelled"),
+    });
   });
 
   test("returns only the five most recent jobs on the dashboard", async () => {
@@ -274,12 +339,71 @@ integration("operations API", () => {
   test("returns the repository PR URL instead of an agent-provided URL", async () => {
     await prisma.job.update({
       where: { id: jobId },
-      data: { pullRequestNumber: 99, pullRequestUrl: "https://github.com/[REDACTED]/wrong/pull/99" },
+      data: {
+        pullRequestNumber: 99,
+        pullRequestUrl: "https://github.com/[REDACTED]/wrong/pull/99",
+        claimToken: "internal-claim-token",
+        cleanupToken: "internal-cleanup-token",
+      },
+    });
+    await prisma.review.create({
+      data: {
+        jobId,
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+        status: "RUNNING",
+        claimToken: "internal-review-claim-token",
+      },
     });
     const detail = await app.request(`/api/jobs/${jobId}`);
-    expect(await detail.json()).toMatchObject({
+    const body = await detail.json();
+    expect(body).toMatchObject({
       pullRequestUrl: `https://github.com/acme/api-${unique}/pull/99`,
     });
+    expect(body).not.toHaveProperty("claimToken");
+    expect(body).not.toHaveProperty("cleanupToken");
+    expect(body.review).not.toHaveProperty("claimToken");
+    await prisma.job.update({ where: { id: jobId }, data: { claimToken: null, cleanupToken: null } });
+  });
+
+  test("returns the enabled Codex catalog with model-specific efforts", async () => {
+    const response = await app.request("/api/codex/generation-options");
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.models.map((model: { slug: string }) => model.slug)).toEqual([
+      "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra",
+    ]);
+    expect(body.models.find((model: { slug: string }) => model.slug === "gpt-6-astra")).toMatchObject({
+      defaultReasoningEffort: "max",
+      reasoningEfforts: [
+        { slug: "low" }, { slug: "medium" }, { slug: "high" }, { slug: "xhigh" }, { slug: "max", isDefault: true },
+      ],
+    });
+    const sol = body.models.find((model: { slug: string }) => model.slug === "gpt-5.6-sol");
+    expect(sol.reasoningEfforts.map((effort: { slug: string }) => effort.slug)).toEqual([
+      "none", "low", "medium", "high", "xhigh", "max",
+    ]);
+    expect(sol.reasoningEfforts.find((effort: { slug: string }) => effort.slug === "max")).toMatchObject({ isDefault: true });
+  });
+
+  test("rejects invalid Codex model and effort combinations", async () => {
+    const response = await app.request("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ codexReviewModel: "gpt-6-astra", codexReviewReasoningEffort: "none" }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid settings" });
+    expect(await prisma.runtimeSetting.findUnique({
+      where: { environment_key: { environment: "test", key: "CODEX_REVIEW_MODEL" } },
+    })).toBeNull();
+
+    const unknownModel = await app.request("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ codexCodingModel: "gpt-5.6-unknown", codexCodingReasoningEffort: "max" }),
+    });
+    expect(unknownModel.status).toBe(400);
   });
 
   test("persists runtime settings and never returns Telegram secrets", async () => {
@@ -290,8 +414,8 @@ integration("operations API", () => {
         scheduleCron: "*/30 * * * *",
         maxParallelJobs: 2,
         createDiagnosticIssues: true,
-        codexCodingModel: "gpt-5.6-api-coding",
-        codexReviewModel: "gpt-5.6-api-review",
+        codexCodingModel: "gpt-5.6-sol",
+        codexReviewModel: "gpt-6-astra",
         codexCodingReasoningEffort: "low",
         codexReviewReasoningEffort: "high",
         telegramEnabled: false,
@@ -305,15 +429,15 @@ integration("operations API", () => {
     expect(body).not.toContain("telegram-chat-id");
     expect(JSON.parse(body)).toMatchObject({
       createDiagnosticIssues: true,
-      codexCodingModel: "gpt-5.6-api-coding",
-      codexReviewModel: "gpt-5.6-api-review",
+      codexCodingModel: "gpt-5.6-sol",
+      codexReviewModel: "gpt-6-astra",
       codexCodingReasoningEffort: "low",
       codexReviewReasoningEffort: "high",
     });
     expect(await prisma.runtimeSetting.findMany({ where: { environment: "test" } }))
       .toEqual(expect.arrayContaining([
-        expect.objectContaining({ key: "CODEX_CODING_MODEL", value: "gpt-5.6-api-coding" }),
-        expect.objectContaining({ key: "CODEX_REVIEW_MODEL", value: "gpt-5.6-api-review" }),
+        expect.objectContaining({ key: "CODEX_CODING_MODEL", value: "gpt-5.6-sol" }),
+        expect.objectContaining({ key: "CODEX_REVIEW_MODEL", value: "gpt-6-astra" }),
         expect.objectContaining({ key: "CODEX_CODING_REASONING_EFFORT", value: "low" }),
         expect.objectContaining({ key: "CODEX_REVIEW_REASONING_EFFORT", value: "high" }),
       ]));
@@ -410,6 +534,7 @@ integration("operations API", () => {
     expect(await retry.json()).toEqual({ error: "Pull request head changed; retry was not queued" });
     expect(pullRequestLabels).toEqual(["bug", config.PR_REVIEW_REQUESTED_LABEL]);
     expect(enqueuedJobs).not.toContain(stale.id);
+    expect(removedWorktrees).toContain(staleWorktreePath);
     expect(await prisma.job.findUniqueOrThrow({ where: { id: stale.id } })).toMatchObject({
       status: "FAILED",
       headSha: "a".repeat(40),
@@ -914,6 +1039,14 @@ integration("operations API", () => {
     expect(blocked.status).toBe(409);
     expect(await blocked.json()).toMatchObject({ error: expect.stringContaining("active job") });
     expect(await prisma.repository.findUnique({ where: { id: active.id } })).not.toBeNull();
+
+    await prisma.job.updateMany({
+      where: { repositoryId: active.id },
+      data: { status: "FAILED", activeIssueKey: null, worktreePath: `/worker_data/worktrees/${crypto.randomUUID()}` },
+    });
+    const retainedWorktreeBlocked = await app.request(`/api/repositories/${active.id}`, { method: "DELETE" });
+    expect(retainedWorktreeBlocked.status).toBe(409);
+    expect(await retainedWorktreeBlocked.json()).toMatchObject({ error: expect.stringContaining("active job") });
 
     const missing = await app.request(`/api/repositories/${crypto.randomUUID()}`, { method: "DELETE" });
     expect(missing.status).toBe(404);

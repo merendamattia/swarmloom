@@ -12,6 +12,7 @@ import {
   reviewContext,
   safeError,
 } from "./helpers.ts";
+import { isQuotaFailure } from "./diagnostics.ts";
 import type { JobFlow } from "./types.ts";
 
 export const runReview: JobFlow = async (context) => {
@@ -26,7 +27,7 @@ export const runReview: JobFlow = async (context) => {
   const pullRequest = job.pullRequest;
 
   const discard = async (message: string) => {
-    const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "COMPLETED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: message,
     });
     if (!finished) return;
@@ -39,7 +40,10 @@ export const runReview: JobFlow = async (context) => {
       metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl ?? undefined, headSha: job.headSha },
     });
   };
-  const stale = () => discard(`Stale review: the pull request head moved past ${job.headSha} before this review could apply.`);
+  const stale = async () => {
+    await reviewRepository.failStaleForJob(job.id, job.claimToken);
+    await discard(`Stale review: the pull request head moved past ${job.headSha} before this review could apply.`);
+  };
   const closed = () => discard(`Skipped review: pull request #${pullRequest.prNumber} is no longer open.`);
 
   const initial = await github.getPullRequest(fullName, pullRequest.prNumber);
@@ -60,10 +64,10 @@ export const runReview: JobFlow = async (context) => {
   if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
   const localPath = job.repository.localPath;
   const gitEnvironment = githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl);
-  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id), async () => {
+  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id, job.attempts), async () => {
     await context.createReviewWorktree({
       repositoryPath: localPath,
-      worktreePath: safeWorktreePath(config.DATA_DIR, job.id),
+      worktreePath: safeWorktreePath(config.DATA_DIR, job.id, job.attempts),
       branchName: pullRequest.headBranch,
       gitEnvironment,
     });
@@ -74,7 +78,7 @@ export const runReview: JobFlow = async (context) => {
   context.state.repositoryPath = localPath;
   context.state.worktreePersisted = !worktree.created;
   if (worktree.created) {
-    if (!await jobRepository.setWorktree(job.id, job.claimToken!, worktreePath)) return;
+    if (!await jobRepository.setWorktree(job.id, job.claimToken, worktreePath)) return;
     context.state.worktreePersisted = true;
   }
 
@@ -106,7 +110,7 @@ export const runReview: JobFlow = async (context) => {
 
   const reviewRow = await reviewRepository.start(
     job.id,
-    job.claimToken!,
+    job.claimToken,
     job.provider,
     job.model,
     job.reasoningEffort,
@@ -130,16 +134,17 @@ export const runReview: JobFlow = async (context) => {
     if (result.exitCode !== 0) throw new Error(result.stderr || "Automated review failed");
     const verdict = parseReviewOutcome(result.response);
     const tldr = parseTldr(result.response);
-    if (!await reviewRepository.finish(
+    const reviewFinished = await reviewRepository.finish(
       reviewRow.id,
-      job.claimToken!,
+      job.claimToken,
       verdict === "pass" ? "PASSED" : "CHANGES_REQUESTED",
       {
         sessionId: result.sessionId,
         response: result.response,
         exitCode: result.exitCode,
       },
-    )) return;
+    );
+    if (!reviewFinished) return;
     if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await events.record({
       type: "REVIEW_COMPLETED",
@@ -205,7 +210,7 @@ export const runReview: JobFlow = async (context) => {
         throw error;
       }
       if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
-      const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "COMPLETED", {
+      const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
         result: result.response,
         exitCode: result.exitCode,
         pullRequestNumber: pullRequest.prNumber,
@@ -287,7 +292,7 @@ export const runReview: JobFlow = async (context) => {
       throw error;
     }
     if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
-    const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "COMPLETED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: result.response,
       exitCode: result.exitCode,
       pullRequestNumber: pullRequest.prNumber,
@@ -311,7 +316,9 @@ export const runReview: JobFlow = async (context) => {
     });
     return;
   } catch (error) {
-    await reviewRepository.finish(reviewRow.id, job.claimToken!, "FAILED", { errorMessage: safeError(error) });
+    if (!isQuotaFailure(error)) {
+      await reviewRepository.finish(reviewRow.id, job.claimToken, "FAILED", { errorMessage: safeError(error) });
+    }
     throw error;
   }
 };

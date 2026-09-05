@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 import type { Config } from "../core/config-schema.ts";
 import type { SettingsService } from "../core/settings-service.ts";
 import { parseRuntimeSettingsPatch, runtimeSettingsView } from "../core/runtime-settings.ts";
+import { CodexCatalogValidationError, generationOptions } from "../core/codex-catalog.ts";
 import { prisma } from "../core/db.ts";
 import { buildHealthServices } from "./health.ts";
 import { logger } from "../core/logger.ts";
@@ -23,7 +24,9 @@ import { removeJobWorktree, repositoryPath } from "../git/repositories.ts";
 import { dashboardExceptionRepository } from "../repositories/dashboard-exceptions.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import { repositoryRepository } from "../repositories/repositories.ts";
+import { reviewRepository } from "../repositories/reviews.ts";
 import type { JobQueue } from "../queue/service.ts";
+import { cleanupCancelledWorktree } from "../worktrees/recovery.ts";
 
 type Scanner = { run(source: "SCHEDULED" | "MANUAL"): Promise<{ id: string; status: string }> };
 type ApiGitHub = Pick<GitHubClient,
@@ -38,6 +41,7 @@ type Dependencies = {
   events: EventService;
   startup: Startup;
   queue: Pick<JobQueue, "health" | "remove" | "enqueue">;
+  removeWorktree?: typeof removeJobWorktree;
   settings: SettingsService;
   scheduler: Scheduler;
 };
@@ -52,7 +56,7 @@ function configuredAgentProfiles(config: Config) {
 }
 
 const jobQuery = z.object({
-  status: z.enum(["QUEUED", "RUNNING", "COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"]).optional(),
+  status: z.enum(["QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"]).optional(),
   jobType: z.enum(["IMPLEMENTATION", "FIX", "REVIEW", "DECOMPOSITION"]).optional(),
   subjectType: z.enum(["ISSUE", "PULL_REQUEST"]).optional(),
   provider: z.enum(["CODEX", "OPENCODE"]).optional(),
@@ -73,6 +77,13 @@ const jobSummaryFields = {
   status: true,
   completedAt: true,
   durationMs: true,
+  activeDurationMs: true,
+  quotaWaitDurationMs: true,
+  quotaWaitStartedAt: true,
+  quotaResetAt: true,
+  quotaWindow: true,
+  quotaUsedPercent: true,
+  quotaMessage: true,
   branchName: true,
   baselineCommit: true,
   pullRequestNumber: true,
@@ -83,6 +94,7 @@ const jobSummaryFields = {
   model: true,
   reasoningEffort: true,
   startedAt: true,
+  activeStartedAt: true,
   attempts: true,
   sessionId: true,
   errorMessage: true,
@@ -100,7 +112,7 @@ const repositoryJobSummarySelect = {
   ...jobSummaryFields,
   review: { select: { status: true } },
 } satisfies Prisma.JobSelect;
-export function createApp({ config, scanner, github, events, startup, queue, settings, scheduler }: Dependencies) {
+export function createApp({ config, scanner, github, events, startup, queue, removeWorktree = removeJobWorktree, settings, scheduler }: Dependencies) {
   const app = new Hono().basePath("/api");
   app.use("*", requestId(), secureHeaders(), cors({
     origin: config.FRONTEND_URL,
@@ -170,6 +182,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         requiredBranch: "develop",
       });
     })
+    .get("/codex/generation-options", async (context) => context.json(await generationOptions()))
     .get("/settings", (context) => context.json(settings.view()))
     .patch("/settings", async (context) => {
       let body: unknown;
@@ -183,7 +196,9 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         scheduler.restart();
         return context.json(runtimeSettingsView(updated));
       } catch (error) {
-        if (error instanceof z.ZodError) return context.json({ error: "Invalid settings" }, 400);
+        if (error instanceof z.ZodError || error instanceof CodexCatalogValidationError) {
+          return context.json({ error: "Invalid settings" }, 400);
+        }
         throw error;
       }
     })
@@ -201,7 +216,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
         prisma.job.groupBy({ where: { environment: config.APP_ENV }, by: ["status"], _count: true }),
         prisma.repository.findMany({ orderBy: { fullName: "asc" } }),
         prisma.job.findMany({
-          where: { environment: config.APP_ENV, status: "RUNNING" },
+          where: { environment: config.APP_ENV, status: { in: ["RUNNING", "WAITING_FOR_QUOTA"] } },
           orderBy: { startedAt: "asc" },
           select: jobSummarySelect,
         }),
@@ -279,9 +294,10 @@ export function createApp({ config, scanner, github, events, startup, queue, set
           events: { orderBy: { createdAt: "asc" } },
         },
       });
-      return job
-        ? context.json({ ...job, pullRequestUrl: canonicalPullRequestUrl(job.repository, job.pullRequestNumber) })
-        : context.json({ error: "Not found" }, 404);
+      if (!job) return context.json({ error: "Not found" }, 404);
+      const { claimToken: _claimToken, cleanupToken: _cleanupToken, review, ...publicJob } = job;
+      const publicReview = review ? (({ claimToken: _reviewClaimToken, ...safeReview }) => safeReview)(review) : null;
+      return context.json({ ...publicJob, review: publicReview, pullRequestUrl: canonicalPullRequestUrl(job.repository, job.pullRequestNumber) });
     })
     .post("/jobs/:id/support-issue", async (context) => {
       const result = await createSupportIssue({ config, github, jobId: context.req.param("id") });
@@ -337,14 +353,14 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       const result = await repositoryRepository.remove(id, existing.fullName, configured
         ? { environment: config.APP_ENV, value: remaining.length > 0 ? remaining.join(",") : null }
         : undefined,
-      async (worktreePath) => removeJobWorktree({
+      async (worktreePath) => removeWorktree({
         worktreePath,
         repositoryPath: existing.localPath ?? repositoryPath(config.DATA_DIR, existing.fullName),
         gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, existing.cloneUrl),
       }));
       if (result?.blocked) {
         return context.json({
-          error: `Cannot remove the repository while ${result.activeJobs} active job${result.activeJobs === 1 ? "" : "s"} ${result.activeJobs === 1 ? "is" : "are"} queued or running. Cancel or finish them first.`,
+          error: `Cannot remove the repository while ${result.activeJobs} active job${result.activeJobs === 1 ? "" : "s"} ${result.activeJobs === 1 ? "is" : "are"} queued, waiting, or running. Cancel or finish them first.`,
         }, 409);
       }
       if (result?.cleanupRequired) {
@@ -373,26 +389,10 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       await queue.remove(job.id);
       const cancelled = await prisma.job.findUnique({ where: { id: job.id }, select: { worktreePath: true, workerId: true, claimToken: true } });
       if (cancelled && !cancelled.workerId && cancelled.worktreePath) {
-        try {
-          const cleanup = await jobRepository.claimWorktreeCleanup(job.id, null, cancelled.claimToken, cancelled.worktreePath);
-          if (cleanup) {
-            await removeJobWorktree({
-              worktreePath: cleanup.path,
-              repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
-              gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
-            });
-            await jobRepository.clearWorktree(job.id, cancelled.claimToken, cleanup.cleanupToken);
-          }
-        } catch (error) {
-          await events.record({
-            type: "GITHUB_RECONCILIATION_REQUIRED",
-            level: "ERROR",
-            message: `Could not remove cancelled job worktree ${cancelled.worktreePath}: ${redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
-            jobId: job.id,
-            repositoryId: job.repositoryId,
-            metadata: { issueUrl: job.issueUrl },
-          });
-        }
+        await cleanupCancelledWorktree(config, events, { ...job, ...cancelled }, removeWorktree);
+      }
+      if (job.status === "WAITING_FOR_QUOTA" && job.jobType === "REVIEW") {
+        await reviewRepository.cancelForJob(job.id);
       }
       await events.record({
         type: "JOB_CANCELLED",
@@ -518,7 +518,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       if (!requeued) {
         const current = await prisma.job.findFirst({
           where: { id: job.id, environment: config.APP_ENV },
-          select: { status: true, workerId: true, worktreePath: true, cleanupToken: true },
+          select: { status: true, workerId: true, cleanupToken: true, worktreePath: true },
         });
         const cleanupPending = current?.workerId !== null || current?.cleanupToken !== null
           || (current?.status !== "FAILED" && current?.worktreePath !== null);
@@ -655,7 +655,7 @@ export function createApp({ config, scanner, github, events, startup, queue, set
       : null;
     if (job.worktreePath && !cleanup) return false;
     if (cleanup) {
-      await removeJobWorktree({
+      await removeWorktree({
         worktreePath: cleanup.path,
         repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
         gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),

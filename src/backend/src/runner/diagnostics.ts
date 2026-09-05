@@ -1,5 +1,5 @@
 import { redactSecrets } from "../core/secrets.ts";
-import type { AgentProvider, AgentResult, AgentRole } from "../providers/index.ts";
+import type { AgentProvider, AgentResult, AgentRole, ProviderFailure } from "../providers/index.ts";
 
 export type DiagnosticStage =
   | "implementation"
@@ -42,10 +42,15 @@ export class AgentExecutionError extends Error {
   constructor(
     message: string,
     readonly diagnostics: JobDiagnostics,
+    readonly failure?: ProviderFailure,
   ) {
     super(message);
     this.name = "AgentExecutionError";
   }
+}
+
+export function isQuotaFailure(error: unknown): error is AgentExecutionError & { failure: ProviderFailure } {
+  return error instanceof AgentExecutionError && error.failure?.reason === "QUOTA_EXHAUSTED";
 }
 
 export function stackTrace(
@@ -102,7 +107,13 @@ export function executionFailure(
   provider: AgentProvider,
   result: RoleExecution,
   error: unknown,
-  extra: { cause?: unknown; finalOutput?: string; stderr?: string; environment?: Record<string, string | undefined> } = {},
+  extra: {
+    cause?: unknown;
+    finalOutput?: string;
+    stderr?: string;
+    environment?: Record<string, string | undefined>;
+    failure?: ProviderFailure;
+  } = {},
 ) {
   const environment = extra.environment ?? globalThis.process.env;
   const message = error instanceof Error ? error.message : String(error);
@@ -121,7 +132,7 @@ export function executionFailure(
     stderr: extra.stderr ?? (result.stderr || undefined),
     finalOutput: rawOutput ? tail(redactSecrets(rawOutput), 20_000) : undefined,
     events: result.events,
-  });
+  }, extra.failure);
 }
 
 function safeMessage(message: string, environment = globalThis.process.env) {

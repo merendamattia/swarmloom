@@ -18,10 +18,10 @@ export const runDecomposition: JobFlow = async (context) => {
   if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
   const localPath = job.repository.localPath;
   const gitEnvironment = githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl);
-  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id), async () => {
+  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id, job.attempts), async () => {
     await context.createWorktree({
       repositoryPath: localPath,
-      worktreePath: safeWorktreePath(config.DATA_DIR, job.id),
+      worktreePath: safeWorktreePath(config.DATA_DIR, job.id, job.attempts),
       branchName: job.branchName,
       baselineCommit: job.baselineCommit,
       gitEnvironment,
@@ -33,7 +33,7 @@ export const runDecomposition: JobFlow = async (context) => {
   context.state.repositoryPath = localPath;
   context.state.worktreePersisted = !worktree.created;
   if (worktree.created) {
-    if (!await jobRepository.setWorktree(job.id, job.claimToken!, worktreePath)) return;
+    if (!await jobRepository.setWorktree(job.id, job.claimToken, worktreePath)) return;
     context.state.worktreePersisted = true;
   }
 
@@ -67,7 +67,7 @@ export const runDecomposition: JobFlow = async (context) => {
   const tldr = parseTldr(decomposition.response);
 
   if (outcome === "decomposed") {
-    const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "DECOMPOSED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "DECOMPOSED", {
       result: decomposition.response,
       exitCode: decomposition.exitCode,
     });
@@ -84,7 +84,7 @@ export const runDecomposition: JobFlow = async (context) => {
     return;
   }
 
-  const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "BLOCKED", {
+  const finished = await jobRepository.finishRunning(job.id, job.claimToken, "BLOCKED", {
     result: decomposition.response,
     exitCode: decomposition.exitCode,
   });

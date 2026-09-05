@@ -18,7 +18,7 @@ export function providerEnvironment(environment: Record<string, string | undefin
   return Object.fromEntries(Object.entries(environment).filter(([key]) => !key.endsWith("_API_KEY")));
 }
 
-async function readLines(
+export async function readLines(
   stream: ReadableStream<Uint8Array>,
   onLine: (line: string) => void | Promise<void>,
 ) {

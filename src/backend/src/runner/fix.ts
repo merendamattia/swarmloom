@@ -11,6 +11,7 @@ import {
   prepareJobWorktree,
   safeError,
 } from "./helpers.ts";
+import { isQuotaFailure } from "./diagnostics.ts";
 import type { JobFlow } from "./types.ts";
 
 export const runFix: JobFlow = async (context) => {
@@ -51,22 +52,21 @@ export const runFix: JobFlow = async (context) => {
 
   if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
   const localPath = job.repository.localPath;
-  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id), async () => {
+  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id, job.attempts), async () => {
     await context.createReviewWorktree({
       repositoryPath: localPath,
-      worktreePath: safeWorktreePath(config.DATA_DIR, job.id),
+      worktreePath: safeWorktreePath(config.DATA_DIR, job.id, job.attempts),
       branchName: pullRequest.headBranch,
       gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
     });
   });
   const worktreePath = worktree.path;
-  const gitEnvironment = githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl);
   context.state.worktreeCreated = true;
   context.state.worktreePath = worktreePath;
   context.state.repositoryPath = localPath;
   context.state.worktreePersisted = !worktree.created;
   if (worktree.created) {
-    if (!await jobRepository.setWorktree(job.id, job.claimToken!, worktreePath)) return;
+    if (!await jobRepository.setWorktree(job.id, job.claimToken, worktreePath)) return;
     context.state.worktreePersisted = true;
   }
 
@@ -128,7 +128,7 @@ export const runFix: JobFlow = async (context) => {
         () => jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken),
       )) return;
       if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
-      const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "BLOCKED", {
+      const finished = await jobRepository.finishRunning(job.id, job.claimToken, "BLOCKED", {
         result: result.response,
         exitCode: result.exitCode,
       });
@@ -200,7 +200,7 @@ export const runFix: JobFlow = async (context) => {
         metadata: { issueUrl: job.issueUrl, pullRequestUrl: current.url },
       });
     }
-    const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "COMPLETED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: result.response,
       exitCode: result.exitCode,
       pullRequestNumber: current.number,
@@ -227,7 +227,7 @@ export const runFix: JobFlow = async (context) => {
     });
     await context.commentOnPullRequest(job, pullRequest.prNumber, result.response);
   } catch (error) {
-    await guardFailure(error);
+    if (!isQuotaFailure(error)) await guardFailure(error);
     throw error;
   }
 
@@ -313,7 +313,7 @@ export const runFix: JobFlow = async (context) => {
       });
     }
     if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
-    const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "COMPLETED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: response,
       pullRequestNumber: prNumber,
       pullRequestUrl: pullRequestUrl,
