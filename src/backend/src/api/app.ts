@@ -290,8 +290,9 @@ export function createApp({ config, scanner, github, events, startup, queue, rem
         },
       });
       if (!job) return context.json({ error: "Not found" }, 404);
-      const { claimToken: _claimToken, cleanupToken: _cleanupToken, ...publicJob } = job;
-      return context.json({ ...publicJob, pullRequestUrl: canonicalPullRequestUrl(job.repository, job.pullRequestNumber) });
+      const { claimToken: _claimToken, cleanupToken: _cleanupToken, review, ...publicJob } = job;
+      const publicReview = review ? (({ claimToken: _reviewClaimToken, ...safeReview }) => safeReview)(review) : null;
+      return context.json({ ...publicJob, review: publicReview, pullRequestUrl: canonicalPullRequestUrl(job.repository, job.pullRequestNumber) });
     })
     .post("/jobs/:id/support-issue", async (context) => {
       const result = await createSupportIssue({ config, github, jobId: context.req.param("id") });

@@ -25,10 +25,10 @@ export const runFix: JobFlow = async (context) => {
 
   if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
   const localPath = job.repository.localPath;
-  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id), async () => {
+  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id, job.attempts), async () => {
     await context.createReviewWorktree({
       repositoryPath: localPath,
-      worktreePath: safeWorktreePath(config.DATA_DIR, job.id),
+      worktreePath: safeWorktreePath(config.DATA_DIR, job.id, job.attempts),
       branchName: pullRequest.headBranch,
       gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
     });

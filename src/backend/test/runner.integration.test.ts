@@ -256,6 +256,7 @@ integration("job runner", () => {
     });
     expect(waiting.diagnostics).toMatchObject({ stderr: "You've hit your usage limit" });
     expect(created).toHaveLength(1);
+    expect(created[0]).toBe(resolve(config.DATA_DIR, "worktrees", `${job.id}-attempt-1`));
     expect(removed).toEqual([]);
     expect(await Bun.file(resolve(config.DATA_DIR, "outcomes", `${job.id}-issue-worker.txt`)).exists()).toBe(false);
     expect(github.createdIssues).toEqual([]);
@@ -918,6 +919,7 @@ integration("job runner", () => {
     await prisma.review.create({
       data: {
         jobId: job.id,
+        claimToken: job.claimToken,
         provider: job.provider,
         model: job.model,
         status: "RUNNING",
@@ -940,6 +942,33 @@ integration("job runner", () => {
       errorMessage: expect.stringContaining("head moved"),
       completedAt: expect.any(Date),
     });
+  });
+
+  test("stale review completion cannot overwrite a retried review", async () => {
+    const { reviewRepository } = await import("../src/repositories/reviews.ts");
+    const first = await claimed(issueBase + 52, "REVIEW", "PULL_REQUEST");
+    const firstReview = await reviewRepository.start(first.id, first.provider, first.model, first.claimToken!, first.reasoningEffort, {
+      pullRequestId: null,
+      pullRequestNumber: null,
+      headSha: null,
+    });
+    expect(firstReview).not.toBeNull();
+    expect(await jobs.finishRunning(first.id, first.claimToken!, "FAILED", { errorMessage: "first attempt failed" })).toBe(true);
+    expect(await jobs.releaseWorker(first.id, "runner-worker", first.claimToken!)).toBe(true);
+    expect(await jobs.requeueForRetry(first.id, environment)).not.toBeNull();
+
+    const second = await jobs.claim(first.id, environment, "runner-worker");
+    expect(second).not.toBeNull();
+    expect(await reviewRepository.failStaleForJob(first.id, second!.claimToken!)).toBe(true);
+    const secondReview = await reviewRepository.start(second!.id, second!.provider, second!.model, second!.claimToken!, second!.reasoningEffort, {
+      pullRequestId: null,
+      pullRequestNumber: null,
+      headSha: null,
+    });
+    expect(secondReview).not.toBeNull();
+    expect(secondReview!.id).toBe(firstReview!.id);
+    expect(await reviewRepository.finish(firstReview!.id, first.claimToken!, "PASSED", { response: "stale result" })).toBe(false);
+    expect(await prisma.review.findUniqueOrThrow({ where: { id: firstReview!.id } })).toMatchObject({ status: "RUNNING" });
   });
 
   test("retrying a failed review reuses the same job and never reruns the implementation", async () => {

@@ -88,7 +88,7 @@ export async function recoverTerminalJobs(
 export async function recoverStaleJobs(config: Config, github: GitHubClient, events: EventService) {
   await recoverTerminalJobs(config, events);
   await recoverCancelledWorktrees(config, events);
-  await reviewRepository.reconcileCancelledJobs();
+  await reviewRepository.reconcileCancelledJobs(config.APP_ENV);
   const staleJobs = await jobRepository.recoverStaleBefore(
     config.APP_ENV,
     new Date(Date.now() - config.STALE_JOB_THRESHOLD_MS),

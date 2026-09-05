@@ -18,10 +18,10 @@ export const runDecomposition: JobFlow = async (context) => {
   if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
   const localPath = job.repository.localPath;
   const gitEnvironment = githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl);
-  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id), async () => {
+  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id, job.attempts), async () => {
     await context.createWorktree({
       repositoryPath: localPath,
-      worktreePath: safeWorktreePath(config.DATA_DIR, job.id),
+      worktreePath: safeWorktreePath(config.DATA_DIR, job.id, job.attempts),
       branchName: job.branchName,
       baselineCommit: job.baselineCommit,
       gitEnvironment,

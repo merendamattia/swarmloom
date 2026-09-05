@@ -133,6 +133,11 @@ integration("PostgreSQL job lifecycle", () => {
     const worktreePath = `/data/worktrees/${claimed!.id}`;
     await prisma.job.update({ where: { id: queued!.id }, data: { worktreePath } });
     expect(await jobs.cancel(queued!.id)).toBe(true);
+    await prisma.$executeRaw`
+      UPDATE "job"
+      SET "heartbeatAt" = ${new Date(Date.now() - config.STALE_JOB_THRESHOLD_MS - 1)}
+      WHERE "id" = ${queued!.id}
+    `;
 
     const { recoverCancelledWorktrees } = await import("../src/worktrees/recovery.ts");
     const { createEventService } = await import("../src/events/service.ts");
@@ -358,6 +363,29 @@ integration("PostgreSQL job lifecycle", () => {
     await prisma.job.deleteMany({ where: { environment, subjectType: "PULL_REQUEST" } });
   });
 
+  test("reconciles cancelled reviews only for the worker environment", async () => {
+    const local = await jobs.tryCreateQueued(queuedJob(issuePrefix + 60, environment));
+    const foreign = await jobs.tryCreateQueued(queuedJob(issuePrefix + 61, `foreign-${crypto.randomUUID()}`));
+    expect(local).not.toBeNull();
+    expect(foreign).not.toBeNull();
+    expect(await jobs.cancel(local!.id)).toBe(true);
+    expect(await jobs.cancel(foreign!.id)).toBe(true);
+    await prisma.review.createMany({
+      data: [local!, foreign!].map((job) => ({
+        jobId: job.id,
+        provider: job.provider,
+        model: job.model,
+        status: "RUNNING" as const,
+        startedAt: new Date(),
+      })),
+    });
+
+    const { reviewRepository } = await import("../src/repositories/reviews.ts");
+    expect(await reviewRepository.reconcileCancelledJobs(environment)).toBe(1);
+    expect(await prisma.review.findUniqueOrThrow({ where: { jobId: local!.id } })).toMatchObject({ status: "FAILED" });
+    expect(await prisma.review.findUniqueOrThrow({ where: { jobId: foreign!.id } })).toMatchObject({ status: "RUNNING" });
+  });
+
   test("keeps quota-waiting jobs unique and requeues the same durable job", async () => {
     const input = queuedJob(issuePrefix + 10);
     const queued = await jobs.tryCreateQueued(input);
@@ -474,6 +502,18 @@ integration("PostgreSQL job lifecycle", () => {
     const removed: string[] = [];
     const { createEventService } = await import("../src/events/service.ts");
     const { recoverCancelledWorktrees } = await import("../src/worktrees/recovery.ts");
+    expect(await recoverCancelledWorktrees(
+      config,
+      createEventService(),
+      async ({ worktreePath: path }) => { removed.push(path); },
+    )).toBe(0);
+
+    expect(removed).toEqual([]);
+    await prisma.$executeRaw`
+      UPDATE "job"
+      SET "heartbeatAt" = ${new Date(Date.now() - config.STALE_JOB_THRESHOLD_MS - 1)}
+      WHERE "id" = ${queued!.id}
+    `;
     expect(await recoverCancelledWorktrees(
       config,
       createEventService(),

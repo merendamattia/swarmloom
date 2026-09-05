@@ -181,12 +181,17 @@ async function findWaitingForQuota(environment: string, provider: AgentProvider 
   });
 }
 
-async function findCancelledWorktrees(environment: string) {
+async function findCancelledWorktrees(environment: string, staleBefore: Date) {
   return prisma.job.findMany({
     where: {
       environment,
       status: "CANCELLED",
       worktreePath: { not: null },
+      OR: [
+        { workerId: null },
+        { heartbeatAt: null },
+        { heartbeatAt: { lt: staleBefore } },
+      ],
     },
     include: { repository: true },
     orderBy: { completedAt: "asc" },
@@ -684,7 +689,7 @@ async function cancel(id: string) {
       quotaWaitStartedAt: null,
       quotaWaitDurationMs,
       worktreeCleanupRequired: Boolean(job.worktreePath),
-      heartbeatAt: null,
+      heartbeatAt: job.status === "RUNNING" ? undefined : null,
     },
   });
   return updated.count === 1;

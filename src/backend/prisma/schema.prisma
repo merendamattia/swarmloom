@@ -206,6 +206,7 @@ model Review {
   id               String             @id @default(cuid())
   jobId            String             @unique
   job              Job                @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  claimToken       String?
   pullRequestId    String?
   pullRequest      ManagedPullRequest? @relation(fields: [pullRequestId], references: [id], onDelete: SetNull)
   pullRequestNumber Int?

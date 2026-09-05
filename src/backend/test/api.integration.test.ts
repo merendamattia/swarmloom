@@ -339,6 +339,15 @@ integration("operations API", () => {
         cleanupToken: "internal-cleanup-token",
       },
     });
+    await prisma.review.create({
+      data: {
+        jobId,
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+        status: "RUNNING",
+        claimToken: "internal-review-claim-token",
+      },
+    });
     const detail = await app.request(`/api/jobs/${jobId}`);
     const body = await detail.json();
     expect(body).toMatchObject({
@@ -346,6 +355,7 @@ integration("operations API", () => {
     });
     expect(body).not.toHaveProperty("claimToken");
     expect(body).not.toHaveProperty("cleanupToken");
+    expect(body.review).not.toHaveProperty("claimToken");
     await prisma.job.update({ where: { id: jobId }, data: { claimToken: null, cleanupToken: null } });
   });
 
