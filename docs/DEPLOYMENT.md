@@ -446,10 +446,11 @@ the prior effort is incompatible. The bootstrap `CODEX_*` values are checked aga
 catalog during startup and Settings updates.
 
 Each invocation is a new `codex exec --json` process using `workspace-write`, automatic approval
-review, the role-specific model/reasoning, the assigned worktree, and the response file path. The
-adapter does not resume an earlier thread. Auth persists in `codex_home`; the canonical runtime is
-not stored there. Coding and review reasoning effort are separate so each role can be tuned for its
-quality and cost needs.
+review, the role-specific model/reasoning, the assigned worktree, and the response file path. A
+retry with a persisted session uses `codex exec resume` in the retained worktree; jobs without a
+session start a new thread. Auth persists in `codex_home`; the canonical runtime is not stored
+there. Coding and review reasoning effort are separate so each role can be tuned for its quality
+and cost needs.
 
 OpenAI documents `codex exec`, JSONL, output schemas, and sandbox flags in the official [Codex CLI
 reference](https://developers.openai.com/codex/cli/reference). Account/device login, `CODEX_HOME`,
@@ -482,10 +483,11 @@ OPENCODE_CONFIG_DIR=/data/opencode-config
 OPENCODE_PERMISSION={"*":"allow"}
 ```
 
-The adapter launches a fresh `opencode run --format json` process, sends the prompt on stdin, and
-normalizes raw JSON events. `OPENCODE_PERMISSION` allows required noninteractive repository/GitHub
-tools inside the already isolated worker container. Do not expose the Docker socket or unrelated
-host directories to that container.
+The adapter launches a fresh `opencode run --format json` process for each invocation, sends the
+prompt on stdin, and normalizes raw JSON events; persisted OpenCode sessions are not resumed.
+`OPENCODE_PERMISSION` allows required noninteractive repository/GitHub tools inside the already
+isolated worker container. Do not expose the Docker socket or unrelated host directories to that
+container.
 
 The default uses the [OpenCode Go](https://opencode.ai/docs/go/) subscription (`opencode-go`
 provider) rather than pay-per-token API billing. Authenticate the provider inside the worker

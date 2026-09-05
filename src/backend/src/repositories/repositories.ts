@@ -51,6 +51,7 @@ async function remove(id: string, fullName: string, configuration?: RemoveConfig
         { status: { in: ["QUEUED", "RUNNING", "WAITING_FOR_QUOTA"] } },
         { worktreePath: { not: null } },
         { worktreeCleanupRequired: true },
+        { worktreePath: { not: null } },
       ],
     },
   });

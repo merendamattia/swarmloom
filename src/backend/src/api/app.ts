@@ -19,7 +19,8 @@ import { configuredAgent } from "../providers/index.ts";
 import type { ProviderUsageCapability, ProviderUsageSnapshot } from "../providers/types.ts";
 import { createSupportIssue } from "../support-issues/service.ts";
 import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.ts";
-import { removeJobWorktree } from "../git/repositories.ts";
+import { githubGitEnvironment } from "../github/git-auth.ts";
+import { removeJobWorktree, repositoryPath } from "../git/repositories.ts";
 import { dashboardExceptionRepository } from "../repositories/dashboard-exceptions.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import { repositoryRepository } from "../repositories/repositories.ts";
@@ -342,23 +343,25 @@ export function createApp({
           events: { orderBy: { createdAt: "asc" } },
         },
       });
-      return job
-        ? (() => {
-          const {
-            inputTokens,
-            cachedInputTokens,
-            outputTokens,
-            reasoningOutputTokens,
-            totalTokens,
-            ...serializedJob
-          } = job;
-          return context.json({
-            ...serializedJob,
-            pullRequestUrl: canonicalPullRequestUrl(job.repository, job.pullRequestNumber),
-            usage: serializeTokenUsage({ inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens, totalTokens }),
-          });
-        })()
-        : context.json({ error: "Not found" }, 404);
+      if (!job) return context.json({ error: "Not found" }, 404);
+      const {
+        claimToken: _claimToken,
+        cleanupToken: _cleanupToken,
+        inputTokens,
+        cachedInputTokens,
+        outputTokens,
+        reasoningOutputTokens,
+        totalTokens,
+        review,
+        ...publicJob
+      } = job;
+      const publicReview = review ? (({ claimToken: _reviewClaimToken, ...safeReview }) => safeReview)(review) : null;
+      return context.json({
+        ...publicJob,
+        review: publicReview,
+        pullRequestUrl: canonicalPullRequestUrl(job.repository, job.pullRequestNumber),
+        usage: serializeTokenUsage({ inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens, totalTokens }),
+      });
     })
     .post("/jobs/:id/support-issue", async (context) => {
       const result = await createSupportIssue({ config, github, jobId: context.req.param("id") });
@@ -497,6 +500,25 @@ export function createApp({
       if (currentPullRequest && job.headSha && currentPullRequest.headSha !== job.headSha) {
         const trigger = job.jobType === "REVIEW" ? config.PR_REVIEW_REQUESTED_LABEL : config.PR_FIX_REQUESTED_LABEL;
         try {
+          const cleanup = job.worktreePath
+            ? await jobRepository.claimWorktreeCleanup(job.id, null, job.claimToken, job.worktreePath)
+            : null;
+          if (job.worktreePath && !cleanup) {
+            return context.json({ error: "Job cleanup is still in progress" }, 409);
+          }
+          if (cleanup) {
+            await removeWorktree({
+              worktreePath: cleanup.path,
+              repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
+              gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
+            });
+            if (!await jobRepository.clearWorktree(job.id, job.claimToken, cleanup.cleanupToken)) {
+              return context.json({ error: "Job cleanup is still in progress" }, 409);
+            }
+          }
+          if (job.status === "FAILED" && !await jobRepository.discardFailedJob(job.id, job.claimToken)) {
+            return context.json({ error: "Job cleanup is still in progress" }, 409);
+          }
           const labels = await github.getPullRequestLabels(job.repository.fullName, job.pullRequestNumber!);
           await github.setPullRequestLabels(
             job.repository.fullName,
@@ -534,9 +556,9 @@ export function createApp({
       if (!requeued) {
         const current = await prisma.job.findFirst({
           where: { id: job.id, environment: config.APP_ENV },
-          select: { status: true, workerId: true, worktreePath: true },
+          select: { status: true, workerId: true, cleanupToken: true, worktreePath: true },
         });
-        const cleanupPending = current?.workerId !== null
+        const cleanupPending = current?.workerId !== null || current?.cleanupToken !== null
           || (current?.status !== "FAILED" && current?.worktreePath !== null);
         return current
           ? context.json({ error: current.status === "QUEUED" || current.status === "RUNNING" ? "Retry is already in progress" : cleanupPending ? "Job cleanup is still in progress" : "Job is no longer retryable" }, 409)

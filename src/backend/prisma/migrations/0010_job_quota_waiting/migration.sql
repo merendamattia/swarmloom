@@ -17,5 +17,10 @@ UPDATE "job"
 SET "activeDurationMs" = "durationMs"
 WHERE "durationMs" IS NOT NULL;
 
+UPDATE "job"
+SET "workerId" = NULL,
+    "heartbeatAt" = NULL
+WHERE "status" IN ('COMPLETED', 'FAILED', 'BLOCKED', 'DECOMPOSED', 'CANCELLED', 'STALE');
+
 CREATE INDEX "job_environment_status_quotaWaitStartedAt_idx"
   ON "job"("environment", "status", "quotaWaitStartedAt");

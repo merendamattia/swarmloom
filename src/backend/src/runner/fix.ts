@@ -39,7 +39,7 @@ export const runFix: JobFlow = async (context) => {
   context.state.repositoryPath = localPath;
   context.state.worktreePersisted = !worktree.created;
   if (worktree.created) {
-    if (!await jobRepository.setWorktree(job.id, worktreePath, job.attempts)) return;
+    if (!await jobRepository.setWorktree(job.id, job.claimToken, worktreePath)) return;
     context.state.worktreePersisted = true;
   }
 
@@ -74,17 +74,17 @@ export const runFix: JobFlow = async (context) => {
     if (result.exitCode !== 0) {
       throw new Error(result.stderr || `${provider.name} exited with ${result.exitCode}`);
     }
-    await jobRepository.setExecutionResult(job.id, result.sessionId, result.exitCode, job.attempts);
+    await jobRepository.setExecutionResult(job.id, job.claimToken, result.sessionId, result.exitCode);
 
     const blockedOutcome = parseJobOutcome(result.response) === "blocked";
     resultTldr = parseTldr(result.response);
     if (blockedOutcome) {
       await managedPullRequestRepository.block(job.repositoryId, pullRequest.prNumber);
       await applyPullRequestLabels(github, config, job, pullRequest.prNumber, [config.ISSUE_HUMAN_REVIEW_LABEL]);
-      const finished = await jobRepository.finishRunning(job.id, "BLOCKED", {
+      const finished = await jobRepository.finishRunning(job.id, job.claimToken, "BLOCKED", {
         result: result.response,
         exitCode: result.exitCode,
-      }, job.attempts);
+      });
       if (!finished) return;
       await events.record({
         type: "JOB_BLOCKED",
@@ -138,13 +138,13 @@ export const runFix: JobFlow = async (context) => {
         metadata: { issueUrl: job.issueUrl, pullRequestUrl: current.url },
       });
     }
-    const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: result.response,
       exitCode: result.exitCode,
       pullRequestNumber: current.number,
       pullRequestUrl: current.url,
       headSha: current.headSha,
-    }, job.attempts);
+    });
     if (!finished) return;
     await events.record({
       type: "JOB_COMPLETED",
@@ -229,12 +229,12 @@ export const runFix: JobFlow = async (context) => {
         metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl },
       });
     }
-    const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: response,
       pullRequestNumber: prNumber,
       pullRequestUrl: pullRequestUrl,
       headSha,
-    }, job.attempts);
+    });
     if (!finished) return;
     await events.record({
       type: "LOOP_GUARD_TRIPPED",

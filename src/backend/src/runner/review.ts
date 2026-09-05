@@ -26,9 +26,10 @@ export const runReview: JobFlow = async (context) => {
   const pullRequest = job.pullRequest;
 
   const stale = async () => {
-    const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
+    await reviewRepository.failStaleForJob(job.id, job.claimToken);
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: `Stale review: the pull request head moved past ${job.headSha} before this review could apply.`,
-    }, job.attempts);
+    });
     if (!finished) return;
     await events.record({
       type: "STALE_RESULT_DISCARDED",
@@ -68,7 +69,7 @@ export const runReview: JobFlow = async (context) => {
   context.state.repositoryPath = localPath;
   context.state.worktreePersisted = !worktree.created;
   if (worktree.created) {
-    if (!await jobRepository.setWorktree(job.id, worktreePath, job.attempts)) return;
+    if (!await jobRepository.setWorktree(job.id, job.claimToken, worktreePath)) return;
     context.state.worktreePersisted = true;
   }
 
@@ -91,6 +92,7 @@ export const runReview: JobFlow = async (context) => {
     job.id,
     job.provider,
     job.model,
+    job.claimToken,
     job.reasoningEffort,
     {
       pullRequestId: pullRequest.id,
@@ -98,6 +100,7 @@ export const runReview: JobFlow = async (context) => {
       headSha: job.headSha,
     },
   );
+  if (!reviewRow) return;
   try {
     const result = await context.executeRoleWithRetry(
       "reviewer",
@@ -111,8 +114,9 @@ export const runReview: JobFlow = async (context) => {
     if (result.exitCode !== 0) throw new Error(result.stderr || "Automated review failed");
     const verdict = parseReviewOutcome(result.response);
     const tldr = parseTldr(result.response);
-    await reviewRepository.finish(
+    const reviewFinished = await reviewRepository.finish(
       reviewRow.id,
+      job.claimToken,
       verdict === "pass" ? "PASSED" : "CHANGES_REQUESTED",
       {
         sessionId: result.sessionId,
@@ -120,6 +124,7 @@ export const runReview: JobFlow = async (context) => {
         exitCode: result.exitCode,
       },
     );
+    if (!reviewFinished) return;
     await events.record({
       type: "REVIEW_COMPLETED",
       message: `Review ${verdict} for ${fullName}#${pullRequest.prNumber} at ${job.headSha}`,
@@ -167,13 +172,13 @@ export const runReview: JobFlow = async (context) => {
         });
         throw error;
       }
-      const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
+      const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
         result: result.response,
         exitCode: result.exitCode,
         pullRequestNumber: pullRequest.prNumber,
         pullRequestUrl: job.pullRequestUrl ?? undefined,
         headSha: job.headSha,
-      }, job.attempts);
+      });
       if (!finished) return;
       await context.finalizeIssue(
         job,
@@ -239,13 +244,13 @@ export const runReview: JobFlow = async (context) => {
       });
       throw error;
     }
-    const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: result.response,
       exitCode: result.exitCode,
       pullRequestNumber: pullRequest.prNumber,
       pullRequestUrl: job.pullRequestUrl ?? undefined,
       headSha: job.headSha,
-    }, job.attempts);
+    });
     if (!finished) return;
     await events.record({
       type: "JOB_COMPLETED",
@@ -264,7 +269,7 @@ export const runReview: JobFlow = async (context) => {
     return;
   } catch (error) {
     if (!isQuotaFailure(error)) {
-      await reviewRepository.finish(reviewRow.id, "FAILED", { errorMessage: safeError(error) });
+      await reviewRepository.finish(reviewRow.id, job.claimToken, "FAILED", { errorMessage: safeError(error) });
     }
     throw error;
   }

@@ -36,7 +36,7 @@ export const runImplementation: JobFlow = async (context) => {
   context.state.repositoryPath = localPath;
   context.state.worktreePersisted = !worktree.created;
   if (worktree.created) {
-    if (!await jobRepository.setWorktree(job.id, worktreePath, job.attempts)) return;
+    if (!await jobRepository.setWorktree(job.id, job.claimToken, worktreePath)) return;
     context.state.worktreePersisted = true;
   }
 
@@ -58,7 +58,7 @@ export const runImplementation: JobFlow = async (context) => {
     signal,
     job,
   );
-  await jobRepository.setExecutionResult(job.id, implementation.sessionId, implementation.exitCode, job.attempts);
+  await jobRepository.setExecutionResult(job.id, job.claimToken, implementation.sessionId, implementation.exitCode);
   if (implementation.exitCode !== 0) {
     throw new Error(implementation.stderr || `${provider.name} exited with ${implementation.exitCode}`);
   }
@@ -94,13 +94,13 @@ export const runImplementation: JobFlow = async (context) => {
     if (!managedPullRequestId) {
       throw new Error(`Could not persist managed pull request ${fullName}#${pullRequest.number}`);
     }
-    const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: implementation.response,
       exitCode: implementation.exitCode,
       pullRequestNumber: pullRequest.number,
       pullRequestUrl: pullRequest.url,
       headSha: pullRequest.headSha,
-    }, job.attempts);
+    });
     if (!finished) return;
     await events.record({
       type: "PR_OPENED",
@@ -163,10 +163,10 @@ export const runImplementation: JobFlow = async (context) => {
   }
 
   if (outcome === "requires_decomposition") {
-    const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: implementation.response,
       exitCode: implementation.exitCode,
-    }, job.attempts);
+    });
     if (!finished) return;
     // DECOMPOSITION deliberately inherits the coding profile snapshot from its implementation job.
     const decomposition = await jobRepository.tryCreateQueued({
@@ -209,10 +209,10 @@ export const runImplementation: JobFlow = async (context) => {
   }
 
   if (outcome === "blocked") {
-    const finished = await jobRepository.finishRunning(job.id, "BLOCKED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "BLOCKED", {
       result: implementation.response,
       exitCode: implementation.exitCode,
-    }, job.attempts);
+    });
     if (!finished) return;
     await events.record({ type: "JOB_BLOCKED", message: "Worker blocked", jobId: job.id, repositoryId: job.repositoryId, scanRunId: job.scanRunId ?? undefined, metadata: { issueUrl: job.issueUrl, tldr } });
     await context.finalizeIssue(job, [config.ISSUE_BLOCKED_LABEL, config.ISSUE_HUMAN_REVIEW_LABEL], implementation.response);

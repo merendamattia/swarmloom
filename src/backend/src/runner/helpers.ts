@@ -72,7 +72,7 @@ export async function executeRole(
   let usagePersistenceFailureRecorded = false;
   const persistUsage = async (usage: AgentTokenUsage) => {
     try {
-      await jobRepository.setTokenUsage(job.id, usage, job.attempts);
+      await jobRepository.setTokenUsage(job.id, usage, job.claimToken);
     } catch {
       if (usagePersistenceFailureRecorded) return;
       usagePersistenceFailureRecorded = true;
@@ -89,6 +89,7 @@ export async function executeRole(
   };
   let resumedEventRecorded = false;
   try {
+    await removeResponseFile(responseFilePath);
     const result = await context.provider.execute({
       role,
       workingDirectory,
@@ -96,7 +97,7 @@ export async function executeRole(
       context: contextText,
       instructions: await loadAgentInstructions(context.config.AGENT_RUNTIME_DIR),
       model: job.model,
-      reasoningEffort: job.reasoningEffort as Config["CODEX_CODING_REASONING_EFFORT"] | undefined,
+      reasoningEffort: job.reasoningEffort ?? undefined,
       resumeSessionId: requestedSessionId ?? undefined,
       environment: githubGitEnvironment(context.config.GITHUB_TOKEN, job.repository.cloneUrl),
       responseFilePath,
@@ -109,7 +110,7 @@ export async function executeRole(
             throw new Error(`Provider resumed session ${observedSessionId} instead of requested ${requestedSessionId}`);
           }
           sessionId = observedSessionId;
-          if (!await jobRepository.setSessionId(job.id, observedSessionId, job.attempts)) {
+          if (!await jobRepository.setSessionId(job.id, job.claimToken, observedSessionId)) {
             throw new Error(`Could not persist provider session for job ${job.id}`);
           }
           job.sessionId = observedSessionId;
@@ -156,7 +157,7 @@ export async function executeRole(
       throw new Error(result.stderr || `Provider did not resume session ${requestedSessionId}`);
     }
     if (resolvedSessionId && !sessionId) {
-      if (!await jobRepository.setSessionId(job.id, resolvedSessionId, job.attempts)) {
+      if (!await jobRepository.setSessionId(job.id, job.claimToken, resolvedSessionId)) {
         throw new Error(`Could not persist provider session for job ${job.id}`);
       }
       sessionId = resolvedSessionId;
@@ -199,6 +200,7 @@ export async function executeRole(
     }
     return execution;
   } catch (error) {
+    await removeResponseFile(responseFilePath);
     if (error instanceof AgentExecutionError) throw error;
     throw new AgentExecutionError(safeError(error), {
       stage: error instanceof ProviderProcessError ? "provider_process" : roleStage(role),

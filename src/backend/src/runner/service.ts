@@ -59,9 +59,10 @@ export function createJobRunner({
 }: RunnerDependencies) {
   const diagnosticEnvironment = { ...globalThis.process.env, SWARMLOOM_GITHUB_TOKEN: config.GITHUB_TOKEN };
 
-  async function run(jobId: string, workerId: string) {
-    const job = await jobRepository.findRunning(jobId, workerId);
-    if (!job) return false;
+  async function run(jobId: string, workerId: string, claimToken: string) {
+    const storedJob = await jobRepository.findRunning(jobId, workerId, claimToken);
+    if (!storedJob?.claimToken) return false;
+    const job = { ...storedJob, claimToken };
     const provider = (providers?.[job.provider.toLowerCase() as AgentProvider["name"]] ?? defaultProvider) as AgentProvider;
 
     const controller = new AbortController();
@@ -71,7 +72,7 @@ export function createJobRunner({
     const heartbeatOnce = async () => {
       if (heartbeatStopped) return;
       try {
-        const active = await jobRepository.heartbeat(job.id, workerId, job.attempts);
+        const active = await jobRepository.heartbeat(job.id, workerId, claimToken);
         if (!active) controller.abort(new Error("Job is no longer running"));
       } finally {
         if (!heartbeatStopped) {
@@ -120,7 +121,7 @@ export function createJobRunner({
     } catch (error) {
       if (isQuotaFailure(error)) {
         const admission = quotaAdmission(error.failure.quota);
-        const paused = await jobRepository.waitForQuotaRunning(job.id, job.environment, workerId, job.attempts, {
+        const paused = await jobRepository.waitForQuotaRunning(job.id, job.environment, workerId, claimToken, {
           resetAt: admission.kind === "wait" ? admission.resetAt : null,
           window: admission.kind === "wait" ? admission.window : null,
           usedPercent: admission.kind === "wait" ? admission.usedPercent : null,
@@ -160,10 +161,10 @@ export function createJobRunner({
               { environment: diagnosticEnvironment },
             ).diagnostics
             : minimalDiagnostics(error, { provider: provider?.name ?? "unconfigured", model: job.model }, diagnosticEnvironment);
-        reachedTerminalState = await jobRepository.finishRunning(job.id, "FAILED", {
+        reachedTerminalState = await jobRepository.finishRunning(job.id, claimToken, "FAILED", {
           errorMessage: message,
           diagnostics: diagnostics as Prisma.InputJsonValue,
-        }, job.attempts);
+        });
         retainWorktree = reachedTerminalState && state.worktreePersisted && Boolean(state.worktreePath);
         if (reachedTerminalState) {
           await events.record({
@@ -179,13 +180,15 @@ export function createJobRunner({
       const preserveWorktree = state.preserveWorktree || retainWorktree;
       if (state.worktreeCreated && !preserveWorktree) {
         try {
-          await removeWorktree({
-            worktreePath: state.worktreePath!,
-            repositoryPath: state.repositoryPath,
-            gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
-          });
-          await jobRepository.clearWorktree(job.id, job.attempts);
-          worktreeCleanupComplete = true;
+          const cleanup = await jobRepository.claimWorktreeCleanup(job.id, workerId, claimToken, state.worktreePath);
+          if (cleanup) {
+            await removeWorktree({
+              worktreePath: cleanup.path,
+              repositoryPath: state.repositoryPath,
+              gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
+            });
+            worktreeCleanupComplete = await jobRepository.clearWorktree(job.id, claimToken, cleanup.cleanupToken);
+          }
         } catch (error) {
           await events.record({
             type: "GITHUB_RECONCILIATION_REQUIRED",
@@ -198,7 +201,7 @@ export function createJobRunner({
           });
         }
       }
-      if (state.repositoryPath && !preserveWorktree) {
+      if (state.repositoryPath && !preserveWorktree && worktreeCleanupComplete) {
         try {
           await gc({ repositoryPath: state.repositoryPath, gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl) });
         } catch {
@@ -206,7 +209,7 @@ export function createJobRunner({
         }
       }
       if (!state.worktreeCreated || preserveWorktree) worktreeCleanupComplete = true;
-      if (worktreeCleanupComplete) await jobRepository.releaseWorker(job.id, workerId, job.attempts);
+      if (worktreeCleanupComplete) await jobRepository.releaseWorker(job.id, workerId, claimToken);
     }
     return reachedTerminalState;
   }
@@ -263,7 +266,10 @@ function createExecuteRoleWithRetry(events: EventService, config: Config, provid
         resumeSessionId,
       );
       onExecution(result);
-      if (result.exitCode !== 0) return result;
+      if (result.exitCode !== 0) {
+        await removeResponseFile(result.responseFilePath);
+        return result;
+      }
       let response = "";
       try {
         response = await readResponseFile(result.responseFilePath);

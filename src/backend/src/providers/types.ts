@@ -67,7 +67,7 @@ export type AgentRequest = {
   context: string;
   instructions?: string;
   model: string;
-  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  reasoningEffort?: string;
   resumeSessionId?: string;
   environment?: Record<string, string | undefined>;
   responseFilePath?: string;

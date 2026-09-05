@@ -33,7 +33,7 @@ export const runDecomposition: JobFlow = async (context) => {
   context.state.repositoryPath = localPath;
   context.state.worktreePersisted = !worktree.created;
   if (worktree.created) {
-    if (!await jobRepository.setWorktree(job.id, worktreePath, job.attempts)) return;
+    if (!await jobRepository.setWorktree(job.id, job.claimToken, worktreePath)) return;
     context.state.worktreePersisted = true;
   }
 
@@ -67,10 +67,10 @@ export const runDecomposition: JobFlow = async (context) => {
   const tldr = parseTldr(decomposition.response);
 
   if (outcome === "decomposed") {
-    const finished = await jobRepository.finishRunning(job.id, "DECOMPOSED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "DECOMPOSED", {
       result: decomposition.response,
       exitCode: decomposition.exitCode,
-    }, job.attempts);
+    });
     if (!finished) return;
     await events.record({
       type: "JOB_DECOMPOSED",
@@ -84,10 +84,10 @@ export const runDecomposition: JobFlow = async (context) => {
     return;
   }
 
-  const finished = await jobRepository.finishRunning(job.id, "BLOCKED", {
+  const finished = await jobRepository.finishRunning(job.id, job.claimToken, "BLOCKED", {
     result: decomposition.response,
     exitCode: decomposition.exitCode,
-  }, job.attempts);
+  });
   if (!finished) return;
   await events.record({
     type: "JOB_BLOCKED",

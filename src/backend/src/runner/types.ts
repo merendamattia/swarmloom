@@ -7,7 +7,7 @@ import type { JobQueue } from "../queue/service.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import type { RoleExecution } from "./diagnostics.ts";
 
-export type RunningJob = NonNullable<Awaited<ReturnType<typeof jobRepository.findRunning>>>;
+export type RunningJob = NonNullable<Awaited<ReturnType<typeof jobRepository.findRunning>>> & { claimToken: string };
 
 export type RunnerGitHub = Pick<GitHubClient,
   "getIssue" | "getIssueContext" | "getPullRequest" | "getPullRequestDiff" |

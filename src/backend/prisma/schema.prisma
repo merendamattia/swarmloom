@@ -159,6 +159,9 @@ model Job {
   supportIssueCreatingAt  DateTime?
   supportIssueReconcileRequired Boolean   @default(false)
   workerId                 String?
+  claimToken               String?
+  cleanupToken             String?
+  cleanupLeaseExpiresAt    DateTime?
   attempts                 Int           @default(0)
   heartbeatAt              DateTime?
   createdAt                DateTime      @default(now())
@@ -209,6 +212,7 @@ model Review {
   id               String             @id @default(cuid())
   jobId            String             @unique
   job              Job                @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  claimToken       String?
   pullRequestId    String?
   pullRequest      ManagedPullRequest? @relation(fields: [pullRequestId], references: [id], onDelete: SetNull)
   pullRequestNumber Int?
