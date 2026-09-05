@@ -21,10 +21,10 @@ export const runImplementation: JobFlow = async (context) => {
 
   if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
   const localPath = job.repository.localPath;
-  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id), async () => {
+  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id, job.attempts), async () => {
     await context.createWorktree({
       repositoryPath: localPath,
-      worktreePath: safeWorktreePath(config.DATA_DIR, job.id),
+      worktreePath: safeWorktreePath(config.DATA_DIR, job.id, job.attempts),
       branchName: job.branchName,
       baselineCommit: job.baselineCommit,
       gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
@@ -36,7 +36,7 @@ export const runImplementation: JobFlow = async (context) => {
   context.state.repositoryPath = localPath;
   context.state.worktreePersisted = !worktree.created;
   if (worktree.created) {
-    if (!await jobRepository.setWorktree(job.id, worktreePath)) return;
+    if (!await jobRepository.setWorktree(job.id, worktreePath, job.attempts)) return;
     context.state.worktreePersisted = true;
   }
 
@@ -58,7 +58,7 @@ export const runImplementation: JobFlow = async (context) => {
     signal,
     job,
   );
-  await jobRepository.setExecutionResult(job.id, implementation.sessionId, implementation.exitCode);
+  await jobRepository.setExecutionResult(job.id, implementation.sessionId, implementation.exitCode, job.attempts);
   if (implementation.exitCode !== 0) {
     throw new Error(implementation.stderr || `${provider.name} exited with ${implementation.exitCode}`);
   }
@@ -100,7 +100,7 @@ export const runImplementation: JobFlow = async (context) => {
       pullRequestNumber: pullRequest.number,
       pullRequestUrl: pullRequest.url,
       headSha: pullRequest.headSha,
-    });
+    }, job.attempts);
     if (!finished) return;
     await events.record({
       type: "PR_OPENED",
@@ -166,7 +166,7 @@ export const runImplementation: JobFlow = async (context) => {
     const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
       result: implementation.response,
       exitCode: implementation.exitCode,
-    });
+    }, job.attempts);
     if (!finished) return;
     // DECOMPOSITION deliberately inherits the coding profile snapshot from its implementation job.
     const decomposition = await jobRepository.tryCreateQueued({
@@ -212,7 +212,7 @@ export const runImplementation: JobFlow = async (context) => {
     const finished = await jobRepository.finishRunning(job.id, "BLOCKED", {
       result: implementation.response,
       exitCode: implementation.exitCode,
-    });
+    }, job.attempts);
     if (!finished) return;
     await events.record({ type: "JOB_BLOCKED", message: "Worker blocked", jobId: job.id, repositoryId: job.repositoryId, scanRunId: job.scanRunId ?? undefined, metadata: { issueUrl: job.issueUrl, tldr } });
     await context.finalizeIssue(job, [config.ISSUE_BLOCKED_LABEL, config.ISSUE_HUMAN_REVIEW_LABEL], implementation.response);

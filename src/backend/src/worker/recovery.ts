@@ -14,9 +14,10 @@ export async function recoverStaleJobs(
   events: EventService,
   removeWorktree: typeof removeJobWorktree = removeJobWorktree,
 ) {
-  await recoverCancelledWorktrees(config, events, removeWorktree);
-  for (const job of await jobRepository.findCancelledWorkers(config.APP_ENV)) {
-    if (job.workerId) await jobRepository.releaseWorker(job.id, job.workerId);
+  const staleBefore = new Date(Date.now() - config.STALE_JOB_THRESHOLD_MS);
+  await recoverCancelledWorktrees(config, events, removeWorktree, staleBefore);
+  for (const job of await jobRepository.findCancelledWorkers(config.APP_ENV, staleBefore)) {
+    if (job.workerId) await jobRepository.releaseWorker(job.id, job.workerId, job.attempts);
   }
   await reviewRepository.reconcileCancelledJobs();
   const staleJobs = await jobRepository.recoverStaleBefore(
@@ -30,9 +31,9 @@ export async function recoverStaleJobs(
         repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
         gitEnvironment: undefined,
       });
-      await jobRepository.clearWorktree(job.id);
+      await jobRepository.clearWorktree(job.id, job.attempts);
     }
-    if (job.workerId) await jobRepository.releaseWorker(job.id, job.workerId);
+    if (job.workerId) await jobRepository.releaseWorker(job.id, job.workerId, job.attempts);
     await events.record({
       type: "JOB_FAILED",
       level: "ERROR",

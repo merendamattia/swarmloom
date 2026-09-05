@@ -28,7 +28,7 @@ export const runReview: JobFlow = async (context) => {
   const stale = async () => {
     const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
       result: `Stale review: the pull request head moved past ${job.headSha} before this review could apply.`,
-    });
+    }, job.attempts);
     if (!finished) return;
     await events.record({
       type: "STALE_RESULT_DISCARDED",
@@ -54,10 +54,10 @@ export const runReview: JobFlow = async (context) => {
   if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
   const localPath = job.repository.localPath;
   const gitEnvironment = githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl);
-  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id), async () => {
+  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id, job.attempts), async () => {
     await context.createReviewWorktree({
       repositoryPath: localPath,
-      worktreePath: safeWorktreePath(config.DATA_DIR, job.id),
+      worktreePath: safeWorktreePath(config.DATA_DIR, job.id, job.attempts),
       branchName: pullRequest.headBranch,
       gitEnvironment,
     });
@@ -68,7 +68,7 @@ export const runReview: JobFlow = async (context) => {
   context.state.repositoryPath = localPath;
   context.state.worktreePersisted = !worktree.created;
   if (worktree.created) {
-    if (!await jobRepository.setWorktree(job.id, worktreePath)) return;
+    if (!await jobRepository.setWorktree(job.id, worktreePath, job.attempts)) return;
     context.state.worktreePersisted = true;
   }
 
@@ -173,7 +173,7 @@ export const runReview: JobFlow = async (context) => {
         pullRequestNumber: pullRequest.prNumber,
         pullRequestUrl: job.pullRequestUrl ?? undefined,
         headSha: job.headSha,
-      });
+      }, job.attempts);
       if (!finished) return;
       await context.finalizeIssue(
         job,
@@ -245,7 +245,7 @@ export const runReview: JobFlow = async (context) => {
       pullRequestNumber: pullRequest.prNumber,
       pullRequestUrl: job.pullRequestUrl ?? undefined,
       headSha: job.headSha,
-    });
+    }, job.attempts);
     if (!finished) return;
     await events.record({
       type: "JOB_COMPLETED",

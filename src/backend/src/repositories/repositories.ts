@@ -49,6 +49,7 @@ async function remove(id: string, fullName: string, configuration?: RemoveConfig
       repositoryId: id,
       OR: [
         { status: { in: ["QUEUED", "RUNNING", "WAITING_FOR_QUOTA"] } },
+        { worktreePath: { not: null } },
         { worktreeCleanupRequired: true },
       ],
     },

@@ -774,6 +774,17 @@ integration("operations API", () => {
         response: "ok",
       },
     });
+    await prisma.job.update({
+      where: { id: obsoleteJob.id },
+      data: { status: "FAILED", worktreePath: `/worker_data/worktrees/${obsoleteJob.id}` },
+    });
+    const blockedRetained = await app.request(`/api/repositories/${obsolete.id}`, { method: "DELETE" });
+    expect(blockedRetained.status).toBe(409);
+    expect(await prisma.repository.findUnique({ where: { id: obsolete.id } })).not.toBeNull();
+    await prisma.job.update({
+      where: { id: obsoleteJob.id },
+      data: { status: "COMPLETED", worktreePath: null },
+    });
     const listBefore = (await (await app.request("/api/repositories")).json()) as Array<{ id: string }>;
     expect(listBefore.some((repository) => repository.id === obsolete.id)).toBe(true);
 

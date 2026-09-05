@@ -62,7 +62,7 @@ export function ProviderUsageCard({ provider, usage }: { provider: Status["provi
           ) : null}
         </>
       ) : usage.windows.length === 0 ? (
-        <p className="quota-message">No quota windows were reported by Codex.</p>
+        <p className="quota-message">{usage.availability === "exhausted" ? "Codex reports this allowance as exhausted." : usage.message ?? "No quota windows were reported by Codex."}</p>
       ) : (
         <>
           {usage.availability === "exhausted" ? <p className="quota-message">Codex reports this allowance as exhausted.</p> : null}

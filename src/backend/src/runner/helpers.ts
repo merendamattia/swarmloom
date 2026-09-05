@@ -72,7 +72,7 @@ export async function executeRole(
   let usagePersistenceFailureRecorded = false;
   const persistUsage = async (usage: AgentTokenUsage) => {
     try {
-      await jobRepository.setTokenUsage(job.id, usage);
+      await jobRepository.setTokenUsage(job.id, usage, job.attempts);
     } catch {
       if (usagePersistenceFailureRecorded) return;
       usagePersistenceFailureRecorded = true;
@@ -109,7 +109,7 @@ export async function executeRole(
             throw new Error(`Provider resumed session ${observedSessionId} instead of requested ${requestedSessionId}`);
           }
           sessionId = observedSessionId;
-          if (!await jobRepository.setSessionId(job.id, observedSessionId)) {
+          if (!await jobRepository.setSessionId(job.id, observedSessionId, job.attempts)) {
             throw new Error(`Could not persist provider session for job ${job.id}`);
           }
           job.sessionId = observedSessionId;
@@ -156,7 +156,7 @@ export async function executeRole(
       throw new Error(result.stderr || `Provider did not resume session ${requestedSessionId}`);
     }
     if (resolvedSessionId && !sessionId) {
-      if (!await jobRepository.setSessionId(job.id, resolvedSessionId)) {
+      if (!await jobRepository.setSessionId(job.id, resolvedSessionId, job.attempts)) {
         throw new Error(`Could not persist provider session for job ${job.id}`);
       }
       sessionId = resolvedSessionId;

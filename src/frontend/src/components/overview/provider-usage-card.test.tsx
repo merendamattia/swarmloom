@@ -88,6 +88,23 @@ describe("ProviderUsageCard", () => {
     expect(html).toContain("60% remaining");
   });
 
+  test("shows provider-confirmed exhaustion when no quota windows are available", () => {
+    const html = renderToStaticMarkup(<ProviderUsageCard
+      provider="codex"
+      usage={{
+        status: "available",
+        availability: "exhausted",
+        spendControlReached: true,
+        rateLimitReachedType: null,
+        observedAt: null,
+        windows: [],
+      }}
+    />);
+
+    expect(html).toContain("Codex reports this allowance as exhausted.");
+    expect(html).not.toContain("No quota windows were reported by Codex.");
+  });
+
   test("reports a stale empty snapshot instead of treating it as a healthy empty result", () => {
     const html = renderToStaticMarkup(<ProviderUsageCard
       provider="codex"
@@ -103,6 +120,24 @@ describe("ProviderUsageCard", () => {
     />);
 
     expect(html).toContain("The last Codex quota snapshot may be out of date");
+    expect(html).not.toContain("No quota windows were reported by Codex.");
+  });
+
+  test("preserves the reason when Codex quota mapping is unknown", () => {
+    const html = renderToStaticMarkup(<ProviderUsageCard
+      provider="codex"
+      usage={{
+        status: "available",
+        availability: "unknown",
+        spendControlReached: null,
+        rateLimitReachedType: null,
+        observedAt: null,
+        windows: [],
+        message: "Codex reported quota buckets without a reliable applicable mapping",
+      }}
+    />);
+
+    expect(html).toContain("Codex reported quota buckets without a reliable applicable mapping");
     expect(html).not.toContain("No quota windows were reported by Codex.");
   });
 });

@@ -67,8 +67,8 @@ integration("PostgreSQL job lifecycle", () => {
     expect(claimed?.provider).toBe("CODEX");
     expect(claimed?.model).toBe("gpt-5.6-luna");
 
-    expect(await jobs.complete(claimed!.id, { outcome: "implemented" }, 0)).toBe(true);
-    expect(await jobs.complete(claimed!.id, { outcome: "duplicate" }, 0)).toBe(false);
+    expect(await jobs.complete(claimed!.id, { outcome: "implemented" }, 0, claimed!.attempts)).toBe(true);
+    expect(await jobs.complete(claimed!.id, { outcome: "duplicate" }, 0, claimed!.attempts)).toBe(false);
     expect((await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).activeIssueKey)
       .toBeNull();
     const retry = await jobs.tryCreateQueued(input);
@@ -106,9 +106,10 @@ integration("PostgreSQL job lifecycle", () => {
     });
     expect(await jobs.requeueForRetry(claimed!.id, environment)).toBeNull();
 
-    expect(await jobs.claim(claimed!.id, environment, "test-worker")).not.toBeNull();
+    const retriedClaim = await jobs.claim(claimed!.id, environment, "test-worker");
+    expect(retriedClaim).not.toBeNull();
     await prisma.job.update({ where: { id: claimed!.id }, data: { errorMessage: "stale retry error" } });
-    expect(await jobs.complete(claimed!.id, { outcome: "implemented" }, 0)).toBe(true);
+    expect(await jobs.complete(claimed!.id, { outcome: "implemented" }, 0, retriedClaim!.attempts)).toBe(true);
     expect((await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).errorMessage).toBeNull();
   });
 
@@ -118,7 +119,7 @@ integration("PostgreSQL job lifecycle", () => {
     const worktreePath = `/data/worktrees/${claimed!.id}`;
     await prisma.job.update({
       where: { id: claimed!.id },
-      data: { worktreePath, sessionId: "cancelled-session" },
+      data: { worktreePath, sessionId: "cancelled-session", heartbeatAt: new Date() },
     });
 
     expect(await jobs.cancel(claimed!.id)).toBe(true);
@@ -129,9 +130,9 @@ integration("PostgreSQL job lifecycle", () => {
       worktreePath,
     });
 
-    expect(await jobs.releaseWorker(claimed!.id, "test-worker")).toBe(false);
-    expect(await jobs.clearWorktree(claimed!.id)).toBe(true);
-    expect(await jobs.releaseWorker(claimed!.id, "test-worker")).toBe(true);
+    expect(await jobs.releaseWorker(claimed!.id, "test-worker", claimed!.attempts)).toBe(false);
+    expect(await jobs.clearWorktree(claimed!.id, claimed!.attempts)).toBe(true);
+    expect(await jobs.releaseWorker(claimed!.id, "test-worker", claimed!.attempts)).toBe(true);
 
     expect(await jobs.requeueForRetry(claimed!.id, environment)).toMatchObject({
       id: claimed!.id,
@@ -208,7 +209,26 @@ integration("PostgreSQL job lifecycle", () => {
     const cancelled = await jobs.tryCreateQueued(queuedJob(issuePrefix + 2));
     expect(await jobs.cancel(cancelled!.id)).toBe(true);
     expect(await jobs.claim(cancelled!.id, environment, "test-worker")).toBeNull();
-    expect(await jobs.complete(cancelled!.id, { outcome: "wrong" }, 0)).toBe(false);
+    expect(await jobs.complete(cancelled!.id, { outcome: "wrong" }, 0, cancelled!.attempts)).toBe(false);
+  });
+
+  test("rejects a stale worker result after the job is claimed again", async () => {
+    const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 5));
+    const staleClaim = await jobs.claim(queued!.id, environment, "stale-worker");
+    await prisma.job.update({
+      where: { id: queued!.id },
+      data: { heartbeatAt: new Date(Date.now() - 120_000) },
+    });
+
+    expect(await jobs.recoverStaleBefore(environment, new Date(Date.now() - 60_000))).toHaveLength(1);
+    expect(await jobs.releaseWorker(queued!.id, "stale-worker", staleClaim!.attempts)).toBe(true);
+    expect(await jobs.requeueForRetry(queued!.id, environment)).not.toBeNull();
+    const currentClaim = await jobs.claim(queued!.id, environment, "replacement-worker");
+    expect(currentClaim?.attempts).toBe((staleClaim?.attempts ?? 0) + 1);
+
+    expect(await jobs.complete(queued!.id, { outcome: "stale" }, 0, staleClaim!.attempts)).toBe(false);
+    expect((await prisma.job.findUniqueOrThrow({ where: { id: queued!.id } })).status).toBe("RUNNING");
+    expect(await jobs.complete(queued!.id, { outcome: "current" }, 0, currentClaim!.attempts)).toBe(true);
   });
 
   test("persists cumulative provider usage idempotently and stops updates after completion", async () => {
@@ -222,15 +242,15 @@ integration("PostgreSQL job lifecycle", () => {
       totalTokens: 1_120n,
     };
 
-    expect(await jobs.setTokenUsage(claimed!.id, first)).toBe(true);
-    expect(await jobs.setTokenUsage(claimed!.id, first)).toBe(true);
+    expect(await jobs.setTokenUsage(claimed!.id, first, claimed!.attempts)).toBe(true);
+    expect(await jobs.setTokenUsage(claimed!.id, first, claimed!.attempts)).toBe(true);
     expect(await jobs.setTokenUsage(claimed!.id, {
       inputTokens: 900n,
       cachedInputTokens: null,
       outputTokens: 100n,
       reasoningOutputTokens: null,
       totalTokens: 1_000n,
-    })).toBe(true);
+    }, claimed!.attempts)).toBe(true);
     expect(await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).toMatchObject(first);
 
     const int64Boundary = 2_147_483_648n;
@@ -238,21 +258,21 @@ integration("PostgreSQL job lifecycle", () => {
       ...first,
       inputTokens: int64Boundary,
       totalTokens: int64Boundary,
-    })).toBe(true);
+    }, claimed!.attempts)).toBe(true);
     expect(await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).toMatchObject({
       ...first,
       inputTokens: int64Boundary,
       totalTokens: int64Boundary,
     });
 
-    expect(await jobs.complete(claimed!.id, { outcome: "complete" }, 0)).toBe(true);
+    expect(await jobs.complete(claimed!.id, { outcome: "complete" }, 0, claimed!.attempts)).toBe(true);
     expect(await jobs.setTokenUsage(claimed!.id, {
       inputTokens: 2_000n,
       cachedInputTokens: 800n,
       outputTokens: 200n,
       reasoningOutputTokens: 100n,
       totalTokens: 2_200n,
-    })).toBe(false);
+    }, claimed!.attempts)).toBe(false);
     expect(await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).toMatchObject({
       ...first,
       inputTokens: int64Boundary,
@@ -326,10 +346,25 @@ integration("PostgreSQL job lifecycle", () => {
       workerId: "lost-worker",
       worktreePath,
       worktreeCleanupRequired: true,
+      heartbeatAt: expect.any(Date),
     });
 
     const removed: string[] = [];
     const { recoverStaleJobs } = await import("../src/worker/recovery.ts");
+    expect(await recoverStaleJobs(
+      config,
+      {} as GitHubClient,
+      (await import("../src/events/service.ts")).createEventService(),
+      async ({ worktreePath: path }) => { removed.push(path); },
+    )).toBe(0);
+    expect(removed).toEqual([]);
+    expect((await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).workerId)
+      .toBe("lost-worker");
+
+    await prisma.job.update({
+      where: { id: claimed!.id },
+      data: { heartbeatAt: new Date(Date.now() - config.STALE_JOB_THRESHOLD_MS - 1_000) },
+    });
     expect(await recoverStaleJobs(
       config,
       {} as GitHubClient,
@@ -348,7 +383,7 @@ integration("PostgreSQL job lifecycle", () => {
     });
     const reclaimed = await jobs.claim(claimed!.id, config.APP_ENV, "replacement-worker");
     expect(reclaimed?.workerId).toBe("replacement-worker");
-    expect(await jobs.complete(claimed!.id, { outcome: "retried" }, 0)).toBe(true);
+    expect(await jobs.complete(claimed!.id, { outcome: "retried" }, 0, reclaimed!.attempts)).toBe(true);
   });
 
   function queuedJob(issueNumber: number, jobEnvironment = environment) {

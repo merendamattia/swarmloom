@@ -18,10 +18,10 @@ export const runDecomposition: JobFlow = async (context) => {
   if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
   const localPath = job.repository.localPath;
   const gitEnvironment = githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl);
-  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id), async () => {
+  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id, job.attempts), async () => {
     await context.createWorktree({
       repositoryPath: localPath,
-      worktreePath: safeWorktreePath(config.DATA_DIR, job.id),
+      worktreePath: safeWorktreePath(config.DATA_DIR, job.id, job.attempts),
       branchName: job.branchName,
       baselineCommit: job.baselineCommit,
       gitEnvironment,
@@ -33,7 +33,7 @@ export const runDecomposition: JobFlow = async (context) => {
   context.state.repositoryPath = localPath;
   context.state.worktreePersisted = !worktree.created;
   if (worktree.created) {
-    if (!await jobRepository.setWorktree(job.id, worktreePath)) return;
+    if (!await jobRepository.setWorktree(job.id, worktreePath, job.attempts)) return;
     context.state.worktreePersisted = true;
   }
 
@@ -70,7 +70,7 @@ export const runDecomposition: JobFlow = async (context) => {
     const finished = await jobRepository.finishRunning(job.id, "DECOMPOSED", {
       result: decomposition.response,
       exitCode: decomposition.exitCode,
-    });
+    }, job.attempts);
     if (!finished) return;
     await events.record({
       type: "JOB_DECOMPOSED",
@@ -87,7 +87,7 @@ export const runDecomposition: JobFlow = async (context) => {
   const finished = await jobRepository.finishRunning(job.id, "BLOCKED", {
     result: decomposition.response,
     exitCode: decomposition.exitCode,
-  });
+  }, job.attempts);
   if (!finished) return;
   await events.record({
     type: "JOB_BLOCKED",

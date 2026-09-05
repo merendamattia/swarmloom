@@ -71,7 +71,7 @@ export function createJobRunner({
     const heartbeatOnce = async () => {
       if (heartbeatStopped) return;
       try {
-        const active = await jobRepository.heartbeat(job.id, workerId);
+        const active = await jobRepository.heartbeat(job.id, workerId, job.attempts);
         if (!active) controller.abort(new Error("Job is no longer running"));
       } finally {
         if (!heartbeatStopped) {
@@ -120,7 +120,7 @@ export function createJobRunner({
     } catch (error) {
       if (isQuotaFailure(error)) {
         const admission = quotaAdmission(error.failure.quota);
-        const paused = await jobRepository.waitForQuotaRunning(job.id, job.environment, workerId, {
+        const paused = await jobRepository.waitForQuotaRunning(job.id, job.environment, workerId, job.attempts, {
           resetAt: admission.kind === "wait" ? admission.resetAt : null,
           window: admission.kind === "wait" ? admission.window : null,
           usedPercent: admission.kind === "wait" ? admission.usedPercent : null,
@@ -163,7 +163,7 @@ export function createJobRunner({
         reachedTerminalState = await jobRepository.finishRunning(job.id, "FAILED", {
           errorMessage: message,
           diagnostics: diagnostics as Prisma.InputJsonValue,
-        });
+        }, job.attempts);
         retainWorktree = reachedTerminalState && state.worktreePersisted && Boolean(state.worktreePath);
         if (reachedTerminalState) {
           await events.record({
@@ -184,7 +184,7 @@ export function createJobRunner({
             repositoryPath: state.repositoryPath,
             gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
           });
-          await jobRepository.clearWorktree(job.id);
+          await jobRepository.clearWorktree(job.id, job.attempts);
           worktreeCleanupComplete = true;
         } catch (error) {
           await events.record({
@@ -206,7 +206,7 @@ export function createJobRunner({
         }
       }
       if (!state.worktreeCreated || preserveWorktree) worktreeCleanupComplete = true;
-      if (worktreeCleanupComplete) await jobRepository.releaseWorker(job.id, workerId);
+      if (worktreeCleanupComplete) await jobRepository.releaseWorker(job.id, workerId, job.attempts);
     }
     return reachedTerminalState;
   }

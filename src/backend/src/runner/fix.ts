@@ -25,10 +25,10 @@ export const runFix: JobFlow = async (context) => {
 
   if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
   const localPath = job.repository.localPath;
-  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id), async () => {
+  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id, job.attempts), async () => {
     await context.createReviewWorktree({
       repositoryPath: localPath,
-      worktreePath: safeWorktreePath(config.DATA_DIR, job.id),
+      worktreePath: safeWorktreePath(config.DATA_DIR, job.id, job.attempts),
       branchName: pullRequest.headBranch,
       gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
     });
@@ -39,7 +39,7 @@ export const runFix: JobFlow = async (context) => {
   context.state.repositoryPath = localPath;
   context.state.worktreePersisted = !worktree.created;
   if (worktree.created) {
-    if (!await jobRepository.setWorktree(job.id, worktreePath)) return;
+    if (!await jobRepository.setWorktree(job.id, worktreePath, job.attempts)) return;
     context.state.worktreePersisted = true;
   }
 
@@ -74,7 +74,7 @@ export const runFix: JobFlow = async (context) => {
     if (result.exitCode !== 0) {
       throw new Error(result.stderr || `${provider.name} exited with ${result.exitCode}`);
     }
-    await jobRepository.setExecutionResult(job.id, result.sessionId, result.exitCode);
+    await jobRepository.setExecutionResult(job.id, result.sessionId, result.exitCode, job.attempts);
 
     const blockedOutcome = parseJobOutcome(result.response) === "blocked";
     resultTldr = parseTldr(result.response);
@@ -84,7 +84,7 @@ export const runFix: JobFlow = async (context) => {
       const finished = await jobRepository.finishRunning(job.id, "BLOCKED", {
         result: result.response,
         exitCode: result.exitCode,
-      });
+      }, job.attempts);
       if (!finished) return;
       await events.record({
         type: "JOB_BLOCKED",
@@ -144,7 +144,7 @@ export const runFix: JobFlow = async (context) => {
       pullRequestNumber: current.number,
       pullRequestUrl: current.url,
       headSha: current.headSha,
-    });
+    }, job.attempts);
     if (!finished) return;
     await events.record({
       type: "JOB_COMPLETED",
@@ -234,7 +234,7 @@ export const runFix: JobFlow = async (context) => {
       pullRequestNumber: prNumber,
       pullRequestUrl: pullRequestUrl,
       headSha,
-    });
+    }, job.attempts);
     if (!finished) return;
     await events.record({
       type: "LOOP_GUARD_TRIPPED",
