@@ -160,6 +160,7 @@ integration("PostgreSQL job lifecycle", () => {
       status: "CANCELLED",
       workerId: "test-worker",
       worktreePath,
+      heartbeatAt: expect.any(Date),
     });
 
     expect(await jobs.releaseWorker(claimed!.id, "test-worker", claimed!.claimToken!)).toBe(false);
@@ -176,6 +177,41 @@ integration("PostgreSQL job lifecycle", () => {
       sessionId: null,
     });
     expect(await jobs.cancel(claimed!.id)).toBe(true);
+  });
+
+  test("reconciles a cancelled running worktree after its worker is lost", async () => {
+    const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 26));
+    const claimed = await jobs.claim(queued!.id, environment, "lost-worker");
+    const worktreePath = await mkdtemp(join(import.meta.dir, "cancelled-recovery-"));
+    await prisma.job.update({ where: { id: queued!.id }, data: { worktreePath } });
+    expect(await jobs.cancel(queued!.id)).toBe(true);
+    await prisma.job.update({
+      where: { id: queued!.id },
+      data: { heartbeatAt: new Date(Date.now() - 120_000) },
+    });
+
+    try {
+      const { recoverCancelledWorktrees } = await import("../src/worker/recovery.ts");
+      const { createEventService } = await import("../src/events/service.ts");
+      let removeCalls = 0;
+      expect(await recoverCancelledWorktrees(
+        { ...config, APP_ENV: environment },
+        createEventService(),
+        async ({ worktreePath: path }) => {
+          removeCalls += 1;
+          await rm(path, { recursive: true, force: true });
+        },
+      )).toBe(1);
+      expect(removeCalls).toBe(1);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: queued!.id } })).toMatchObject({
+        status: "CANCELLED",
+        workerId: null,
+        claimToken: null,
+        worktreePath: null,
+      });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
   });
 
   test("reclaims a terminal cleanup lease after a worker dies between claim and clear", async () => {

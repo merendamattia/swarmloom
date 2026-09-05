@@ -7,6 +7,7 @@ import { removeJobWorktree, repositoryPath } from "../git/repositories.ts";
 import { jobRepository, WORKTREE_CLEANUP_LEASE_MS } from "../repositories/jobs.ts";
 
 export async function recoverStaleJobs(config: Config, github: GitHubClient, events: EventService) {
+  await recoverCancelledWorktrees(config, events);
   const staleJobs = await jobRepository.recoverStaleBefore(
     config.APP_ENV,
     new Date(Date.now() - config.STALE_JOB_THRESHOLD_MS),
@@ -94,6 +95,44 @@ export async function recoverStaleJobs(config: Config, github: GitHubClient, eve
 
 type RemoveWorktree = typeof removeJobWorktree;
 type TerminalRecoveryConfig = { APP_ENV: string; DATA_DIR: string };
+type CancelledWorktreeConfig = { APP_ENV: string; DATA_DIR: string; STALE_JOB_THRESHOLD_MS: number };
+
+export async function recoverCancelledWorktrees(
+  config: CancelledWorktreeConfig,
+  events: Pick<EventService, "record">,
+  removeWorktree: RemoveWorktree = removeJobWorktree,
+) {
+  const staleBefore = new Date(Date.now() - config.STALE_JOB_THRESHOLD_MS);
+  const jobs = await jobRepository.findCancelledWorktrees(config.APP_ENV, staleBefore);
+  let recovered = 0;
+
+  for (const job of jobs) {
+    if (!job.worktreePath) continue;
+    const cleanup = await jobRepository.claimWorktreeCleanup(job.id, job.workerId, job.claimToken, job.worktreePath);
+    if (!cleanup) continue;
+    try {
+      await removeWorktree({
+        worktreePath: cleanup.path,
+        repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
+        gitEnvironment: undefined,
+      });
+      if (!await jobRepository.clearWorktree(job.id, job.claimToken, cleanup.cleanupToken)) continue;
+      if (await jobRepository.releaseWorker(job.id, job.workerId, job.claimToken)) recovered += 1;
+    } catch (error) {
+      await events.record({
+        type: "GITHUB_RECONCILIATION_REQUIRED",
+        level: "ERROR",
+        message: `Could not remove cancelled ${job.jobType} worktree ${cleanup.path}: ${redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
+        jobId: job.id,
+        repositoryId: job.repositoryId,
+        scanRunId: job.scanRunId ?? undefined,
+        metadata: { issueUrl: job.issueUrl },
+      });
+    }
+  }
+
+  return recovered;
+}
 
 export async function recoverTerminalWorktrees(
   config: TerminalRecoveryConfig,

@@ -312,6 +312,19 @@ async function findRunning(id: string, workerId: string, claimToken: string) {
   });
 }
 
+async function findCancelledWorktrees(environment: string, staleBefore: Date) {
+  return prisma.job.findMany({
+    where: {
+      environment,
+      status: "CANCELLED",
+      worktreePath: { not: null },
+      OR: [{ workerId: null }, { heartbeatAt: null }, { heartbeatAt: { lt: staleBefore } }],
+    },
+    include: { repository: true },
+    orderBy: { completedAt: "asc" },
+  });
+}
+
 async function isActiveClaim(id: string, workerId: string | null, claimToken: string | null) {
   if (!workerId || !claimToken) return false;
   const job = await prisma.job.findFirst({
@@ -487,7 +500,6 @@ async function cancel(id: string) {
       completedAt: new Date(),
       activeIssueKey: null,
       activePrKey: null,
-      heartbeatAt: null,
     },
   });
   return updated.count === 1;
@@ -566,5 +578,6 @@ export const jobRepository = {
   markSupportIssueForReconciliation,
   isActiveClaim,
   findTerminalRecoveryJobs,
+  findCancelledWorktrees,
   reclaimTerminalWorktreeCleanup,
 };
