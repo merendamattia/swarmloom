@@ -7,10 +7,9 @@ import { Button } from "@/components/ui/button";
 import { ActionMessage } from "@/components/ui/feedback";
 import { CheckboxField, Field, Input, Select } from "@/components/ui/field";
 import { TagInput } from "@/components/ui/tag-input";
-import { type Settings, type SettingsPatch, useTestNotification, useUpdateSettings } from "@/hooks/api";
+import { type CodexGenerationOptions, type Settings, type SettingsPatch, useTestNotification, useUpdateSettings } from "@/hooks/api";
+import { modelForSlug, reasoningEffortForModel } from "@/lib/codex-catalog";
 import { describeCron, millisecondsToSeconds, parseRepositoryList, removeRepository as removeRepositoryFromList, secondsToMilliseconds, timingStepSeconds } from "@/lib/settings";
-
-const reasoningEfforts = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 type SettingsDraft = Omit<SettingsPatch, "githubRepositories" | "scheduleTimezone"> & {
   githubRepositories: string[];
@@ -33,8 +32,8 @@ type SettingsDraft = Omit<SettingsPatch, "githubRepositories" | "scheduleTimezon
   opencodeReviewModel: string;
   codexCodingModel: string;
   codexReviewModel: string;
-  codexCodingReasoningEffort: NonNullable<SettingsPatch["codexCodingReasoningEffort"]>;
-  codexReviewReasoningEffort: NonNullable<SettingsPatch["codexReviewReasoningEffort"]>;
+  codexCodingReasoningEffort: string;
+  codexReviewReasoningEffort: string;
   telegramEnabled: boolean;
   heartbeatIntervalMs: number;
   staleJobThresholdMs: number;
@@ -43,7 +42,7 @@ type SettingsDraft = Omit<SettingsPatch, "githubRepositories" | "scheduleTimezon
   telegramChatId: string;
 };
 
-function toDraft(settings: Settings): SettingsDraft {
+function toDraft(settings: Settings, codexOptions: CodexGenerationOptions): SettingsDraft {
   return {
     githubRepositories: parseRepositoryList(settings.githubRepositories),
     issueReadyLabel: settings.issueReadyLabel,
@@ -65,8 +64,8 @@ function toDraft(settings: Settings): SettingsDraft {
     opencodeReviewModel: settings.opencodeReviewModel,
     codexCodingModel: settings.codexCodingModel,
     codexReviewModel: settings.codexReviewModel,
-    codexCodingReasoningEffort: settings.codexCodingReasoningEffort ?? "max",
-    codexReviewReasoningEffort: settings.codexReviewReasoningEffort ?? "max",
+    codexCodingReasoningEffort: reasoningEffortForModel(codexOptions, settings.codexCodingModel, settings.codexCodingReasoningEffort),
+    codexReviewReasoningEffort: reasoningEffortForModel(codexOptions, settings.codexReviewModel, settings.codexReviewReasoningEffort),
     telegramEnabled: settings.telegramEnabled,
     heartbeatIntervalMs: settings.heartbeatIntervalMs,
     staleJobThresholdMs: settings.staleJobThresholdMs,
@@ -76,13 +75,20 @@ function toDraft(settings: Settings): SettingsDraft {
   };
 }
 
-export function SettingsEditor({ settings }: { settings: Settings }) {
+export function SettingsEditor({ settings, codexOptions }: { settings: Settings; codexOptions: CodexGenerationOptions }) {
   const save = useUpdateSettings();
   const testNotification = useTestNotification();
-  const [draft, setDraft] = useState<SettingsDraft>(() => toDraft(settings));
+  const [draft, setDraft] = useState<SettingsDraft>(() => toDraft(settings, codexOptions));
   const [repositoryInput, setRepositoryInput] = useState("");
   const [editingTelegram, setEditingTelegram] = useState(false);
   const set = <K extends keyof SettingsDraft>(key: K, value: SettingsDraft[K]) => setDraft((current) => ({ ...current, [key]: value }));
+  const updateCodexModel = (profile: "coding" | "review", model: string) => setDraft((current) => {
+    const currentEffort = profile === "coding" ? current.codexCodingReasoningEffort : current.codexReviewReasoningEffort;
+    const nextEffort = reasoningEffortForModel(codexOptions, model, currentEffort);
+    return profile === "coding"
+      ? { ...current, codexCodingModel: model, codexCodingReasoningEffort: nextEffort }
+      : { ...current, codexReviewModel: model, codexReviewReasoningEffort: nextEffort };
+  });
   const addRepositories = (value: string) => {
     const repositories = parseRepositoryList(value);
     if (!repositories.length) return;
@@ -107,16 +113,16 @@ export function SettingsEditor({ settings }: { settings: Settings }) {
     <>
       <ActionMessage pending={save.isPending} error={save.error} success={save.isSuccess} pendingText="Saving runtime settings…" successText="Settings saved." variant="toast" />
       <form className="settings-form" onSubmit={submit}>
-        <SettingsSection title="Agent execution" description="Each queued job snapshots its role's provider, model, and reasoning. Coding covers implementation, fixes, and decomposition; review covers independent pull request reviews.">
+        <SettingsSection title="Agent execution" description="Each queued job snapshots its role's provider, model, and reasoning. Codex model and effort choices come from the enabled catalog. Coding covers implementation, fixes, and decomposition; review covers independent pull request reviews.">
           <div className="settings-grid">
             <Field htmlFor="agent-provider" label="Agent provider"><Select id="agent-provider" value={draft.agentProvider} onChange={(event) => set("agentProvider", event.target.value as SettingsDraft["agentProvider"])}><option value="codex">Codex</option><option value="opencode">OpenCode</option></Select></Field>
             <Field htmlFor="parallel-jobs" label="Parallel jobs"><Input id="parallel-jobs" type="number" min={1} max={20} value={draft.maxParallelJobs} onChange={(event) => set("maxParallelJobs", Number(event.target.value))} /></Field>
             {draft.agentProvider === "codex" ? (
               <>
-                <Field htmlFor="codex-coding-model" label="Coding agent model" description="Used for IMPLEMENTATION, FIX, and DECOMPOSITION jobs."><Input id="codex-coding-model" value={draft.codexCodingModel} onChange={(event) => set("codexCodingModel", event.target.value)} /></Field>
-                <Field htmlFor="codex-coding-reasoning" label="Coding reasoning" description="Reasoning effort captured on coding jobs."><Select id="codex-coding-reasoning" value={draft.codexCodingReasoningEffort} onChange={(event) => set("codexCodingReasoningEffort", event.target.value as SettingsDraft["codexCodingReasoningEffort"])}>{reasoningEfforts.map((value) => <option key={value} value={value}>{value}</option>)}</Select></Field>
-                <Field htmlFor="codex-review-model" label="Review agent model" description="Used for REVIEW jobs."><Input id="codex-review-model" value={draft.codexReviewModel} onChange={(event) => set("codexReviewModel", event.target.value)} /></Field>
-                <Field htmlFor="codex-review-reasoning" label="Review reasoning" description="Reasoning effort captured on review jobs."><Select id="codex-review-reasoning" value={draft.codexReviewReasoningEffort} onChange={(event) => set("codexReviewReasoningEffort", event.target.value as SettingsDraft["codexReviewReasoningEffort"])}>{reasoningEfforts.map((value) => <option key={value} value={value}>{value}</option>)}</Select></Field>
+                <Field htmlFor="codex-coding-model" label="Coding agent model" description="Used for IMPLEMENTATION, FIX, and DECOMPOSITION jobs."><Select id="codex-coding-model" value={draft.codexCodingModel} onChange={(event) => updateCodexModel("coding", event.target.value)}>{codexOptions.models.map((model) => <option key={model.slug} value={model.slug}>{model.label}</option>)}</Select></Field>
+                <Field htmlFor="codex-coding-reasoning" label="Coding reasoning" description="Only efforts supported by the selected coding model are shown."><Select id="codex-coding-reasoning" value={draft.codexCodingReasoningEffort} onChange={(event) => set("codexCodingReasoningEffort", event.target.value)}>{(modelForSlug(codexOptions, draft.codexCodingModel)?.reasoningEfforts ?? []).map((effort) => <option key={effort.slug} value={effort.slug}>{effort.label}</option>)}</Select></Field>
+                <Field htmlFor="codex-review-model" label="Review agent model" description="Used for REVIEW jobs."><Select id="codex-review-model" value={draft.codexReviewModel} onChange={(event) => updateCodexModel("review", event.target.value)}>{codexOptions.models.map((model) => <option key={model.slug} value={model.slug}>{model.label}</option>)}</Select></Field>
+                <Field htmlFor="codex-review-reasoning" label="Review reasoning" description="Only efforts supported by the selected review model are shown."><Select id="codex-review-reasoning" value={draft.codexReviewReasoningEffort} onChange={(event) => set("codexReviewReasoningEffort", event.target.value)}>{(modelForSlug(codexOptions, draft.codexReviewModel)?.reasoningEfforts ?? []).map((effort) => <option key={effort.slug} value={effort.slug}>{effort.label}</option>)}</Select></Field>
               </>
             ) : (
               <>

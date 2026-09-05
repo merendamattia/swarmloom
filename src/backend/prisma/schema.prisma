@@ -311,6 +311,48 @@ model RuntimeSetting {
   @@map("runtime_setting")
 }
 
+model CodexModel {
+  id                     String                         @id @default(cuid())
+  slug                   String                         @unique
+  label                  String
+  description            String                         @db.Text
+  enabled                Boolean                        @default(true)
+  sortOrder              Int                            @default(0)
+  defaultReasoningEffort String
+  createdAt              DateTime                       @default(now())
+  updatedAt              DateTime                       @updatedAt
+  efforts                CodexModelReasoningEffort[]
+
+  @@index([enabled, sortOrder])
+  @@map("codex_model")
+}
+
+model CodexReasoningEffort {
+  id        String                         @id @default(cuid())
+  slug      String                         @unique
+  label     String
+  enabled   Boolean                        @default(true)
+  sortOrder Int                            @default(0)
+  createdAt DateTime                       @default(now())
+  updatedAt DateTime                       @updatedAt
+  models    CodexModelReasoningEffort[]
+
+  @@index([enabled, sortOrder])
+  @@map("codex_reasoning_effort")
+}
+
+model CodexModelReasoningEffort {
+  modelId           String
+  reasoningEffortId String
+  isDefault         Boolean              @default(false)
+  model             CodexModel           @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  reasoningEffort   CodexReasoningEffort @relation(fields: [reasoningEffortId], references: [id], onDelete: Cascade)
+
+  @@id([modelId, reasoningEffortId])
+  @@index([reasoningEffortId])
+  @@map("codex_model_reasoning_effort")
+}
+
 model DashboardExceptionAcknowledgement {
   environment   String   @id
   acknowledgedAt DateTime

@@ -62,10 +62,8 @@ const environmentSchema = z.object({
   OPENCODE_REVIEW_MODEL: z.string().min(1).default("opencode-go/deepseek-v4-flash"),
   CODEX_CODING_MODEL: z.string().min(1).default("gpt-5.6-luna"),
   CODEX_REVIEW_MODEL: z.string().min(1).default("gpt-5.6-luna"),
-  CODEX_CODING_REASONING_EFFORT: z.enum(["minimal", "low", "medium", "high", "xhigh", "max"])
-    .default("max"),
-  CODEX_REVIEW_REASONING_EFFORT: z.enum(["minimal", "low", "medium", "high", "xhigh", "max"])
-    .default("max"),
+  CODEX_CODING_REASONING_EFFORT: z.string().min(1).default("max"),
+  CODEX_REVIEW_REASONING_EFFORT: z.string().min(1).default("max"),
   TELEGRAM_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   TELEGRAM_BOT_TOKEN: optionalNonEmptyString,
   TELEGRAM_CHAT_ID: optionalNonEmptyString,

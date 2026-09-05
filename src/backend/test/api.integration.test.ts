@@ -359,6 +359,46 @@ integration("operations API", () => {
     await prisma.job.update({ where: { id: jobId }, data: { claimToken: null, cleanupToken: null } });
   });
 
+  test("returns the enabled Codex catalog with model-specific efforts", async () => {
+    const response = await app.request("/api/codex/generation-options");
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.models.map((model: { slug: string }) => model.slug)).toEqual([
+      "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra",
+    ]);
+    expect(body.models.find((model: { slug: string }) => model.slug === "gpt-6-astra")).toMatchObject({
+      defaultReasoningEffort: "max",
+      reasoningEfforts: [
+        { slug: "low" }, { slug: "medium" }, { slug: "high" }, { slug: "xhigh" }, { slug: "max", isDefault: true },
+      ],
+    });
+    const sol = body.models.find((model: { slug: string }) => model.slug === "gpt-5.6-sol");
+    expect(sol.reasoningEfforts.map((effort: { slug: string }) => effort.slug)).toEqual([
+      "none", "low", "medium", "high", "xhigh", "max",
+    ]);
+    expect(sol.reasoningEfforts.find((effort: { slug: string }) => effort.slug === "max")).toMatchObject({ isDefault: true });
+  });
+
+  test("rejects invalid Codex model and effort combinations", async () => {
+    const response = await app.request("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ codexReviewModel: "gpt-6-astra", codexReviewReasoningEffort: "none" }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid settings" });
+    expect(await prisma.runtimeSetting.findUnique({
+      where: { environment_key: { environment: "test", key: "CODEX_REVIEW_MODEL" } },
+    })).toBeNull();
+
+    const unknownModel = await app.request("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ codexCodingModel: "gpt-5.6-unknown", codexCodingReasoningEffort: "max" }),
+    });
+    expect(unknownModel.status).toBe(400);
+  });
+
   test("persists runtime settings and never returns Telegram secrets", async () => {
     const response = await app.request("/api/settings", {
       method: "PATCH",
@@ -367,8 +407,8 @@ integration("operations API", () => {
         scheduleCron: "*/30 * * * *",
         maxParallelJobs: 2,
         createDiagnosticIssues: true,
-        codexCodingModel: "gpt-5.6-api-coding",
-        codexReviewModel: "gpt-5.6-api-review",
+        codexCodingModel: "gpt-5.6-sol",
+        codexReviewModel: "gpt-6-astra",
         codexCodingReasoningEffort: "low",
         codexReviewReasoningEffort: "high",
         telegramEnabled: false,
@@ -382,15 +422,15 @@ integration("operations API", () => {
     expect(body).not.toContain("telegram-chat-id");
     expect(JSON.parse(body)).toMatchObject({
       createDiagnosticIssues: true,
-      codexCodingModel: "gpt-5.6-api-coding",
-      codexReviewModel: "gpt-5.6-api-review",
+      codexCodingModel: "gpt-5.6-sol",
+      codexReviewModel: "gpt-6-astra",
       codexCodingReasoningEffort: "low",
       codexReviewReasoningEffort: "high",
     });
     expect(await prisma.runtimeSetting.findMany({ where: { environment: "test" } }))
       .toEqual(expect.arrayContaining([
-        expect.objectContaining({ key: "CODEX_CODING_MODEL", value: "gpt-5.6-api-coding" }),
-        expect.objectContaining({ key: "CODEX_REVIEW_MODEL", value: "gpt-5.6-api-review" }),
+        expect.objectContaining({ key: "CODEX_CODING_MODEL", value: "gpt-5.6-sol" }),
+        expect.objectContaining({ key: "CODEX_REVIEW_MODEL", value: "gpt-6-astra" }),
         expect.objectContaining({ key: "CODEX_CODING_REASONING_EFFORT", value: "low" }),
         expect.objectContaining({ key: "CODEX_REVIEW_REASONING_EFFORT", value: "high" }),
       ]));
