@@ -62,8 +62,9 @@ export function validateCodexSelection(
 }
 
 export async function validateCodexConfig(config: Pick<Config,
-  "CODEX_CODING_MODEL" | "CODEX_REVIEW_MODEL" | "CODEX_CODING_REASONING_EFFORT" | "CODEX_REVIEW_REASONING_EFFORT"
+  "AGENT_PROVIDER" | "CODEX_CODING_MODEL" | "CODEX_REVIEW_MODEL" | "CODEX_CODING_REASONING_EFFORT" | "CODEX_REVIEW_REASONING_EFFORT"
 >) {
+  if (config.AGENT_PROVIDER !== "codex") return;
   const options = await generationOptions();
   validateCodexSelection(options, config.CODEX_CODING_MODEL, config.CODEX_CODING_REASONING_EFFORT, "coding");
   validateCodexSelection(options, config.CODEX_REVIEW_MODEL, config.CODEX_REVIEW_REASONING_EFFORT, "review");
