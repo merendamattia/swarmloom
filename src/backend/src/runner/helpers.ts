@@ -16,9 +16,9 @@ import type { GitHubIssueContext } from "../github/client.ts";
 import type { RunningJob, RunnerContext, RunnerGitHub } from "./types.ts";
 import { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome, parseTldr } from "./response.ts";
 
-export function responseFilePathFor(dataDirectory: string, jobId: string, role: AgentRole) {
+export function responseFilePathFor(dataDirectory: string, jobId: string, role: AgentRole, executionId: string) {
   const root = resolve(dataDirectory, "outcomes");
-  const path = resolve(root, `${jobId}-${role}.txt`);
+  const path = resolve(root, `${jobId}-${role}-${executionId}.txt`);
   if (!path.startsWith(`${root}${sep}`)) throw new Error("Response file path escapes data directory");
   return path;
 }
@@ -64,7 +64,7 @@ export async function executeRole(
   job: RunningJob,
   resumeSessionId?: string,
 ) {
-  const responseFilePath = responseFilePathFor(context.config.DATA_DIR, job.id, role);
+  const responseFilePath = responseFilePathFor(context.config.DATA_DIR, job.id, role, crypto.randomUUID());
   await mkdir(dirname(responseFilePath), { recursive: true });
   const diagnosticEvents: DiagnosticEvent[] = [];
   const requestedSessionId = resumeSessionId;

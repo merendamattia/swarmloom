@@ -565,6 +565,96 @@ integration("job runner", () => {
     }
   });
 
+  test("keeps a retry response available while a stale provider cleans up", async () => {
+    const job = await claimed(issueBase + 25, "IMPLEMENTATION", "ISSUE");
+    const staleWorktreePath = await mkdtemp(join(import.meta.dir, "stale-response-worktree-"));
+    await prisma.job.update({ where: { id: job.id }, data: { worktreePath: staleWorktreePath } });
+
+    let releaseStaleProvider!: () => void;
+    let signalStaleProviderStarted!: () => void;
+    let signalRetryResponseWritten!: () => void;
+    let releaseRetryProvider!: () => void;
+    const staleProviderStarted = new Promise<void>((resolve) => { signalStaleProviderStarted = resolve; });
+    const staleProviderRelease = new Promise<void>((resolve) => { releaseStaleProvider = resolve; });
+    const retryResponseWritten = new Promise<void>((resolve) => { signalRetryResponseWritten = resolve; });
+    const retryProviderRelease = new Promise<void>((resolve) => { releaseRetryProvider = resolve; });
+    const staleResponse = "Outcome: implemented\nPR: https://github.com/acme/runner/pull/1\nTL;DR: stale\nStale attempt.";
+    const retryResponse = "Outcome: blocked\nTL;DR: Retry response parsed.\nThe retry response was parsed.";
+    let staleResponsePath = "";
+    let retryResponsePath = "";
+    let retryCalls = 0;
+
+    const firstRunner = createJobRunner({
+      config,
+      provider: {
+        name: "codex",
+        execute: async (request) => {
+          staleResponsePath = request.responseFilePath!;
+          await request.onEvent?.({
+            type: "SESSION_STARTED",
+            timestamp: "2026-08-20T00:00:00.000Z",
+            metadata: { sessionId: "stale-response-session" },
+          });
+          signalStaleProviderStarted();
+          await staleProviderRelease;
+          await Bun.write(request.responseFilePath!, staleResponse);
+          return { provider: "codex", sessionId: "stale-response-session", exitCode: 1, finalOutput: "", stderr: "stale provider failed" };
+        },
+      },
+      github: fakeGitHub(job.issueNumber, job.branchName, "a".repeat(40)),
+      createWorktree: async () => { throw new Error("must reuse the retained worktree"); },
+    });
+    const firstRun = firstRunner.run(job.id, "runner-worker", job.claimToken!);
+    await staleProviderStarted;
+
+    await prisma.job.update({ where: { id: job.id }, data: { heartbeatAt: new Date(Date.now() - 120_000) } });
+    expect(await jobs.recoverStaleBefore(environment, new Date(Date.now() - 60_000))).toHaveLength(1);
+    await prisma.job.update({ where: { id: job.id }, data: { worktreePath: null } });
+    expect(await jobs.releaseWorker(job.id, "runner-worker", job.claimToken!, true)).toBe(true);
+    expect(await jobs.requeueForRetry(job.id, environment)).not.toBeNull();
+    const retry = (await jobs.claim(job.id, environment, "runner-worker"))!;
+
+    const retryRunner = createJobRunner({
+      config,
+      provider: {
+        name: "codex",
+        execute: async (request) => {
+          retryCalls += 1;
+          retryResponsePath = request.responseFilePath!;
+          if (retryCalls === 1) {
+            await request.onEvent?.({
+              type: "SESSION_STARTED",
+              timestamp: "2026-08-20T00:00:01.000Z",
+              metadata: { sessionId: "retry-response-session" },
+            });
+            await Bun.write(request.responseFilePath!, retryResponse);
+            signalRetryResponseWritten();
+            await retryProviderRelease;
+          }
+          return { provider: "codex", sessionId: "retry-response-session", exitCode: 0, finalOutput: "", stderr: "" };
+        },
+      },
+      github: fakeGitHub(job.issueNumber, job.branchName, "a".repeat(40)),
+      createWorktree: async (input) => input.worktreePath,
+      removeWorktree: async () => {},
+    });
+    const retryRun = retryRunner.run(job.id, "runner-worker", retry.claimToken!);
+    await retryResponseWritten;
+
+    expect(staleResponsePath).not.toBe(retryResponsePath);
+    releaseStaleProvider();
+    expect(await firstRun).toBe(true);
+    releaseRetryProvider();
+    expect(await retryRun).toBe(true);
+    expect(retryCalls).toBe(1);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+      status: "BLOCKED",
+      result: retryResponse,
+    });
+
+    await rm(staleWorktreePath, { recursive: true, force: true });
+  });
+
   test("fix updates the existing PR branch, restores review-requested, and rejects a push that never lands", async () => {
     const prHead = `agent/issue-${issueBase + 7}-existing`;
     const managed = await prisma.managedPullRequest.create({
