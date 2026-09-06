@@ -496,7 +496,7 @@ export function createApp({
       if (!["FAILED", "BLOCKED", "CANCELLED", "STALE"].includes(job.status)) {
         return context.json({ error: "Only failed, blocked, cancelled, or stale jobs can be retried" }, 409);
       }
-      if (job.status === "FAILED" && job.sessionId && (!job.worktreePath || !existsSync(job.worktreePath))) {
+      if (job.status === "FAILED" && ((!job.worktreePath && Boolean(job.sessionId)) || (job.worktreePath && !existsSync(job.worktreePath)))) {
         return context.json({ error: "Retained worktree is missing; retry cannot resume the job" }, 409);
       }
 
