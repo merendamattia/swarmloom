@@ -44,7 +44,14 @@ export const runReview: JobFlow = async (context) => {
     await reviewRepository.failStaleForJob(job.id, job.claimToken);
     await discard(`Stale review: the pull request head moved past ${job.headSha} before this review could apply.`);
   };
-  const closed = () => discard(`Skipped review: pull request #${pullRequest.prNumber} is no longer open.`);
+  const closed = async () => {
+    await reviewRepository.failForJob(
+      job.id,
+      `Review discarded because pull request #${pullRequest.prNumber} is no longer open.`,
+      job.claimToken,
+    );
+    await discard(`Skipped review: pull request #${pullRequest.prNumber} is no longer open.`);
+  };
 
   const initial = await github.getPullRequest(fullName, pullRequest.prNumber);
   context.state.activePullRequest = { number: initial.number, url: initial.url };
@@ -134,6 +141,16 @@ export const runReview: JobFlow = async (context) => {
     if (result.exitCode !== 0) throw new Error(result.stderr || "Automated review failed");
     const verdict = parseReviewOutcome(result.response);
     const tldr = parseTldr(result.response);
+    const current = await github.getPullRequest(fullName, pullRequest.prNumber);
+    context.state.activePullRequest = { number: current.number, url: current.url };
+    if (!isOpenPullRequest(current)) {
+      await closed();
+      return;
+    }
+    if (current.headSha !== job.headSha) {
+      await stale();
+      return;
+    }
     const reviewFinished = await reviewRepository.finish(
       reviewRow.id,
       job.claimToken,
@@ -161,16 +178,6 @@ export const runReview: JobFlow = async (context) => {
         tldr,
       },
     });
-    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
-    const current = await github.getPullRequest(fullName, pullRequest.prNumber);
-    if (!isOpenPullRequest(current)) {
-      await closed();
-      return;
-    }
-    if (current.headSha !== job.headSha) {
-      await stale();
-      return;
-    }
     if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await context.commentOnPullRequest(job, pullRequest.prNumber, result.response);
 

@@ -34,8 +34,8 @@ export const runFix: JobFlow = async (context) => {
     });
   };
   const closed = () => discard(`Skipped fix: pull request #${pullRequest.prNumber} is no longer open.`);
-  const stale = (currentHead: string) => discard(
-    `Skipped fix: pull request #${pullRequest.prNumber} advanced from ${job.headSha} to ${currentHead} before execution.`,
+  const stale = (currentHead: string, phase = "before execution") => discard(
+    `Skipped fix: pull request #${pullRequest.prNumber} advanced from ${job.headSha} to ${currentHead} ${phase}.`,
   );
   const initial = await github.getPullRequest(fullName, pullRequest.prNumber);
   context.state.activePullRequest = { number: initial.number, url: initial.url };
@@ -117,6 +117,16 @@ export const runFix: JobFlow = async (context) => {
     const blockedOutcome = parseJobOutcome(result.response) === "blocked";
     resultTldr = parseTldr(result.response);
     if (blockedOutcome) {
+      const current = await github.getPullRequest(fullName, pullRequest.prNumber);
+      context.state.activePullRequest = { number: current.number, url: current.url };
+      if (!isOpenPullRequest(current)) {
+        await closed();
+        return;
+      }
+      if (current.headSha !== job.headSha) {
+        await stale(current.headSha, "while the provider was executing");
+        return;
+      }
       if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
       await managedPullRequestRepository.block(job.repositoryId, pullRequest.prNumber);
       if (!await applyPullRequestLabels(
@@ -154,6 +164,20 @@ export const runFix: JobFlow = async (context) => {
     }
     if (current.headSha === job.headSha) {
       throw new Error(`FIX completed but PR #${current.number} still points at ${current.headSha}; the branch push was not detected`);
+    }
+    const worktreeHead = await context.readWorktreeHead(worktreePath);
+    if (worktreeHead !== current.headSha) {
+      await discard(
+        `Skipped fix: pull request #${current.number} advanced from ${job.headSha} to ${current.headSha}, `
+        + `but that head was not produced by the provider worktree (local worktree is ${worktreeHead}).`,
+      );
+      return;
+    }
+    if (!await hasCurrentHead(current.headSha)) {
+      await discard(
+        `Skipped fix: pull request #${current.number} changed again before the provider result could be applied.`,
+      );
+      return;
     }
     if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await managedPullRequestRepository.updateHead(job.repositoryId, pullRequest.prNumber, current.head, current.headSha);
@@ -233,6 +257,7 @@ export const runFix: JobFlow = async (context) => {
 
   async function guardFailure(error: unknown) {
     if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
+    if (!await hasCurrentHead(job.headSha)) return;
     const fixCycleCount = await managedPullRequestRepository.incrementFixCycle(job.repositoryId, pullRequest.prNumber);
     if (fixCycleCount === null || fixCycleCount < config.MAX_AUTOMATIC_FIX_CYCLES) return;
     if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
@@ -290,6 +315,10 @@ export const runFix: JobFlow = async (context) => {
     fixCycleCount: number,
   ) {
     if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
+    if (!await hasCurrentHead(headSha)) {
+      await discard(`Skipped fix: pull request #${pullRequest.prNumber} changed before the loop guard could apply.`);
+      return;
+    }
     await managedPullRequestRepository.block(job.repositoryId, pullRequest.prNumber);
     try {
       if (!await applyPullRequestLabels(
@@ -339,5 +368,16 @@ export const runFix: JobFlow = async (context) => {
       pullRequest.prNumber,
       `${response}\n\n## Swarmloom loop guard\n\nThis pull request reached the automatic fix limit of ${config.MAX_AUTOMATIC_FIX_CYCLES} cycles. Automation is stopped until a human reviews it.`,
     );
+  }
+
+  async function hasCurrentHead(expectedHead: string | null | undefined) {
+    if (!expectedHead) return false;
+    try {
+      const current = await github.getPullRequest(fullName, pullRequest.prNumber);
+      context.state.activePullRequest = { number: current.number, url: current.url };
+      return isOpenPullRequest(current) && current.headSha === expectedHead;
+    } catch {
+      return false;
+    }
   }
 };

@@ -370,6 +370,7 @@ async function requeueForRetry(id: string, environment: string) {
     || job.workerId
     || job.cleanupToken
     || (job.status !== "FAILED" && job.worktreePath)
+    || (job.status === "FAILED" && job.sessionId && !job.worktreePath)
   ) return null;
 
   const updated = await prisma.job.updateMany({

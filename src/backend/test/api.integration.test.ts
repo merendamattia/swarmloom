@@ -501,18 +501,23 @@ integration("operations API", () => {
   });
 
   test("retry after a terminal failure requeues the job directly", async () => {
-    await prisma.job.update({
-      where: { id: jobId },
-      data: { status: "FAILED", activeIssueKey: null, attempts: 1, sessionId: "api-session" },
-    });
-    labels.splice(0, labels.length, "bug", config.ISSUE_BLOCKED_LABEL);
-    const retry = await app.request(`/api/jobs/${jobId}/retry`, { method: "POST" });
-    expect(retry.status).toBe(202);
-    expect(await retry.json()).toEqual({ jobId, status: "QUEUED", sessionResumed: true });
-    expect(labels).toEqual(["bug", config.ISSUE_WORKING_LABEL]);
-    expect(enqueuedJobs).toEqual([jobId, jobId]);
-    expect(await prisma.jobEvent.findFirst({ where: { jobId, type: "JOB_RESUME_REQUESTED" }, orderBy: { createdAt: "desc" } }))
-      .toMatchObject({ metadata: expect.objectContaining({ attempt: 2, sessionId: "api-session", sessionResumed: true }) });
+    const retainedWorktree = await mkdtemp(`/tmp/swarmloom-api-retry-${unique}-`);
+    try {
+      await prisma.job.update({
+        where: { id: jobId },
+        data: { status: "FAILED", activeIssueKey: null, attempts: 1, sessionId: "api-session", worktreePath: retainedWorktree },
+      });
+      labels.splice(0, labels.length, "bug", config.ISSUE_BLOCKED_LABEL);
+      const retry = await app.request(`/api/jobs/${jobId}/retry`, { method: "POST" });
+      expect(retry.status).toBe(202);
+      expect(await retry.json()).toEqual({ jobId, status: "QUEUED", sessionResumed: true });
+      expect(labels).toEqual(["bug", config.ISSUE_WORKING_LABEL]);
+      expect(enqueuedJobs).toEqual([jobId, jobId]);
+      expect(await prisma.jobEvent.findFirst({ where: { jobId, type: "JOB_RESUME_REQUESTED" }, orderBy: { createdAt: "desc" } }))
+        .toMatchObject({ metadata: expect.objectContaining({ attempt: 2, sessionId: "api-session", sessionResumed: true }) });
+    } finally {
+      await rm(retainedWorktree, { recursive: true, force: true });
+    }
   });
 
   test("rejects a stale pull request retry and restores its current review trigger", async () => {
@@ -744,6 +749,38 @@ integration("operations API", () => {
       status: "FAILED",
       worktreePath: missingPath,
       sessionId: "retained-session",
+    });
+  });
+
+  test("rejects a migrated failed session that has no retained worktree", async () => {
+    const job = await prisma.job.create({
+      data: {
+        repositoryId,
+        environment: "test",
+        jobType: "IMPLEMENTATION",
+        subjectType: "ISSUE",
+        issueNumber: 485,
+        issueTitle: "Migrated session without worktree",
+        issueUrl: `https://github.com/acme/api-${unique}/issues/485`,
+        issueBody: "Retry this issue",
+        status: "FAILED",
+        branchName: "agent/issue-485",
+        baselineCommit: "b".repeat(40),
+        sessionId: "migrated-session",
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+      },
+    });
+
+    const response = await app.request(`/api/jobs/${job.id}/retry`, { method: "POST" });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "Retained worktree is missing; retry cannot resume the job" });
+    expect(enqueuedJobs).not.toContain(job.id);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+      status: "FAILED",
+      worktreePath: null,
+      sessionId: "migrated-session",
     });
   });
 

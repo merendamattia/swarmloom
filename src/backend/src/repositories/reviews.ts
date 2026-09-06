@@ -144,4 +144,4 @@ async function reconcileCancelledJobs(environment: string) {
   return finalized;
 }
 
-export const reviewRepository = { start, finish, cancelForJob, failStaleForJob, reconcileCancelledJobs };
+export const reviewRepository = { start, finish, failForJob, cancelForJob, failStaleForJob, reconcileCancelledJobs };
