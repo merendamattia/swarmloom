@@ -1,3 +1,4 @@
+import { type JobStatus } from "@prisma/client";
 import { prisma } from "../core/db.ts";
 import { jobRepository } from "./jobs.ts";
 
@@ -44,6 +45,7 @@ async function markError(id: string, errorMessage: string) {
 
 type RemoveConfiguration = { environment: string; value: string | null };
 type RemoveWorktree = (worktreePath: string) => Promise<void>;
+const terminalJobStatuses: JobStatus[] = ["COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"];
 type RemoveResult = {
   blocked?: boolean;
   activeJobs?: number;
@@ -66,6 +68,7 @@ async function remove(
         { status: { in: ["QUEUED", "RUNNING", "WAITING_FOR_QUOTA"] } },
         { worktreeCleanupRequired: true },
         { status: "FAILED", worktreePath: { not: null } },
+        { status: { in: terminalJobStatuses }, OR: [{ workerId: { not: null } }, { claimToken: { not: null } }] },
       ],
     },
   });

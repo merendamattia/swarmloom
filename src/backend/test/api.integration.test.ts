@@ -1056,6 +1056,48 @@ integration("operations API", () => {
     }
   });
 
+  test("blocks repository removal while a terminal job still holds its worker claim", async () => {
+    const { jobRepository: jobs } = await import("../src/repositories/jobs.ts");
+    const claimedRepository = await prisma.repository.create({
+      data: { fullName: `acme/claimed-${unique}`, cloneUrl: `https://github.com/acme/claimed-${unique}.git` },
+    });
+    const job = await prisma.job.create({
+      data: {
+        repositoryId: claimedRepository.id,
+        environment: "test",
+        issueNumber: 56,
+        issueTitle: "Claimed terminal job",
+        issueUrl: `https://github.com/acme/claimed-${unique}/issues/56`,
+        issueBody: "Body",
+        status: "QUEUED",
+        branchName: "agent/issue-56",
+        baselineCommit: "c".repeat(40),
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+      },
+    });
+    const claim = await jobs.claim(job.id, "test", "delete-race-worker");
+    expect(claim).not.toBeNull();
+    expect(await jobs.finishRunning(job.id, claim!.claimToken!, "FAILED", { errorMessage: "provider failed" })).toBe(true);
+
+    const blocked = await app.request(`/api/repositories/${claimedRepository.id}`, { method: "DELETE" });
+
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toEqual({
+      error: "Cannot remove the repository while 1 active job is queued, waiting, or running. Cancel or finish them first.",
+    });
+    expect(await prisma.repository.findUnique({ where: { id: claimedRepository.id } })).not.toBeNull();
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+      status: "FAILED",
+      workerId: "delete-race-worker",
+      claimToken: claim!.claimToken,
+    });
+
+    expect(await jobs.releaseWorker(job.id, "delete-race-worker", claim!.claimToken!)).toBe(true);
+    const removed = await app.request(`/api/repositories/${claimedRepository.id}`, { method: "DELETE" });
+    expect(removed.status).toBe(200);
+  });
+
   test("blocks removal while jobs are active and reports unknown repositories", async () => {
     const active = await prisma.repository.create({
       data: { fullName: `acme/active-${unique}`, cloneUrl: `https://github.com/acme/active-${unique}.git` },
