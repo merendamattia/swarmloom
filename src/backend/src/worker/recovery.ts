@@ -9,14 +9,17 @@ import { reviewRepository } from "../repositories/reviews.ts";
 import { recoverCancelledWorktrees } from "../worktrees/recovery.ts";
 
 type RemoveWorktree = typeof removeJobWorktree;
-type TerminalRecoveryConfig = { APP_ENV: string; DATA_DIR: string };
+type TerminalRecoveryConfig = Pick<Config, "APP_ENV" | "DATA_DIR" | "STALE_JOB_THRESHOLD_MS">;
 
 export async function recoverTerminalJobs(
   config: TerminalRecoveryConfig,
   events: Pick<EventService, "record">,
   removeWorktree: RemoveWorktree = removeJobWorktree,
 ) {
-  const jobs = await jobRepository.findTerminalRecoveryJobs(config.APP_ENV);
+  const jobs = await jobRepository.findTerminalRecoveryJobs(
+    config.APP_ENV,
+    new Date(Date.now() - config.STALE_JOB_THRESHOLD_MS),
+  );
   let recovered = 0;
 
   for (const job of jobs) {
@@ -85,9 +88,14 @@ export async function recoverTerminalJobs(
   return recovered;
 }
 
-export async function recoverStaleJobs(config: Config, github: GitHubClient, events: EventService) {
-  await recoverTerminalJobs(config, events);
-  await recoverCancelledWorktrees(config, events);
+export async function recoverStaleJobs(
+  config: Config,
+  github: GitHubClient,
+  events: EventService,
+  removeWorktree: RemoveWorktree = removeJobWorktree,
+) {
+  await recoverTerminalJobs(config, events, removeWorktree);
+  await recoverCancelledWorktrees(config, events, removeWorktree);
   await reviewRepository.reconcileCancelledJobs(config.APP_ENV);
   const staleJobs = await jobRepository.recoverStaleBefore(
     config.APP_ENV,
@@ -99,7 +107,7 @@ export async function recoverStaleJobs(config: Config, github: GitHubClient, eve
       try {
         const cleanup = await jobRepository.claimWorktreeCleanup(job.id, job.workerId, job.claimToken, job.worktreePath);
         if (cleanup) {
-          await removeJobWorktree({
+          await removeWorktree({
             worktreePath: cleanup.path,
             repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
             gitEnvironment: undefined,

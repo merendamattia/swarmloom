@@ -175,12 +175,35 @@ integration("operations API", () => {
 
     const status = await app.request("/api/status");
     const statusBody = await status.json();
-    expect(statusBody).toMatchObject({ version });
+    expect(statusBody).toMatchObject({
+      version,
+      providerUsage: {
+        status: "unavailable",
+        availability: "unknown",
+        spendControlReached: null,
+        rateLimitReachedType: null,
+        observedAt: null,
+        windows: [],
+      },
+    });
     expect(JSON.stringify(statusBody)).not.toContain("test-token");
 
-    await prisma.job.update({ where: { id: jobId }, data: { status: "RUNNING", startedAt: new Date() } });
+    await prisma.job.update({ where: { id: jobId }, data: {
+      status: "RUNNING",
+      startedAt: new Date(),
+      inputTokens: 1_000,
+      cachedInputTokens: 400,
+      outputTokens: 120,
+      reasoningOutputTokens: 80,
+      totalTokens: 2_147_483_648,
+    } });
     expect(await (await app.request("/api/dashboard")).json())
-      .toMatchObject({ activeJobs: [{ id: jobId, reasoningEffort: "high", repository: { fullName: `acme/api-${unique}` } }] });
+      .toMatchObject({ activeJobs: [{
+        id: jobId,
+        reasoningEffort: "high",
+        totalTokens: 2_147_483_648,
+        repository: { fullName: `acme/api-${unique}` },
+      }] });
 
     const jobs = await app.request(`/api/jobs?q=${unique}&provider=CODEX`);
     expect(await jobs.json()).toMatchObject({ total: 1, items: [{ id: jobId, reasoningEffort: "high" }] });
@@ -359,6 +382,13 @@ integration("operations API", () => {
     const body = await detail.json();
     expect(body).toMatchObject({
       pullRequestUrl: `https://github.com/acme/api-${unique}/pull/99`,
+      usage: {
+        inputTokens: 1_000,
+        cachedInputTokens: 400,
+        outputTokens: 120,
+        reasoningOutputTokens: 80,
+        totalTokens: 2_147_483_648,
+      },
     });
     expect(body).not.toHaveProperty("claimToken");
     expect(body).not.toHaveProperty("cleanupToken");
@@ -994,6 +1024,17 @@ integration("operations API", () => {
         status: "PASSED",
         response: "ok",
       },
+    });
+    await prisma.job.update({
+      where: { id: obsoleteJob.id },
+      data: { status: "FAILED", worktreePath: `/worker_data/worktrees/${obsoleteJob.id}` },
+    });
+    const blockedRetained = await app.request(`/api/repositories/${obsolete.id}`, { method: "DELETE" });
+    expect(blockedRetained.status).toBe(409);
+    expect(await prisma.repository.findUnique({ where: { id: obsolete.id } })).not.toBeNull();
+    await prisma.job.update({
+      where: { id: obsoleteJob.id },
+      data: { status: "COMPLETED", worktreePath: null },
     });
     const listBefore = (await (await app.request("/api/repositories")).json()) as Array<{ id: string }>;
     expect(listBefore.some((repository) => repository.id === obsolete.id)).toBe(true);

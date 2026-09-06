@@ -218,6 +218,8 @@ integration("job runner", () => {
     const exhausted: ProviderUsageSnapshot = {
       status: "available",
       availability: "exhausted",
+      spendControlReached: null,
+      rateLimitReachedType: null,
       observedAt: "2026-08-29T20:00:00.000Z",
       windows: [{
         limitId: "codex",

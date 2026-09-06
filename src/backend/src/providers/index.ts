@@ -37,13 +37,17 @@ export function configuredAgent(config: Config, profile: AgentProfile) {
 }
 
 export type {
+  AgentEvent,
   AgentProvider,
   AgentRequest,
   AgentResult,
-  AgentEvent,
   AgentRole,
-  ProviderFailure,
+  AgentTokenCount,
+  AgentTokenUsage,
+  NormalizedProviderEvent,
   ProviderQuotaWindow,
+  ProviderUsageAvailability,
+  ProviderFailure,
   ProviderUsageCapability,
   ProviderUsageSnapshot,
 } from "./types.ts";

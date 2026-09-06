@@ -143,6 +143,12 @@ model Job {
   model                   String
   reasoningEffort         String?
   sessionId               String?
+  inputTokens             BigInt?
+  cachedInputTokens       BigInt?
+  outputTokens            BigInt?
+  reasoningOutputTokens   BigInt?
+  totalTokens             BigInt?
+  tokenUsageUpdatedAt     DateTime?
   exitCode                Int?
   result                   Json?         @db.JsonB
   errorMessage             String?       @db.Text

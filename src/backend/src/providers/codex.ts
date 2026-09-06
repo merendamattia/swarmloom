@@ -1,12 +1,18 @@
 import { redactSecrets } from "../core/secrets.ts";
 import { ProviderProcessError, providerEnvironment, runJsonlProcess } from "./process.ts";
 import { quotaAdmission } from "./quota.ts";
-import type { ProviderUsageCapability, ProviderUsageSnapshot } from "./types.ts";
+import {
+  normalizeCodexThreadUsage,
+  normalizeCodexTokenUsage,
+  type CodexUsageReader,
+} from "./codex-usage.ts";
 import {
   buildAgentPrompt,
   type AgentProvider,
   type AgentRequest,
+  type AgentTokenUsage,
   type NormalizedProviderEvent,
+  type ProviderUsageSnapshot,
 } from "./types.ts";
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -18,6 +24,8 @@ function record(value: unknown): Record<string, unknown> | undefined {
 function event(type: NonNullable<NormalizedProviderEvent["event"]>["type"], fields = {}) {
   return { type, timestamp: new Date().toISOString(), ...fields };
 }
+
+export { normalizeCodexTokenUsage } from "./codex-usage.ts";
 
 export function buildCodexCommand(request: AgentRequest) {
   const command = request.resumeSessionId
@@ -35,7 +43,20 @@ export function buildCodexCommand(request: AgentRequest) {
 
 export function normalizeCodexEvent(value: unknown): NormalizedProviderEvent {
   const raw = record(value);
-  if (!raw || typeof raw.type !== "string") return {};
+  if (!raw) return {};
+  if (raw.method === "thread/tokenUsage/updated" || raw.type === "thread/tokenUsage/updated") {
+    const usage = normalizeCodexThreadUsage(raw);
+    return usage ? { usage } : {};
+  }
+  if (raw.method === "thread/started") {
+    const params = record(raw.params);
+    const thread = record(params?.thread);
+    const sessionId = typeof thread?.id === "string" ? thread.id : undefined;
+    return sessionId
+      ? { sessionId, event: event("SESSION_STARTED", { metadata: { sessionId } }) }
+      : {};
+  }
+  if (typeof raw.type !== "string") return {};
   if (raw.type === "thread.started" && typeof raw.thread_id === "string") {
     return {
       sessionId: raw.thread_id,
@@ -58,7 +79,13 @@ export function normalizeCodexEvent(value: unknown): NormalizedProviderEvent {
       }),
     };
   }
-  if (raw.type === "turn.completed") return { event: event("SESSION_COMPLETED") };
+  if (raw.type === "turn.completed" || raw.type === "turn/completed") {
+    const usage = normalizeCodexTokenUsage(raw.usage);
+    return {
+      ...(usage ? { usage } : {}),
+      event: event("SESSION_COMPLETED"),
+    };
+  }
   if (raw.type === "turn.failed" || raw.type === "error") {
     const error = record(raw.error);
     const data = record(error?.data);
@@ -75,11 +102,12 @@ export function normalizeCodexEvent(value: unknown): NormalizedProviderEvent {
 export class CodexProvider implements AgentProvider {
   readonly name = "codex" as const;
 
-  constructor(readonly usage?: ProviderUsageCapability) {}
+  constructor(readonly usage?: CodexUsageReader) {}
 
   async execute(request: AgentRequest) {
     let sessionId: string | null = null;
     let sessionError: string | undefined;
+    let latestUsage: AgentTokenUsage | undefined;
     const output: string[] = [];
     const environment = providerEnvironment({ ...globalThis.process.env, ...request.environment });
     const onJson = async (raw: unknown) => {
@@ -92,6 +120,14 @@ export class CodexProvider implements AgentProvider {
         }
         sessionId = normalized.sessionId;
       }
+      if (normalized.usage) {
+        latestUsage = normalized.usage;
+        try {
+          await request.onUsage?.(normalized.usage);
+        } catch {
+          // Usage persistence is telemetry and must not fail executable work.
+        }
+      }
       if (normalized.output) output.push(redactSecrets(normalized.output, environment));
       if (!normalized.event) return;
       if (normalized.event.type === "SESSION_FAILED") sessionError = normalized.event.message;
@@ -99,6 +135,22 @@ export class CodexProvider implements AgentProvider {
         ...normalized.event,
         message: normalized.event.message && redactSecrets(normalized.event.message, environment),
       });
+    };
+
+    const recoverUsage = async () => {
+      if (!sessionId || !this.usage?.readThreadUsage) return;
+      try {
+        const usage = await this.usage.readThreadUsage(sessionId);
+        if (!usage) return;
+        latestUsage = usage;
+        try {
+          await request.onUsage?.(usage);
+        } catch {
+          // Usage persistence is telemetry and must not fail executable work.
+        }
+      } catch {
+        // App Server usage recovery is best-effort; the exec result remains authoritative.
+      }
     };
 
     let result: { exitCode: number; stderr: string };
@@ -113,19 +165,22 @@ export class CodexProvider implements AgentProvider {
       );
     } catch (error) {
       if (!(error instanceof ProviderProcessError)) throw error;
+      await recoverUsage();
       const resumeError = request.resumeSessionId && (isResumeMismatch(sessionError) || !sessionId)
         ? resumeIdentityError(request.resumeSessionId, sessionError)
         : undefined;
       if (resumeError) {
         if (resumeError !== sessionError) await request.onEvent?.(event("SESSION_FAILED", { message: resumeError }));
-        return this.result(sessionId, output, error.exitCode, error.stderr, resumeError, undefined, environment);
+        return this.result(sessionId, output, error.exitCode, error.stderr, resumeError, undefined, environment, latestUsage);
       }
       const quota = await this.readFailureQuota();
       if (!quota || quotaAdmission(quota).kind !== "wait") throw error;
       const message = failureMessage(error.stderr, sessionError) || error.message;
       if (!sessionError) await request.onEvent?.(event("SESSION_FAILED", { message: redactSecrets(message, environment) }));
-      return this.result(sessionId, output, error.exitCode, error.stderr, message, quota, environment);
+      return this.result(sessionId, output, error.exitCode, error.stderr, message, quota, environment, latestUsage);
     }
+
+    await recoverUsage();
     const resumeError = request.resumeSessionId && (isResumeMismatch(sessionError) || !sessionId)
       ? resumeIdentityError(request.resumeSessionId, sessionError)
       : undefined;
@@ -138,14 +193,14 @@ export class CodexProvider implements AgentProvider {
     }
     const exitCode = result.exitCode !== 0 ? result.exitCode : sessionError ? 1 : 0;
     if (exitCode === 0) {
-      return this.result(sessionId, output, 0, result.stderr, undefined, undefined, environment);
+      return this.result(sessionId, output, 0, result.stderr, undefined, undefined, environment, latestUsage);
     }
     if (resumeError) {
-      return this.result(sessionId, output, exitCode, result.stderr, resumeError, undefined, environment);
+      return this.result(sessionId, output, exitCode, result.stderr, resumeError, undefined, environment, latestUsage);
     }
     const quota = await this.readFailureQuota();
     const message = failureMessage(result.stderr, sessionError) || "Codex exited unsuccessfully";
-    return this.result(sessionId, output, exitCode, result.stderr, message, quota, environment);
+    return this.result(sessionId, output, exitCode, result.stderr, message, quota, environment, latestUsage);
   }
 
   private async readFailureQuota() {
@@ -167,6 +222,7 @@ export class CodexProvider implements AgentProvider {
     message: string | undefined,
     quota: ProviderUsageSnapshot | undefined,
     environment: Record<string, string | undefined>,
+    usage: AgentTokenUsage | undefined,
   ) {
     const failure = quota && quotaAdmission(quota).kind === "wait"
       ? { reason: "QUOTA_EXHAUSTED" as const, message: redactSecrets(message ?? "Codex quota exhausted", environment), quota }
@@ -182,6 +238,7 @@ export class CodexProvider implements AgentProvider {
       finalOutput: output.join("\n"),
       exitCode,
       stderr: details,
+      ...(usage ? { usage } : {}),
       ...(failure ? { failure } : {}),
     };
   }

@@ -57,8 +57,8 @@ export async function recoverCancelledWorktrees(
   config: CancelledWorktreeConfig,
   events: EventService,
   removeWorktree: RemoveWorktree = removeJobWorktree,
+  staleBefore = new Date(Date.now() - config.STALE_JOB_THRESHOLD_MS),
 ) {
-  const staleBefore = new Date(Date.now() - config.STALE_JOB_THRESHOLD_MS);
   const jobs = await jobRepository.findCancelledWorktrees(config.APP_ENV, staleBefore);
   let recovered = 0;
   for (const job of jobs) {

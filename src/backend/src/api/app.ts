@@ -17,6 +17,7 @@ import { checkProviderAuthentication, validateStartup } from "../core/startup.ts
 import type { EventService } from "../events/service.ts";
 import { isOpenPullRequest, type GitHubClient } from "../github/client.ts";
 import { configuredAgent } from "../providers/index.ts";
+import type { ProviderUsageCapability, ProviderUsageSnapshot } from "../providers/types.ts";
 import { createSupportIssue } from "../support-issues/service.ts";
 import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.ts";
 import { githubGitEnvironment } from "../github/git-auth.ts";
@@ -44,6 +45,7 @@ type Dependencies = {
   removeWorktree?: typeof removeJobWorktree;
   settings: SettingsService;
   scheduler: Scheduler;
+  providerUsage?: ProviderUsageCapability;
 };
 
 function configuredAgentProfiles(config: Config) {
@@ -93,6 +95,7 @@ const jobSummaryFields = {
   provider: true,
   model: true,
   reasoningEffort: true,
+  totalTokens: true,
   startedAt: true,
   activeStartedAt: true,
   attempts: true,
@@ -112,7 +115,52 @@ const repositoryJobSummarySelect = {
   ...jobSummaryFields,
   review: { select: { status: true } },
 } satisfies Prisma.JobSelect;
-export function createApp({ config, scanner, github, events, startup, queue, removeWorktree = removeJobWorktree, settings, scheduler }: Dependencies) {
+type StoredTokenCount = bigint | number | null | undefined;
+type StoredTokenUsage = {
+  inputTokens: StoredTokenCount;
+  cachedInputTokens: StoredTokenCount;
+  outputTokens: StoredTokenCount;
+  reasoningOutputTokens: StoredTokenCount;
+  totalTokens: StoredTokenCount;
+};
+
+const MAX_SAFE_TOKEN_COUNT = BigInt(Number.MAX_SAFE_INTEGER);
+
+function serializeTokenCount(value: StoredTokenCount) {
+  if (value == null) return null;
+  const count = typeof value === "bigint"
+    ? value
+    : Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
+  if (count === null || count < BigInt(0)) return null;
+  return count <= MAX_SAFE_TOKEN_COUNT ? Number(count) : count.toString();
+}
+
+function serializeTokenUsage(job: StoredTokenUsage) {
+  return {
+    inputTokens: serializeTokenCount(job.inputTokens),
+    cachedInputTokens: serializeTokenCount(job.cachedInputTokens),
+    outputTokens: serializeTokenCount(job.outputTokens),
+    reasoningOutputTokens: serializeTokenCount(job.reasoningOutputTokens),
+    totalTokens: serializeTokenCount(job.totalTokens),
+  };
+}
+
+function serializeJobSummary<T extends { totalTokens: StoredTokenCount }>(job: T) {
+  return { ...job, totalTokens: serializeTokenCount(job.totalTokens) };
+}
+
+export function createApp({
+  config,
+  scanner,
+  github,
+  events,
+  startup,
+  queue,
+  removeWorktree = removeJobWorktree,
+  settings,
+  scheduler,
+  providerUsage,
+}: Dependencies) {
   const app = new Hono().basePath("/api");
   app.use("*", requestId(), secureHeaders(), cors({
     origin: config.FRONTEND_URL,
@@ -167,9 +215,11 @@ export function createApp({ config, scanner, github, events, startup, queue, rem
         }) : null,
         checkProviderAuthentication(config.AGENT_PROVIDER),
       ]);
+      const usage = await readProviderUsage(config.AGENT_PROVIDER, providerAuth.status, providerUsage);
       return context.json({
         ...startup,
         providerAuth,
+        providerUsage: usage,
         schedule: { cron: config.SCHEDULE_CRON, timezone: config.SCHEDULE_TIMEZONE },
         provider: config.AGENT_PROVIDER,
         agentProfiles: configuredAgentProfiles(config),
@@ -247,9 +297,9 @@ export function createApp({ config, scanner, github, events, startup, queue, rem
           telegramConfigured: config.TELEGRAM_ENABLED,
         },
         repositories,
-        activeJobs,
-        recentJobs,
-        exceptionJobs,
+        activeJobs: activeJobs.map(serializeJobSummary),
+        recentJobs: recentJobs.map(serializeJobSummary),
+        exceptionJobs: exceptionJobs.map(serializeJobSummary),
         scans,
         heartbeats,
       });
@@ -282,7 +332,7 @@ export function createApp({ config, scanner, github, events, startup, queue, rem
         }),
         prisma.job.count({ where }),
       ]);
-      return context.json({ items, total, page, pageSize });
+      return context.json({ items: items.map(serializeJobSummary), total, page, pageSize });
     })
     .get("/jobs/:id", async (context) => {
       const job = await prisma.job.findFirst({
@@ -295,9 +345,24 @@ export function createApp({ config, scanner, github, events, startup, queue, rem
         },
       });
       if (!job) return context.json({ error: "Not found" }, 404);
-      const { claimToken: _claimToken, cleanupToken: _cleanupToken, review, ...publicJob } = job;
+      const {
+        claimToken: _claimToken,
+        cleanupToken: _cleanupToken,
+        inputTokens,
+        cachedInputTokens,
+        outputTokens,
+        reasoningOutputTokens,
+        totalTokens,
+        review,
+        ...publicJob
+      } = job;
       const publicReview = review ? (({ claimToken: _reviewClaimToken, ...safeReview }) => safeReview)(review) : null;
-      return context.json({ ...publicJob, review: publicReview, pullRequestUrl: canonicalPullRequestUrl(job.repository, job.pullRequestNumber) });
+      return context.json({
+        ...publicJob,
+        review: publicReview,
+        pullRequestUrl: canonicalPullRequestUrl(job.repository, job.pullRequestNumber),
+        usage: serializeTokenUsage({ inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens, totalTokens }),
+      });
     })
     .post("/jobs/:id/support-issue", async (context) => {
       const result = await createSupportIssue({ config, github, jobId: context.req.param("id") });
@@ -330,17 +395,23 @@ export function createApp({ config, scanner, github, events, startup, queue, rem
       }).catch(() => {});
       return context.json({ status: "created" as const, issueNumber: issue.number, issueUrl: issue.url }, 201);
     })
-    .get("/repositories", async (context) => context.json(await prisma.repository.findMany({
-      orderBy: { fullName: "asc" },
-      include: {
-        jobs: {
-          where: { environment: config.APP_ENV },
-          orderBy: { createdAt: "desc" },
-          take: 5,
-          select: repositoryJobSummarySelect,
+    .get("/repositories", async (context) => {
+      const repositories = await prisma.repository.findMany({
+        orderBy: { fullName: "asc" },
+        include: {
+          jobs: {
+            where: { environment: config.APP_ENV },
+            orderBy: { createdAt: "desc" },
+            take: 5,
+            select: repositoryJobSummarySelect,
+          },
         },
-      },
-    })))
+      });
+      return context.json(repositories.map((repository) => ({
+        ...repository,
+        jobs: repository.jobs.map(serializeJobSummary),
+      })));
+    })
     .delete("/repositories/:id", async (context) => {
       const id = context.req.param("id");
       const existing = await prisma.repository.findUnique({
@@ -663,6 +734,59 @@ export function createApp({ config, scanner, github, events, startup, queue, rem
       if (!await jobRepository.clearWorktree(job.id, job.claimToken, cleanup.cleanupToken)) return false;
     }
     return jobRepository.discardTerminalJob(job.id, job.claimToken);
+  }
+}
+
+async function readProviderUsage(
+  provider: Config["AGENT_PROVIDER"],
+  authentication: "authenticated" | "required",
+  capability?: ProviderUsageCapability,
+): Promise<ProviderUsageSnapshot> {
+  if (provider !== "codex") {
+    return {
+      status: "unsupported",
+      availability: "unknown",
+      spendControlReached: null,
+      rateLimitReachedType: null,
+      observedAt: null,
+      windows: [],
+      message: "Quota telemetry is not supported for this provider",
+    };
+  }
+  if (authentication !== "authenticated") {
+    return {
+      status: "unavailable",
+      availability: "unknown",
+      spendControlReached: null,
+      rateLimitReachedType: null,
+      observedAt: null,
+      windows: [],
+      message: "Codex authentication is required to read quota",
+    };
+  }
+  if (!capability) {
+    return {
+      status: "unavailable",
+      availability: "unknown",
+      spendControlReached: null,
+      rateLimitReachedType: null,
+      observedAt: null,
+      windows: [],
+      message: "Codex quota telemetry is not configured",
+    };
+  }
+  try {
+    return await capability.readAccountUsage();
+  } catch {
+    return {
+      status: "unavailable",
+      availability: "unknown",
+      spendControlReached: null,
+      rateLimitReachedType: null,
+      observedAt: null,
+      windows: [],
+      message: "Codex quota telemetry is unavailable",
+    };
   }
 }
 

@@ -6,6 +6,8 @@ import type { ProviderUsageSnapshot } from "../src/providers/types.ts";
 const snapshot = (overrides: Partial<ProviderUsageSnapshot> = {}): ProviderUsageSnapshot => ({
   status: "available",
   availability: "unknown",
+  spendControlReached: null,
+  rateLimitReachedType: null,
   observedAt: "2026-08-29T20:00:00.000Z",
   windows: [],
   ...overrides,
