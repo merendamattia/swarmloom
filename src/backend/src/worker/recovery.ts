@@ -34,8 +34,7 @@ export async function recoverTerminalJobs(
             repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
             gitEnvironment: undefined,
           });
-          if (!await jobRepository.clearWorktree(job.id, null, cleanup.cleanupToken)) continue;
-          if (await jobRepository.discardFailedJob(job.id, null)) recovered += 1;
+          if (await jobRepository.finalizeTerminalCleanup(job.id, null, cleanup.cleanupToken)) recovered += 1;
         } catch (error) {
           await events.record({
             type: "WORKTREE_CLEANUP_REQUIRED",
@@ -71,8 +70,7 @@ export async function recoverTerminalJobs(
         repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
         gitEnvironment: undefined,
       });
-      if (!await jobRepository.clearWorktree(job.id, null, cleanup.cleanupToken)) continue;
-      if (await jobRepository.releaseWorker(job.id, null, null)) recovered += 1;
+      if (await jobRepository.finalizeTerminalCleanup(job.id, null, cleanup.cleanupToken)) recovered += 1;
     } catch (error) {
       await events.record({
         type: "WORKTREE_CLEANUP_REQUIRED",
@@ -219,9 +217,7 @@ export async function recoverTerminalWorktrees(
         repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
         gitEnvironment: undefined,
       });
-      if (!await jobRepository.clearWorktree(job.id, null, cleanup.cleanupToken)) continue;
-      await jobRepository.releaseWorker(job.id, null, null, job.status === "STALE");
-      recovered += 1;
+      if (await jobRepository.finalizeTerminalCleanup(job.id, null, cleanup.cleanupToken)) recovered += 1;
     } catch (error) {
       await events.record({
         type: "GITHUB_RECONCILIATION_REQUIRED",

@@ -436,6 +436,41 @@ integration("PostgreSQL job lifecycle", () => {
     }
   });
 
+  test("finishes terminal ownership cleanup atomically after filesystem cleanup is complete", async () => {
+    const cleanupHead = "7".repeat(40);
+    const failed = await jobs.tryCreateQueued(queuedPrJob("REVIEW", cleanupHead, config.APP_ENV));
+    const worktreePath = await mkdtemp(join(import.meta.dir, "terminal-finalization-"));
+    await prisma.job.update({
+      where: { id: failed!.id },
+      data: {
+        status: "FAILED",
+        completedAt: new Date(),
+        worktreePath,
+        activePrKey: `${repositoryId}:${managedPrId}:${cleanupHead}:REVIEW`,
+      },
+    });
+
+    try {
+      const cleanup = await jobs.claimWorktreeCleanup(failed!.id, null, null, worktreePath);
+      expect(cleanup).not.toBeNull();
+
+      await rm(worktreePath, { recursive: true, force: true });
+      expect(await jobs.finalizeTerminalCleanup(failed!.id, null, cleanup!.cleanupToken)).toBe(true);
+      expect(await jobs.finalizeTerminalCleanup(failed!.id, null, cleanup!.cleanupToken)).toBe(true);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: failed!.id } })).toMatchObject({
+        status: "FAILED",
+        worktreePath: null,
+        activePrKey: null,
+        workerId: null,
+        claimToken: null,
+        cleanupToken: null,
+        cleanupLeaseExpiresAt: null,
+      });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
   test("reaps an unclaimed terminal worktree after worker loss", async () => {
     const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 25));
     const claimed = await jobs.claim(queued!.id, environment, "dead-worker");

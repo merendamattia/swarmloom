@@ -496,10 +496,6 @@ export function createApp({
       if (!["FAILED", "BLOCKED", "CANCELLED", "STALE"].includes(job.status)) {
         return context.json({ error: "Only failed, blocked, cancelled, or stale jobs can be retried" }, 409);
       }
-      if (job.status === "FAILED" && ((!job.worktreePath && Boolean(job.sessionId)) || (job.worktreePath && !existsSync(job.worktreePath)))) {
-        return context.json({ error: "Retained worktree is missing; retry cannot resume the job" }, 409);
-      }
-
       let currentPullRequest;
       if (job.subjectType === "PULL_REQUEST" && job.pullRequestNumber) {
         try {
@@ -575,6 +571,10 @@ export function createApp({
           return context.json({ error: "Could not restore the pull request retry trigger" }, 502);
         }
         return context.json({ error: "Pull request head changed; retry was not queued" }, 409);
+      }
+
+      if (job.status === "FAILED" && ((!job.worktreePath && Boolean(job.sessionId)) || (job.worktreePath && !existsSync(job.worktreePath)))) {
+        return context.json({ error: "Retained worktree is missing; retry cannot resume the job" }, 409);
       }
 
       let requeued;
@@ -726,14 +726,16 @@ export function createApp({
       : null;
     if (job.worktreePath && !cleanup) return false;
     if (cleanup) {
-      await removeWorktree({
-        worktreePath: cleanup.path,
-        repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
-        gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
-      });
-      if (!await jobRepository.clearWorktree(job.id, job.claimToken, cleanup.cleanupToken)) return false;
+      if (existsSync(cleanup.path)) {
+        await removeWorktree({
+          worktreePath: cleanup.path,
+          repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
+          gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
+        });
+      }
+      return jobRepository.finalizeTerminalCleanup(job.id, job.claimToken, cleanup.cleanupToken);
     }
-    return jobRepository.discardTerminalJob(job.id, job.claimToken);
+    return jobRepository.finalizeTerminalCleanup(job.id, job.claimToken, null);
   }
 }
 

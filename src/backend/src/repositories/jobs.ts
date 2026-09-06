@@ -331,6 +331,46 @@ async function clearWorktree(id: string, claimToken: string | null, cleanupToken
   return updated.count === 1;
 }
 
+async function finalizeTerminalCleanup(id: string, claimToken: string | null, cleanupToken: string | null) {
+  const updated = await prisma.job.updateMany({
+    where: {
+      id,
+      status: { in: cleanupStatuses },
+      workerId: null,
+      claimToken,
+      cleanupToken,
+      ...(cleanupToken === null ? { worktreePath: null } : { worktreePath: { not: null } }),
+    },
+    data: {
+      worktreePath: null,
+      cleanupToken: null,
+      cleanupLeaseExpiresAt: null,
+      worktreeCleanupRequired: false,
+      activeIssueKey: null,
+      activePrKey: null,
+      workerId: null,
+      claimToken: null,
+      heartbeatAt: null,
+    },
+  });
+  if (updated.count === 1) return true;
+
+  const finalized = await prisma.job.findFirst({
+    where: {
+      id,
+      status: { in: cleanupStatuses },
+      workerId: null,
+      claimToken: null,
+      cleanupToken: null,
+      worktreePath: null,
+      activeIssueKey: null,
+      activePrKey: null,
+    },
+    select: { id: true },
+  });
+  return finalized !== null;
+}
+
 async function requeueWaitingForQuota(id: string, environment: string) {
   const job = await prisma.job.findFirst({
     where: { id, environment, status: "WAITING_FOR_QUOTA" },
@@ -405,19 +445,6 @@ async function requeueForRetry(id: string, environment: string) {
   return updated.count === 1 ? prisma.job.findUnique({ where: { id } }) : null;
 }
 
-async function discardFailedJob(id: string, claimToken: string | null) {
-  const updated = await prisma.job.updateMany({
-    where: { id, status: "FAILED", workerId: null, claimToken, cleanupToken: null, worktreePath: null },
-    data: {
-      activeIssueKey: null,
-      activePrKey: null,
-      claimToken: null,
-      cleanupLeaseExpiresAt: null,
-      worktreeCleanupRequired: false,
-    },
-  });
-  return updated.count === 1;
-}
 async function complete(id: string, claimToken: string, result: Prisma.InputJsonValue, exitCode: number) {
   return finishRunning(id, claimToken, "COMPLETED", { result, exitCode });
 }
@@ -714,14 +741,6 @@ async function releaseWorker(id: string, workerId: string | null, claimToken: st
   return updated.count === 1;
 }
 
-async function discardTerminalJob(id: string, claimToken: string | null) {
-  const updated = await prisma.job.updateMany({
-    where: { id, status: { in: [...retryableStatuses] }, workerId: null, claimToken, cleanupToken: null, worktreePath: null },
-    data: { activeIssueKey: null, activePrKey: null, workerId: null, claimToken: null, heartbeatAt: null },
-  });
-  return updated.count === 1;
-}
-
 async function setTokenUsage(id: string, usage: AgentTokenUsage, claimToken: string) {
   const updated = await prisma.$executeRaw`
     UPDATE "job"
@@ -899,9 +918,8 @@ export const jobRepository = {
   setSessionId,
   setExecutionResult,
   clearWorktree,
+  finalizeTerminalCleanup,
   releaseWorker,
-  discardFailedJob,
-  discardTerminalJob,
   finishRunning,
   claimSupportIssue,
   findSupportIssue,

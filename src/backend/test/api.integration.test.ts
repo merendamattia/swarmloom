@@ -784,6 +784,65 @@ integration("operations API", () => {
     });
   });
 
+  test("cleans ownership before rejecting a missing-worktree pull request retry", async () => {
+    const cases = [
+      { issueNumber: 486, state: "closed", merged: false, headSha: "a".repeat(40) },
+      { issueNumber: 487, state: "open", merged: false, headSha: "b".repeat(40) },
+    ];
+
+    for (const current of cases) {
+      const job = await prisma.job.create({
+        data: {
+          repositoryId,
+          environment: "test",
+          jobType: "REVIEW",
+          subjectType: "PULL_REQUEST",
+          issueNumber: current.issueNumber,
+          issueTitle: `Missing pull request workspace ${current.issueNumber}`,
+          issueUrl: `https://github.com/acme/api-${unique}/issues/${current.issueNumber}`,
+          issueBody: "Retry this pull request",
+          status: "FAILED",
+          branchName: `agent/issue-${current.issueNumber}`,
+          baselineCommit: "b".repeat(40),
+          pullRequestNumber: 456,
+          pullRequestUrl: "https://github.com/acme/api-test/pull/456",
+          headSha: "a".repeat(40),
+          sessionId: `missing-worktree-session-${current.issueNumber}`,
+          activePrKey: `${repositoryId}:missing-worktree-${current.issueNumber}`,
+          provider: "CODEX",
+          model: "gpt-5.6-luna",
+        },
+      });
+      pullRequestHead = current.headSha;
+      pullRequestState = current.state;
+      pullRequestMerged = current.merged;
+      pullRequestLabels.splice(0, pullRequestLabels.length, "bug");
+
+      const response = await app.request(`/api/jobs/${job.id}/retry`, { method: "POST" });
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: current.state === "closed"
+          ? "Pull request is closed or merged; retry was not queued"
+          : "Pull request head changed; retry was not queued",
+      });
+      expect(enqueuedJobs).not.toContain(job.id);
+      expect(pullRequestLabels).toEqual(current.state === "closed"
+        ? ["bug"]
+        : ["bug", config.PR_REVIEW_REQUESTED_LABEL]);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+        status: "FAILED",
+        worktreePath: null,
+        sessionId: `missing-worktree-session-${current.issueNumber}`,
+        activePrKey: null,
+      });
+    }
+
+    pullRequestHead = "a".repeat(40);
+    pullRequestState = "open";
+    pullRequestMerged = false;
+  });
+
   test("creates one sanitized support issue for a failed job and rejects non-failed jobs", async () => {
     await prisma.job.update({
       where: { id: jobId },
