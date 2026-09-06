@@ -590,7 +590,7 @@ integration("PostgreSQL job lifecycle", () => {
     });
 
     expect(await jobs.recoverStaleBefore(environment, new Date(Date.now() - 60_000))).toHaveLength(1);
-    expect(await jobs.releaseWorker(queued!.id, "stale-worker", staleClaim!.claimToken!)).toBe(true);
+    expect(await jobs.releaseWorker(queued!.id, "stale-worker", staleClaim!.claimToken!, true)).toBe(true);
     expect(await jobs.requeueForRetry(queued!.id, environment)).not.toBeNull();
     const currentClaim = await jobs.claim(queued!.id, environment, "replacement-worker");
     expect(currentClaim?.attempts).toBe((staleClaim?.attempts ?? 0) + 1);

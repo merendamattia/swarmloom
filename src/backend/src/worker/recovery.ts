@@ -10,6 +10,7 @@ import { recoverCancelledWorktrees } from "../worktrees/recovery.ts";
 
 type RemoveWorktree = typeof removeJobWorktree;
 type TerminalRecoveryConfig = Pick<Config, "APP_ENV" | "DATA_DIR" | "STALE_JOB_THRESHOLD_MS">;
+type TerminalWorktreeRecoveryConfig = { APP_ENV: string; DATA_DIR: string };
 
 export async function recoverTerminalJobs(
   config: TerminalRecoveryConfig,
@@ -185,11 +186,14 @@ export async function recoverStaleJobs(
 }
 
 export async function recoverTerminalWorktrees(
-  config: TerminalRecoveryConfig,
+  config: TerminalWorktreeRecoveryConfig,
   events: EventService,
   removeWorktree: RemoveWorktree = removeJobWorktree,
 ) {
-  const jobs = await jobRepository.findTerminalRecoveryJobs(config.APP_ENV);
+  const jobs = await jobRepository.findTerminalRecoveryJobs(
+    config.APP_ENV,
+    new Date(Date.now() - WORKTREE_CLEANUP_LEASE_MS),
+  );
   const staleBefore = new Date(Date.now() - WORKTREE_CLEANUP_LEASE_MS);
   let recovered = 0;
 

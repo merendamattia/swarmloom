@@ -64,7 +64,6 @@ async function remove(
       repositoryId: id,
       OR: [
         { status: { in: ["QUEUED", "RUNNING", "WAITING_FOR_QUOTA"] } },
-        { worktreePath: { not: null } },
         { worktreeCleanupRequired: true },
         { status: "FAILED", worktreePath: { not: null } },
       ],
