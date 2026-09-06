@@ -1,9 +1,16 @@
 import { providerEnvironment, readLines } from "./process.ts";
-import type { ProviderQuotaWindow, ProviderUsageCapability, ProviderUsageSnapshot } from "./types.ts";
+import type {
+  AgentTokenUsage,
+  ProviderQuotaWindow,
+  ProviderUsageCapability,
+  ProviderUsageSnapshot,
+} from "./types.ts";
 
 const ACCOUNT_RATE_LIMIT_REQUEST_ID = 2;
-const DEFAULT_FRESHNESS_MS = 5_000;
+const DEFAULT_FRESHNESS_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 10_000;
+const THREAD_USAGE_WAIT_MS = 500;
+const MAX_INT64 = BigInt("9223372036854775807");
 
 type RecordValue = Record<string, unknown>;
 
@@ -20,8 +27,57 @@ function field(value: RecordValue, ...names: string[]) {
   return undefined;
 }
 
+function tokenCount(value: unknown) {
+  let count: bigint;
+  if (typeof value === "bigint") {
+    count = value;
+  } else if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+    count = BigInt(value);
+  } else if (typeof value === "string" && /^\d+$/.test(value)) {
+    try {
+      count = BigInt(value);
+    } catch {
+      return null;
+    }
+  } else {
+    return null;
+  }
+  return count >= BigInt(0) && count <= MAX_INT64 ? count : null;
+}
+
+export function normalizeCodexTokenUsage(value: unknown): AgentTokenUsage | null {
+  const raw = record(value);
+  if (!raw) return null;
+  const names = [
+    "inputTokens", "input_tokens", "cachedInputTokens", "cached_input_tokens",
+    "outputTokens", "output_tokens", "reasoningOutputTokens", "reasoning_output_tokens",
+    "totalTokens", "total_tokens",
+  ];
+  if (!names.some((name) => Object.hasOwn(raw, name))) return null;
+  return {
+    inputTokens: tokenCount(field(raw, "inputTokens", "input_tokens")),
+    cachedInputTokens: tokenCount(field(raw, "cachedInputTokens", "cached_input_tokens")),
+    outputTokens: tokenCount(field(raw, "outputTokens", "output_tokens")),
+    reasoningOutputTokens: tokenCount(field(raw, "reasoningOutputTokens", "reasoning_output_tokens")),
+    totalTokens: tokenCount(field(raw, "totalTokens", "total_tokens")),
+  };
+}
+
+export function normalizeCodexThreadUsage(value: unknown): AgentTokenUsage | null {
+  const raw = record(value);
+  if (!raw) return null;
+  const params = record(field(raw, "params")) ?? raw;
+  const tokenUsage = record(field(params, "tokenUsage", "token_usage"));
+  const total = tokenUsage && (record(field(tokenUsage, "total", "totalTokenUsage", "total_token_usage")) ?? tokenUsage);
+  return normalizeCodexTokenUsage(total);
+}
+
 function stringValue(value: unknown) {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function booleanValue(value: unknown) {
+  return typeof value === "boolean" ? value : null;
 }
 
 function percentValue(value: unknown) {
@@ -71,20 +127,36 @@ function windowsForSnapshot(source: RecordValue, fallbackLimitId: string | null)
 }
 
 function unavailableSnapshot(message = "Codex quota telemetry is unavailable"): ProviderUsageSnapshot {
-  return { status: "unavailable", availability: "unknown", observedAt: null, windows: [], message };
+  return {
+    status: "unavailable",
+    availability: "unknown",
+    spendControlReached: null,
+    rateLimitReachedType: null,
+    observedAt: null,
+    windows: [],
+    message,
+  };
 }
 
 function unknownSnapshot(observedAt: Date, message: string): ProviderUsageSnapshot {
-  return { status: "available", availability: "unknown", observedAt: observedAt.toISOString(), windows: [], message };
+  return {
+    status: "available",
+    availability: "unknown",
+    spendControlReached: null,
+    rateLimitReachedType: null,
+    observedAt: observedAt.toISOString(),
+    windows: [],
+    message,
+  };
 }
 
 function rootAvailability(
   windows: ProviderQuotaWindow[],
-  source: RecordValue | undefined,
+  source: RecordValue,
 ): ProviderUsageSnapshot["availability"] {
-  const exhausted = source && (stringValue(field(source, "rateLimitReachedType", "rate_limit_reached_type"))
-    || field(source, "spendControlReached", "spend_control_reached") === true);
-  if (exhausted || windows.some(({ remainingPercent }) => remainingPercent === 0)) {
+  const spendControlReached = field(source, "spendControlReached", "spend_control_reached") === true;
+  const rateLimitReachedType = stringValue(field(source, "rateLimitReachedType", "rate_limit_reached_type"));
+  if (spendControlReached || rateLimitReachedType !== null || windows.some(({ remainingPercent }) => remainingPercent === 0)) {
     return "exhausted";
   }
   if (windows.some(({ remainingPercent }) => remainingPercent !== null)) return "available";
@@ -98,25 +170,24 @@ export function normalizeCodexRateLimits(value: unknown, observedAt = new Date()
 
   const rateLimits = record(field(result, "rateLimits", "rate_limits"));
   const byLimitId = record(field(result, "rateLimitsByLimitId", "rate_limits_by_limit_id"));
-  const mappedEntries = byLimitId ? Object.entries(byLimitId) : [];
-  const rootLimitId = rateLimits ? stringValue(field(rateLimits, "limitId", "limit_id")) : null;
   if (!rateLimits) {
     return unknownSnapshot(
       observedAt,
-      mappedEntries.length > 0
+      byLimitId
         ? "Codex reported quota buckets without a reliable applicable mapping"
         : "Codex did not report any quota windows",
     );
   }
-  const entries = [[rootLimitId, rateLimits] as const];
 
-  const windows = entries.flatMap(([limitId, source]) => windowsForSnapshot(
-    record(source) ?? {},
-    stringValue(limitId),
-  ));
+  const limitId = stringValue(field(rateLimits, "limitId", "limit_id"));
+  const windows = windowsForSnapshot(rateLimits, limitId);
+  const spendControlReached = booleanValue(field(rateLimits, "spendControlReached", "spend_control_reached"));
+  const rateLimitReachedType = stringValue(field(rateLimits, "rateLimitReachedType", "rate_limit_reached_type"));
   return {
     status: "available",
-    availability: rootAvailability(windows, record(entries[0]?.[1]) ?? undefined),
+    availability: rootAvailability(windows, rateLimits),
+    spendControlReached,
+    rateLimitReachedType,
     observedAt: observedAt.toISOString(),
     windows,
   };
@@ -125,6 +196,7 @@ export function normalizeCodexRateLimits(value: unknown, observedAt = new Date()
 type CodexUsageReaderOptions = {
   freshnessMs?: number;
   read?: () => Promise<ProviderUsageSnapshot>;
+  readThreadUsage?: (threadId: string) => Promise<AgentTokenUsage | null>;
 };
 
 export type CodexUsageReader = ProviderUsageCapability;
@@ -132,6 +204,7 @@ export type CodexUsageReader = ProviderUsageCapability;
 export function createCodexUsageReader(options: CodexUsageReaderOptions = {}): CodexUsageReader {
   const freshnessMs = options.freshnessMs ?? DEFAULT_FRESHNESS_MS;
   const read = options.read ?? readCodexRateLimits;
+  const readThreadUsage = options.readThreadUsage ?? readCodexThreadUsage;
   let cached: { snapshot: ProviderUsageSnapshot; expiresAt: number } | undefined;
   let pending: Promise<ProviderUsageSnapshot> | undefined;
 
@@ -158,6 +231,7 @@ export function createCodexUsageReader(options: CodexUsageReaderOptions = {}): C
       return readFresh();
     },
     refreshAccountUsage: readFresh,
+    readThreadUsage,
   };
 }
 
@@ -166,9 +240,12 @@ type JsonRpcWaiter = {
   reject: (error: Error) => void;
 };
 
+type JsonRpcResponse = { error?: RecordValue; result?: unknown };
+
 type CodexAppServerClient = {
   request(message: RecordValue): void;
   waitFor(id: number): Promise<unknown>;
+  subscribe(listener: (message: RecordValue) => void): () => void;
 };
 
 async function withCodexAppServer<T>(operation: (client: CodexAppServerClient) => Promise<T>) {
@@ -179,7 +256,8 @@ async function withCodexAppServer<T>(operation: (client: CodexAppServerClient) =
     stderr: "pipe",
   });
   const waiters = new Map<number, JsonRpcWaiter>();
-  const responses = new Map<number, { error: boolean; result: unknown }>();
+  const responses = new Map<number, JsonRpcResponse>();
+  const listeners = new Set<(message: RecordValue) => void>();
   const stderr = new Response(child.stderr).text();
   const output = readLines(child.stdout, async (line) => {
     let message: RecordValue | undefined;
@@ -190,16 +268,19 @@ async function withCodexAppServer<T>(operation: (client: CodexAppServerClient) =
     }
     if (!message) return;
     const id = message.id;
-    if (typeof id !== "number") return;
-    const waiter = waiters.get(id);
-    const response = { error: Boolean(record(message.error)), result: message.result };
-    if (!waiter) {
-      responses.set(id, response);
+    const error = record(message.error);
+    if (typeof id === "number") {
+      const waiter = waiters.get(id);
+      if (!waiter) {
+        responses.set(id, { error, result: message.result });
+        return;
+      }
+      waiters.delete(id);
+      if (error) waiter.reject(new Error("Codex App Server request failed"));
+      else waiter.resolve(message.result);
       return;
     }
-    waiters.delete(id);
-    if (response.error) waiter.reject(new Error("Codex App Server request failed"));
-    else waiter.resolve(response.result);
+    for (const listener of listeners) listener(message);
   });
 
   const waitFor = (id: number) => {
@@ -215,6 +296,10 @@ async function withCodexAppServer<T>(operation: (client: CodexAppServerClient) =
     });
   };
   const request = (message: RecordValue) => child.stdin.write(`${JSON.stringify(message)}\n`);
+  const subscribe = (listener: (message: RecordValue) => void) => {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  };
   const timeout = setTimeout(() => {
     for (const waiter of waiters.values()) waiter.reject(new Error("Codex App Server request timed out"));
     child.kill();
@@ -223,13 +308,14 @@ async function withCodexAppServer<T>(operation: (client: CodexAppServerClient) =
   try {
     const initialized = waitFor(1);
     request({
+      jsonrpc: "2.0",
       id: 1,
       method: "initialize",
       params: { clientInfo: { name: "swarmloom", title: "Swarmloom", version: "0.1.0" } },
     });
     await initialized;
-    request({ method: "initialized", params: {} });
-    return await operation({ request, waitFor });
+    request({ jsonrpc: "2.0", method: "initialized", params: {} });
+    return await operation({ request, waitFor, subscribe });
   } finally {
     clearTimeout(timeout);
     child.kill();
@@ -242,7 +328,37 @@ async function withCodexAppServer<T>(operation: (client: CodexAppServerClient) =
 export async function readCodexRateLimits(): Promise<ProviderUsageSnapshot> {
   return withCodexAppServer(async ({ request, waitFor }) => {
     const rateLimits = waitFor(ACCOUNT_RATE_LIMIT_REQUEST_ID);
-    request({ id: ACCOUNT_RATE_LIMIT_REQUEST_ID, method: "account/rateLimits/read" });
+    request({ jsonrpc: "2.0", id: ACCOUNT_RATE_LIMIT_REQUEST_ID, method: "account/rateLimits/read" });
     return normalizeCodexRateLimits(await rateLimits);
+  });
+}
+
+export async function readCodexThreadUsage(threadId: string): Promise<AgentTokenUsage | null> {
+  return withCodexAppServer(async ({ request, waitFor, subscribe }) => {
+    let resolveUsage!: (usage: AgentTokenUsage | null) => void;
+    const usage = new Promise<AgentTokenUsage | null>((resolve) => { resolveUsage = resolve; });
+    const unsubscribe = subscribe((message) => {
+      if (message.method !== "thread/tokenUsage/updated") return;
+      const normalized = normalizeCodexThreadUsage(message);
+      if (normalized) resolveUsage(normalized);
+    });
+    let noUsageTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const resumed = waitFor(3);
+      request({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "thread/resume",
+        params: { threadId },
+      });
+      await resumed;
+      const noUsage = new Promise<null>((resolve) => {
+        noUsageTimer = setTimeout(() => resolve(null), THREAD_USAGE_WAIT_MS);
+      });
+      return await Promise.race([usage, noUsage]);
+    } finally {
+      if (noUsageTimer) clearTimeout(noUsageTimer);
+      unsubscribe();
+    }
   });
 }

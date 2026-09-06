@@ -11,12 +11,12 @@ export type QuotaAdmission =
 
 export function quotaAdmission(snapshot: ProviderUsageSnapshot): QuotaAdmission {
   if (snapshot.status !== "available") return { kind: "allow" };
-  if (snapshot.availability !== undefined && snapshot.availability !== "exhausted") {
+  if (snapshot.availability !== "exhausted") {
     return { kind: "allow" };
   }
 
-  const exhausted = snapshot.windows.filter((window) => window.remainingPercent === 0 || window.usedPercent === 100);
-  if (snapshot.availability !== "exhausted" && exhausted.length === 0) return { kind: "allow" };
+  const exhausted = snapshot.windows.filter(({ remainingPercent, usedPercent }) =>
+    remainingPercent === 0 || usedPercent === 100);
   const window = exhausted[0] ?? snapshot.windows[0];
   const resetAt = exhausted
     .map(({ resetsAt }) => resetsAt)
@@ -36,7 +36,7 @@ export function quotaAdmission(snapshot: ProviderUsageSnapshot): QuotaAdmission 
 export function quotaAvailable(snapshot: ProviderUsageSnapshot) {
   if (snapshot.status !== "available") return false;
   if (snapshot.availability === "available") return true;
-  if (snapshot.availability !== undefined) return false;
+  if (snapshot.availability !== "unknown") return false;
   return snapshot.windows.length > 0
     && snapshot.windows.every(({ remainingPercent }) => remainingPercent !== null && remainingPercent > 0);
 }

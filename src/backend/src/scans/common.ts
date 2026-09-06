@@ -4,6 +4,7 @@ import type { GitHubClient } from "../github/client.ts";
 import { acquireIssueLabels, replacePullRequestLabels } from "../github/labels.ts";
 import { jobRepository, type QueuedJobInput } from "../repositories/jobs.ts";
 import type { JobQueue } from "../queue/service.ts";
+import type { ProviderUsageCapability } from "../providers/types.ts";
 import { redactSecrets } from "../core/secrets.ts";
 
 export type ScannerShared = {
@@ -13,6 +14,7 @@ export type ScannerShared = {
     "getPullRequest" | "getPullRequestLabels" | "setPullRequestLabels" | "listPullRequests">;
   events: EventService;
   queue: Pick<JobQueue, "enqueue">;
+  providerUsage?: ProviderUsageCapability;
 };
 
 export type QueuedResult = {

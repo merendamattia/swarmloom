@@ -58,6 +58,12 @@ export type JobFilters = {
 };
 
 const activeStatuses = new Set(["QUEUED", "RUNNING", "WAITING_FOR_QUOTA"]);
+const STATUS_USAGE_REFRESH_INTERVAL_MS = 30_000;
+
+export function statusRefetchInterval(authentication: Status["providerAuth"]["status"] | undefined) {
+  if (authentication === undefined) return false;
+  return authentication === "required" ? 5_000 : STATUS_USAGE_REFRESH_INTERVAL_MS;
+}
 
 function jobPollingInterval(statuses: Iterable<string>) {
   const values = [...statuses];
@@ -73,7 +79,7 @@ export function useStatus() {
   return useQuery({
     queryKey: ["status"],
     queryFn: async () => json<Status>(await api.status.$get()),
-    refetchInterval: (query) => (query.state.data as Status | undefined)?.providerAuth.status === "required" ? 5_000 : false,
+    refetchInterval: (query) => statusRefetchInterval((query.state.data as Status | undefined)?.providerAuth.status),
   });
 }
 

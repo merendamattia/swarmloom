@@ -260,6 +260,8 @@ integration("issue scanner", () => {
     const available: ProviderUsageSnapshot = {
       status: "available",
       availability: "available",
+      spendControlReached: null,
+      rateLimitReachedType: null,
       observedAt: new Date().toISOString(),
       windows: [],
     };

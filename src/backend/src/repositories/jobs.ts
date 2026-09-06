@@ -1,5 +1,6 @@
 import { Prisma, type AgentProvider, type Job, type JobStatus, type JobSubject, type JobType } from "@prisma/client";
 import { prisma } from "../core/db.ts";
+import type { AgentTokenUsage } from "../providers/types.ts";
 
 export type QueuedJobInput = {
   repositoryId: string;
@@ -301,11 +302,16 @@ async function claimFailedWorktreeCleanup(
   return { path: expectedPath, cleanupToken };
 }
 
-async function findTerminalRecoveryJobs(environment: string) {
+async function findTerminalRecoveryJobs(environment: string, staleBefore: Date) {
   return prisma.job.findMany({
     where: {
       environment,
       status: { in: cleanupStatuses },
+      NOT: {
+        status: "CANCELLED",
+        workerId: { not: null },
+        heartbeatAt: { gt: staleBefore },
+      },
       OR: [
         { worktreePath: { not: null } },
         { workerId: { not: null } },
@@ -654,6 +660,51 @@ async function releaseWorker(id: string, workerId: string | null, claimToken: st
   return updated.count === 1;
 }
 
+async function setTokenUsage(id: string, usage: AgentTokenUsage, claimToken: string) {
+  const updated = await prisma.$executeRaw`
+    UPDATE "job"
+    SET
+      "inputTokens" = CASE
+        WHEN CAST(${usage.inputTokens} AS BIGINT) IS NULL THEN "inputTokens"
+        WHEN "inputTokens" IS NULL OR "inputTokens" < CAST(${usage.inputTokens} AS BIGINT) THEN CAST(${usage.inputTokens} AS BIGINT)
+        ELSE "inputTokens"
+      END,
+      "cachedInputTokens" = CASE
+        WHEN CAST(${usage.cachedInputTokens} AS BIGINT) IS NULL THEN "cachedInputTokens"
+        WHEN "cachedInputTokens" IS NULL OR "cachedInputTokens" < CAST(${usage.cachedInputTokens} AS BIGINT) THEN CAST(${usage.cachedInputTokens} AS BIGINT)
+        ELSE "cachedInputTokens"
+      END,
+      "outputTokens" = CASE
+        WHEN CAST(${usage.outputTokens} AS BIGINT) IS NULL THEN "outputTokens"
+        WHEN "outputTokens" IS NULL OR "outputTokens" < CAST(${usage.outputTokens} AS BIGINT) THEN CAST(${usage.outputTokens} AS BIGINT)
+        ELSE "outputTokens"
+      END,
+      "reasoningOutputTokens" = CASE
+        WHEN CAST(${usage.reasoningOutputTokens} AS BIGINT) IS NULL THEN "reasoningOutputTokens"
+        WHEN "reasoningOutputTokens" IS NULL OR "reasoningOutputTokens" < CAST(${usage.reasoningOutputTokens} AS BIGINT) THEN CAST(${usage.reasoningOutputTokens} AS BIGINT)
+        ELSE "reasoningOutputTokens"
+      END,
+      "totalTokens" = CASE
+        WHEN CAST(${usage.totalTokens} AS BIGINT) IS NULL THEN "totalTokens"
+        WHEN "totalTokens" IS NULL OR "totalTokens" < CAST(${usage.totalTokens} AS BIGINT) THEN CAST(${usage.totalTokens} AS BIGINT)
+        ELSE "totalTokens"
+      END,
+      "tokenUsageUpdatedAt" = CURRENT_TIMESTAMP,
+      "updatedAt" = CURRENT_TIMESTAMP
+    WHERE "id" = ${id}
+      AND "status" = 'RUNNING'
+      AND "claimToken" = ${claimToken}
+      AND (
+        CAST(${usage.inputTokens} AS BIGINT) IS NOT NULL
+        OR CAST(${usage.cachedInputTokens} AS BIGINT) IS NOT NULL
+        OR CAST(${usage.outputTokens} AS BIGINT) IS NOT NULL
+        OR CAST(${usage.reasoningOutputTokens} AS BIGINT) IS NOT NULL
+        OR CAST(${usage.totalTokens} AS BIGINT) IS NOT NULL
+      )
+  `;
+  return updated === 1;
+}
+
 async function cancel(id: string) {
   const job = await prisma.job.findUnique({
     where: { id },
@@ -709,7 +760,13 @@ async function recoverStaleBefore(environment: string, cutoff: Date) {
       ? Math.max(0, completedAt.getTime() - activeStartedAt.getTime())
       : 0);
     const updated = await prisma.job.updateMany({
-      where: { id: candidate.id, status: "RUNNING", heartbeatAt: { lt: cutoff } },
+      where: {
+        id: candidate.id,
+        status: "RUNNING",
+        workerId: candidate.workerId,
+        claimToken: candidate.claimToken,
+        heartbeatAt: { lt: cutoff },
+      },
       data: {
         status: "STALE",
         completedAt,
@@ -776,6 +833,7 @@ export const jobRepository = {
   failQueued,
   findRunning,
   setWorktree,
+  setTokenUsage,
   setSessionId,
   setExecutionResult,
   clearWorktree,

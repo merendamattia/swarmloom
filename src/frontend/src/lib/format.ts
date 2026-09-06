@@ -51,6 +51,15 @@ export function duration(milliseconds: number | null | undefined) {
   return `${minutes}m ${remainder}s`;
 }
 
+export function formatTokens(value: number | string | bigint | null | undefined) {
+  if (value == null) return "Not recorded";
+  if (typeof value === "bigint") return value.toLocaleString();
+  if (typeof value === "string") {
+    return /^\d+$/.test(value) ? BigInt(value).toLocaleString() : "Not recorded";
+  }
+  return new Intl.NumberFormat().format(value);
+}
+
 export function quotaWaitDuration(
   accumulatedMs: number | null | undefined,
   startedAt: string | Date | null | undefined,

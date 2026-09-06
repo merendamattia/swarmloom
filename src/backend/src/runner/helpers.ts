@@ -8,10 +8,11 @@ import { githubGitEnvironment } from "../github/git-auth.ts";
 import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.ts";
 import { loadAgentInstructions } from "../runtime/instructions.ts";
 import type { AgentRole } from "../providers/index.ts";
+import type { AgentTokenUsage } from "../providers/types.ts";
 import { ProviderProcessError } from "../providers/process.ts";
+import { jobRepository } from "../repositories/jobs.ts";
 import { AgentExecutionError, causeChain, executionFailure, stackTrace, type DiagnosticEvent, type JobDiagnostics } from "./diagnostics.ts";
 import type { GitHubIssueContext } from "../github/client.ts";
-import { jobRepository } from "../repositories/jobs.ts";
 import type { RunningJob, RunnerContext, RunnerGitHub } from "./types.ts";
 import { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome, parseTldr } from "./response.ts";
 
@@ -68,6 +69,24 @@ export async function executeRole(
   const diagnosticEvents: DiagnosticEvent[] = [];
   const requestedSessionId = resumeSessionId;
   let sessionId: string | null = null;
+  let usagePersistenceFailureRecorded = false;
+  const persistUsage = async (usage: AgentTokenUsage) => {
+    try {
+      await jobRepository.setTokenUsage(job.id, usage, job.claimToken);
+    } catch {
+      if (usagePersistenceFailureRecorded) return;
+      usagePersistenceFailureRecorded = true;
+      await context.events.record({
+        type: "AGENT_USAGE_PERSISTENCE_FAILED",
+        level: "WARNING",
+        message: "Could not persist provider token usage; execution continues without this telemetry",
+        jobId: job.id,
+        repositoryId: job.repositoryId,
+        scanRunId: job.scanRunId ?? undefined,
+        metadata: { issueUrl: job.issueUrl },
+      }).catch(() => {});
+    }
+  };
   let resumedEventRecorded = false;
   try {
     await removeResponseFile(responseFilePath);
@@ -83,6 +102,7 @@ export async function executeRole(
       environment: githubGitEnvironment(context.config.GITHUB_TOKEN, job.repository.cloneUrl),
       responseFilePath,
       signal: abortSignal,
+      onUsage: persistUsage,
       onEvent: async (agentEvent) => {
         if (agentEvent.type === "SESSION_STARTED" && typeof agentEvent.metadata?.sessionId === "string") {
           const observedSessionId = agentEvent.metadata.sessionId;
@@ -156,11 +176,12 @@ export async function executeRole(
     const execution = {
       ...result,
       role,
-      sessionId,
+      sessionId: resolvedSessionId,
       responseFilePath,
       response: "",
       events: diagnosticEvents,
     };
+    if (result.usage) await persistUsage(result.usage);
     if (result.failure) {
       throw executionFailure(
         roleStage(role),

@@ -15,7 +15,7 @@ await settings.initialize();
 const startup = await validateStartup(config);
 const queue = createJobQueue(config);
 await queue.health();
-const { github, events, scanner } = createSharedServices(config, queue);
+const { github, events, scanner, providerUsage } = createSharedServices(config, queue);
 await scanRunRepository.recoverRunning(config.APP_ENV);
 const scheduler = startScheduler(config, scanner);
 const heartbeat = setInterval(() => {
@@ -26,7 +26,7 @@ void heartbeatRepository.beat("api", config.APP_ENV, config.WORKER_ID, { port: c
 const server = Bun.serve({
   port: config.PORT,
   idleTimeout: 120,
-  fetch: createApp({ config, scanner, github, events, startup, queue, settings, scheduler }).fetch,
+  fetch: createApp({ config, scanner, github, events, startup, queue, settings, scheduler, providerUsage }).fetch,
 });
 logger.info("API and scheduler started", {
   environment: config.APP_ENV,

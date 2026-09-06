@@ -16,6 +16,16 @@ export type AgentEvent = {
   metadata?: Record<string, string | number | boolean | null>;
 };
 
+export type AgentTokenCount = number | bigint | null;
+
+export type AgentTokenUsage = {
+  inputTokens: AgentTokenCount;
+  cachedInputTokens: AgentTokenCount;
+  outputTokens: AgentTokenCount;
+  reasoningOutputTokens: AgentTokenCount;
+  totalTokens: AgentTokenCount;
+};
+
 export type ProviderQuotaWindow = {
   limitId: string | null;
   limitName: string | null;
@@ -26,9 +36,13 @@ export type ProviderQuotaWindow = {
   resetsAt: string | null;
 };
 
+export type ProviderUsageAvailability = "available" | "exhausted" | "unknown";
+
 export type ProviderUsageSnapshot = {
   status: "available" | "unavailable" | "unsupported" | "stale";
-  availability?: "available" | "exhausted" | "unknown";
+  availability: ProviderUsageAvailability;
+  spendControlReached: boolean | null;
+  rateLimitReachedType: string | null;
   observedAt: string | null;
   windows: ProviderQuotaWindow[];
   message?: string;
@@ -43,6 +57,7 @@ export type ProviderFailure = {
 export interface ProviderUsageCapability {
   readAccountUsage(): Promise<ProviderUsageSnapshot>;
   refreshAccountUsage?(): Promise<ProviderUsageSnapshot>;
+  readThreadUsage?(threadId: string): Promise<AgentTokenUsage | null>;
 }
 
 export type AgentRequest = {
@@ -58,6 +73,7 @@ export type AgentRequest = {
   responseFilePath?: string;
   signal?: AbortSignal;
   onEvent?: (event: AgentEvent) => void | Promise<void>;
+  onUsage?: (usage: AgentTokenUsage) => void | Promise<void>;
 };
 
 export type AgentResult = {
@@ -66,6 +82,7 @@ export type AgentResult = {
   exitCode: number;
   finalOutput: string;
   stderr: string;
+  usage?: AgentTokenUsage;
   failure?: ProviderFailure;
 };
 
@@ -73,6 +90,7 @@ export type NormalizedProviderEvent = {
   event?: AgentEvent;
   sessionId?: string;
   output?: string;
+  usage?: AgentTokenUsage;
 };
 
 export interface AgentProvider {
