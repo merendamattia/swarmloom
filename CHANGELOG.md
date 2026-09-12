@@ -1,3 +1,36 @@
+# [1.15.0](https://github.com/merendamattia/swarmloom/compare/v1.14.0...v1.15.0) (2026-09-12)
+
+
+### Bug Fixes
+
+* **ci:** verify universal Archify skill path ([b668fc0](https://github.com/merendamattia/swarmloom/commit/b668fc08764ad01165cab649dc3c31d1741dd15b))
+* **docs:** align provider adapters with runtime boundary ([a4223d6](https://github.com/merendamattia/swarmloom/commit/a4223d61ec2d1b11ad499b981a7bf54e3b118126))
+* **docs:** embed Archify SVG styles ([0f94cbf](https://github.com/merendamattia/swarmloom/commit/0f94cbff6a186fa64b67b65296cc00c210c9f663))
+* **docs:** size Archify architecture SVG ([6b29403](https://github.com/merendamattia/swarmloom/commit/6b294034cdb4d2d6a86b15e6feb50c017485b857))
+* **jobs:** fence stale worker attempts ([fe71bc9](https://github.com/merendamattia/swarmloom/commit/fe71bc9435af0d9901484e3f8e08e19e88562e88))
+* **quota:** close paused job lifecycle gaps ([0b85715](https://github.com/merendamattia/swarmloom/commit/0b857152e0d30270795483d6e551f1242410ae09))
+* **quota:** fence resumed review attempts ([ab73fe5](https://github.com/merendamattia/swarmloom/commit/ab73fe5b58634b7bc75431d91fc23ef316f9dc58))
+* **quota:** fence retries and retained worktree cleanup ([eb6df8e](https://github.com/merendamattia/swarmloom/commit/eb6df8eec6bd342212e65aa307d0f7877548e57e))
+* **quota:** reclaim expired failed cleanup leases ([65d7a46](https://github.com/merendamattia/swarmloom/commit/65d7a46f053671636bb8345282dbcd01e56a96ac))
+* **quota:** reconcile quota recovery with durable resume ([50287c4](https://github.com/merendamattia/swarmloom/commit/50287c4e1e3eefafe3eb5103045daa21efb87c5a))
+* **quota:** recover abandoned terminal work ([37d5b56](https://github.com/merendamattia/swarmloom/commit/37d5b5687fedca0e4982a511fac141584ac78574))
+* **recovery:** reclaim cancelled jobs after worker loss ([cf8e850](https://github.com/merendamattia/swarmloom/commit/cf8e8503351264a583d3590c12bccab2a7563946))
+* **settings:** scope Codex validation to active provider ([64b50a6](https://github.com/merendamattia/swarmloom/commit/64b50a6637d56094d28c804cdedd0999760e33f0))
+* **usage:** align reasoning effort provider contract ([3d3e6fc](https://github.com/merendamattia/swarmloom/commit/3d3e6fc5e023e4552ee7d6e8bd4ee2c62bf56e98))
+* **usage:** preserve quota exhaustion and refresh status ([35b8b60](https://github.com/merendamattia/swarmloom/commit/35b8b6062d2e5e6424ff69921298992fe52bcf1a))
+* **usage:** reject invalid negative token counts ([2cb7a39](https://github.com/merendamattia/swarmloom/commit/2cb7a39933279de93381cbe1688fc48d45234070))
+* **usage:** replay Codex usage on thread resume ([de57136](https://github.com/merendamattia/swarmloom/commit/de571367230018c85699b116712567f27f765c15))
+* **usage:** share quota admission with provider telemetry ([edff8f5](https://github.com/merendamattia/swarmloom/commit/edff8f5350c8d4a18b51620e183b009ba6360f13))
+* **usage:** share quota state and preserve int64 usage ([0eaaf36](https://github.com/merendamattia/swarmloom/commit/0eaaf361d1112c2539d5fc68bca872e498b154bb))
+
+
+### Features
+
+* **docs:** adopt Archify runtime architecture ([b58487f](https://github.com/merendamattia/swarmloom/commit/b58487fe489aeb077791717e0be74418a3ca952d))
+* **quota:** pause Codex jobs until usage returns ([0f1fcbd](https://github.com/merendamattia/swarmloom/commit/0f1fcbd76b7bd738337e4050b9a40222345d1955))
+* **settings:** add catalog-driven Codex selection ([ee3cfc9](https://github.com/merendamattia/swarmloom/commit/ee3cfc969b4ff75e988615dc723994badf0ddb40))
+* **usage:** expose Codex quota and job token usage ([f3e1ff7](https://github.com/merendamattia/swarmloom/commit/f3e1ff70987e38c6350ecd8afd417333b6ef52ad))
+
 # [1.14.0](https://github.com/merendamattia/swarmloom/compare/v1.13.0...v1.14.0) (2026-08-28)
 
 
