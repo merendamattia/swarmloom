@@ -26,8 +26,9 @@ import {
 import { runImplementation } from "./implementation.ts";
 import { runReview } from "./review.ts";
 import { createSupportIssue } from "../support-issues/service.ts";
-import { AgentExecutionError, executionFailure, minimalDiagnostics, type JobDiagnostics, type RoleExecution } from "./diagnostics.ts";
+import { AgentExecutionError, executionFailure, isQuotaFailure, minimalDiagnostics, type JobDiagnostics, type RoleExecution } from "./diagnostics.ts";
 import type { RunnerContext, RunnerGitHub, RunningJob, SessionState } from "./types.ts";
+import { quotaAdmission } from "../providers/quota.ts";
 
 type RunnerDependencies = {
   config: Config;
@@ -58,9 +59,10 @@ export function createJobRunner({
 }: RunnerDependencies) {
   const diagnosticEnvironment = { ...globalThis.process.env, SWARMLOOM_GITHUB_TOKEN: config.GITHUB_TOKEN };
 
-  async function run(jobId: string, workerId: string) {
-    const job = await jobRepository.findRunning(jobId, workerId);
-    if (!job) return false;
+  async function run(jobId: string, workerId: string, claimToken: string) {
+    const storedJob = await jobRepository.findRunning(jobId, workerId, claimToken);
+    if (!storedJob?.claimToken) return false;
+    const job = { ...storedJob, claimToken };
     const provider = (providers?.[job.provider.toLowerCase() as AgentProvider["name"]] ?? defaultProvider) as AgentProvider;
 
     const controller = new AbortController();
@@ -70,7 +72,7 @@ export function createJobRunner({
     const heartbeatOnce = async () => {
       if (heartbeatStopped) return;
       try {
-        const active = await jobRepository.heartbeat(job.id, workerId);
+        const active = await jobRepository.heartbeat(job.id, workerId, claimToken);
         if (!active) controller.abort(new Error("Job is no longer running"));
       } finally {
         if (!heartbeatStopped) {
@@ -81,7 +83,14 @@ export function createJobRunner({
     void heartbeatOnce();
 
     let reachedTerminalState = false;
-    const state: SessionState = { worktreeCreated: false };
+    let retainWorktree = false;
+    let worktreeCleanupComplete = false;
+    const state: SessionState = {
+      worktreeCreated: Boolean(job.worktreePath),
+      worktreePersisted: Boolean(job.worktreePath),
+      worktreePath: job.worktreePath ?? undefined,
+      repositoryPath: job.worktreePath ? job.repository.localPath ?? undefined : undefined,
+    };
     try {
       if (!provider) throw new Error(`No provider configured for ${job.provider}`);
       const context: RunnerContext = {
@@ -110,41 +119,76 @@ export function createJobRunner({
       await flow(context);
       reachedTerminalState = true;
     } catch (error) {
-      const message = safeError(error);
-      const diagnostics = error instanceof AgentExecutionError
-        ? error.diagnostics
-        : state.lastExecution
-          ? executionFailure(
-            roleStage(state.lastExecution.role),
-            state.lastExecution.role,
-            job,
-            provider,
-            state.lastExecution,
-            error,
-            { environment: diagnosticEnvironment },
-          ).diagnostics
-          : minimalDiagnostics(error, { provider: provider?.name ?? "unconfigured", model: job.model }, diagnosticEnvironment);
-      reachedTerminalState = await jobRepository.finishRunning(job.id, "FAILED", {
-        errorMessage: message,
-        diagnostics: diagnostics as Prisma.InputJsonValue,
-      });
-      if (reachedTerminalState) {
-        await events.record({
-          ...terminalEvent(job, "JOB_FAILED", message),
-          level: "ERROR",
+      if (isQuotaFailure(error)) {
+        const admission = quotaAdmission(error.failure.quota);
+        const paused = await jobRepository.waitForQuotaRunning(job.id, job.environment, workerId, claimToken, {
+          resetAt: admission.kind === "wait" ? admission.resetAt : null,
+          window: admission.kind === "wait" ? admission.window : null,
+          usedPercent: admission.kind === "wait" ? admission.usedPercent : null,
+          message: error.failure.message,
+          diagnostics: error.diagnostics as Prisma.InputJsonValue,
+          sessionId: error.diagnostics.sessionId,
+          exitCode: error.diagnostics.exitCode,
         });
-        await reportFailure(job, error, state);
+        if (paused) {
+          state.preserveWorktree = true;
+          await events.record({
+            type: "JOB_WAITING_FOR_QUOTA",
+            message: `Paused ${job.repository.fullName}#${job.issueNumber} until Codex quota returns`,
+            jobId: job.id,
+            repositoryId: job.repositoryId,
+            scanRunId: job.scanRunId ?? undefined,
+            metadata: {
+              quotaResetAt: admission.kind === "wait" ? admission.resetAt : null,
+              quotaWindow: admission.kind === "wait" ? admission.window : null,
+              quotaUsedPercent: admission.kind === "wait" ? admission.usedPercent : null,
+              observedAt: error.failure.quota.observedAt,
+            },
+          });
+        }
+      } else {
+        const message = safeError(error);
+        const diagnostics = error instanceof AgentExecutionError
+          ? error.diagnostics
+          : state.lastExecution
+            ? executionFailure(
+              roleStage(state.lastExecution.role),
+              state.lastExecution.role,
+              job,
+              provider,
+              state.lastExecution,
+              error,
+              { environment: diagnosticEnvironment },
+            ).diagnostics
+            : minimalDiagnostics(error, { provider: provider?.name ?? "unconfigured", model: job.model }, diagnosticEnvironment);
+        reachedTerminalState = await jobRepository.finishRunning(job.id, claimToken, "FAILED", {
+          errorMessage: message,
+          diagnostics: diagnostics as Prisma.InputJsonValue,
+        });
+        retainWorktree = reachedTerminalState && state.worktreePersisted && Boolean(state.worktreePath);
+        if (reachedTerminalState) {
+          await events.record({
+            ...terminalEvent(job, "JOB_FAILED", message),
+            level: "ERROR",
+          });
+          await reportFailure(job, error, state);
+        }
       }
     } finally {
       heartbeatStopped = true;
       if (heartbeatTimer) clearTimeout(heartbeatTimer);
-      if (state.worktreeCreated) {
+      const preserveWorktree = state.preserveWorktree || retainWorktree;
+      if (state.worktreeCreated && !preserveWorktree) {
         try {
-          await removeWorktree({
-            worktreePath: state.worktreePath!,
-            repositoryPath: state.repositoryPath,
-            gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
-          });
+          const cleanup = await jobRepository.claimWorktreeCleanup(job.id, workerId, claimToken, state.worktreePath);
+          if (cleanup) {
+            await removeWorktree({
+              worktreePath: cleanup.path,
+              repositoryPath: state.repositoryPath,
+              gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
+            });
+            worktreeCleanupComplete = await jobRepository.clearWorktree(job.id, claimToken, cleanup.cleanupToken);
+          }
         } catch (error) {
           await events.record({
             type: "GITHUB_RECONCILIATION_REQUIRED",
@@ -157,13 +201,15 @@ export function createJobRunner({
           });
         }
       }
-      if (state.repositoryPath) {
+      if (state.repositoryPath && !preserveWorktree && worktreeCleanupComplete) {
         try {
           await gc({ repositoryPath: state.repositoryPath, gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl) });
         } catch {
           // gc is best-effort; leave the local clone untouched on failure
         }
       }
+      if (!state.worktreeCreated || preserveWorktree) worktreeCleanupComplete = true;
+      if (worktreeCleanupComplete) await jobRepository.releaseWorker(job.id, workerId, claimToken);
     }
     return reachedTerminalState;
   }
@@ -207,6 +253,7 @@ function createExecuteRoleWithRetry(events: EventService, config: Config, provid
     currentJob: RunningJob,
   ) {
     let guidance: string | undefined;
+    const resumeSessionId = currentJob.sessionId ?? undefined;
     for (let attempt = 0; ; attempt++) {
       const result = await executeRole(
         { config, provider, events },
@@ -216,9 +263,13 @@ function createExecuteRoleWithRetry(events: EventService, config: Config, provid
         workingDirectory,
         abortSignal,
         currentJob,
+        resumeSessionId,
       );
       onExecution(result);
-      if (result.exitCode !== 0) return result;
+      if (result.exitCode !== 0) {
+        await removeResponseFile(result.responseFilePath);
+        return result;
+      }
       let response = "";
       try {
         response = await readResponseFile(result.responseFilePath);

@@ -5,6 +5,7 @@ import {
   decompositionContext,
   parseJobOutcome,
   parseTldr,
+  prepareJobWorktree,
 } from "./helpers.ts";
 import type { JobFlow } from "./types.ts";
 
@@ -16,19 +17,25 @@ export const runDecomposition: JobFlow = async (context) => {
 
   if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
   const localPath = job.repository.localPath;
-  const worktreePath = safeWorktreePath(config.DATA_DIR, job.id);
   const gitEnvironment = githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl);
-  await context.createWorktree({
-    repositoryPath: localPath,
-    worktreePath,
-    branchName: job.branchName,
-    baselineCommit: job.baselineCommit,
-    gitEnvironment,
+  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id, job.attempts), async () => {
+    await context.createWorktree({
+      repositoryPath: localPath,
+      worktreePath: safeWorktreePath(config.DATA_DIR, job.id, job.attempts),
+      branchName: job.branchName,
+      baselineCommit: job.baselineCommit,
+      gitEnvironment,
+    });
   });
+  const worktreePath = worktree.path;
   context.state.worktreeCreated = true;
   context.state.worktreePath = worktreePath;
   context.state.repositoryPath = localPath;
-  if (!await jobRepository.setWorktree(job.id, worktreePath)) return;
+  context.state.worktreePersisted = !worktree.created;
+  if (worktree.created) {
+    if (!await jobRepository.setWorktree(job.id, job.claimToken, worktreePath)) return;
+    context.state.worktreePersisted = true;
+  }
 
   await events.record({
     type: "JOB_STARTED",
@@ -60,7 +67,7 @@ export const runDecomposition: JobFlow = async (context) => {
   const tldr = parseTldr(decomposition.response);
 
   if (outcome === "decomposed") {
-    const finished = await jobRepository.finishRunning(job.id, "DECOMPOSED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "DECOMPOSED", {
       result: decomposition.response,
       exitCode: decomposition.exitCode,
     });
@@ -77,7 +84,7 @@ export const runDecomposition: JobFlow = async (context) => {
     return;
   }
 
-  const finished = await jobRepository.finishRunning(job.id, "BLOCKED", {
+  const finished = await jobRepository.finishRunning(job.id, job.claimToken, "BLOCKED", {
     result: decomposition.response,
     exitCode: decomposition.exitCode,
   });

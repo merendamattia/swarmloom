@@ -1,6 +1,7 @@
 import { CircleAlert, CircleCheck } from "lucide-react";
 import type { Dashboard, Health, Status } from "@/hooks/api";
 import { statusLabel } from "@/lib/format";
+import { ProviderUsageCard } from "@/components/overview/provider-usage-card";
 
 const serviceStateLabel: Record<string, string> = {
   healthy: "Healthy",
@@ -55,8 +56,9 @@ export function SystemHealthCard({ dashboard, health, status, needsAttention }: 
         <div className="health-fact"><dt>Version</dt><dd>{status.version}</dd></div>
         <div className="health-fact"><dt>Runtime</dt><dd>{providerVersion}</dd></div>
         <div className="health-fact"><dt>Schedule</dt><dd><span className="mono">{status.schedule.cron}</span> · {status.schedule.timezone}</dd></div>
-        <div className="health-fact"><dt>Workload</dt><dd>{jobCount} total · {dashboard.jobs.QUEUED ?? 0} queued · {dashboard.jobs.RUNNING ?? 0} running</dd></div>
+        <div className="health-fact"><dt>Workload</dt><dd>{jobCount} total · {dashboard.jobs.QUEUED ?? 0} queued · {dashboard.jobs.RUNNING ?? 0} running · {dashboard.jobs.WAITING_FOR_QUOTA ?? 0} waiting</dd></div>
       </dl>
+      <ProviderUsageCard provider={status.provider} usage={status.providerUsage} />
     </section>
   );
 }

@@ -4,7 +4,7 @@ import { Button, ButtonLink } from "@/components/ui/button";
 import { JobKindPill, StatusPill } from "@/components/ui/status-pill";
 import type { Job } from "@/hooks/api";
 
-const cancellable = new Set(["QUEUED", "RUNNING"]);
+const cancellable = new Set(["QUEUED", "RUNNING", "WAITING_FOR_QUOTA"]);
 const retryable = new Set(["FAILED", "BLOCKED", "CANCELLED", "STALE"]);
 
 export function JobHeader({ job, subject, cancelling, retrying, onCancel, onRetry }: {

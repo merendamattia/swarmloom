@@ -1,7 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { Queue, Worker } from "bullmq";
+import IORedis from "ioredis";
 import { resolve } from "node:path";
 import { parseConfig } from "../src/core/config-schema.ts";
 import { MissingDevelopBranchError } from "../src/git/repositories.ts";
+import { createJobQueue, queueName, queuePayload } from "../src/queue/service.ts";
+import type { ProviderUsageSnapshot } from "../src/providers/types.ts";
 
 const integration = process.env.RUN_INTEGRATION === "1" ? describe : describe.skip;
 
@@ -23,8 +27,8 @@ integration("issue scanner", () => {
     GITHUB_TOKEN: "test-token",
     GITHUB_REPOSITORIES: "acme/app,acme/main-only",
     AGENT_PROVIDER: "codex",
-    CODEX_CODING_MODEL: "gpt-5.6-coding",
-    CODEX_REVIEW_MODEL: "gpt-5.6-review",
+    CODEX_CODING_MODEL: "gpt-5.6-sol",
+    CODEX_REVIEW_MODEL: "gpt-6-astra",
     CODEX_CODING_REASONING_EFFORT: "low",
     CODEX_REVIEW_REASONING_EFFORT: "high",
     APP_ENV: "test",
@@ -137,7 +141,7 @@ integration("issue scanner", () => {
       issueBody: "Use PostgreSQL",
       baselineCommit: "b".repeat(40),
       provider: "CODEX",
-      model: "gpt-5.6-coding",
+      model: "gpt-5.6-sol",
       reasoningEffort: "low",
       scanRunId: scan.id,
     });
@@ -154,6 +158,60 @@ integration("issue scanner", () => {
     expect(await prisma.jobEvent.findFirst({
       where: { repository: { fullName: "acme/main-only" }, type: "REPOSITORY_INVALID" },
     })).not.toBeNull();
+  });
+
+  test("replaces a retained failed BullMQ delivery for a queued database job", async () => {
+    const job = await prisma.job.findFirstOrThrow({ where: { environment, issueNumber: 42 } });
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { status: "QUEUED", completedAt: null, workerId: null, activeIssueKey: `${job.repositoryId}:${job.issueNumber}` },
+    });
+    const redisUrl = process.env.REDIS_URL ?? "redis://unused";
+    const jobQueue = createJobQueue({ APP_ENV: environment, REDIS_URL: redisUrl });
+    const inspectorConnection = new IORedis(redisUrl, { maxRetriesPerRequest: null });
+    const inspector = new Queue(queueName(environment), { connection: inspectorConnection, prefix: "swarmloom" });
+    const failedWorkerConnection = new IORedis(redisUrl, { maxRetriesPerRequest: null });
+    const failedWorker = new Worker(
+      queueName(environment),
+      async () => { throw new Error("delivery failed before claim"); },
+      { connection: failedWorkerConnection, prefix: "swarmloom", concurrency: 1 },
+    );
+    const failedDeliveryId = `${job.id}-retained-failed`;
+    try {
+      await inspector.add("execute", queuePayload(job.id, environment), {
+        jobId: failedDeliveryId,
+        attempts: 1,
+        removeOnFail: false,
+      });
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if (await inspector.getJob(failedDeliveryId).then((delivery) => delivery?.getState()).then((state) => state === "failed")) break;
+        await Bun.sleep(20);
+      }
+      expect(await inspector.getJob(failedDeliveryId).then((delivery) => delivery?.getState())).toBe("failed");
+      await failedWorker.close();
+
+      const scanner = createScanService({
+        config: { ...config, APP_ENV: environment as "test" },
+        github,
+        queue: jobQueue,
+        syncRepository: sync,
+      });
+      await scanner.run("MANUAL");
+
+      const recovered = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+      expect(recovered.status).toBe("QUEUED");
+      expect(await inspector.getJob(failedDeliveryId)).toBeUndefined();
+      const replacements = (await inspector.getJobs(["waiting"])).filter((delivery) => delivery.data.jobId === job.id);
+      expect(replacements).toHaveLength(1);
+      expect(replacements[0]?.id).not.toBe(failedDeliveryId);
+      await replacements[0]?.remove();
+    } finally {
+      await failedWorker.close().catch(() => {});
+      await jobQueue.close();
+      await inspector.close();
+      inspectorConnection.disconnect();
+      failedWorkerConnection.disconnect();
+    }
   });
 
   test("a repeated scan discovers while prior work is active without duplicating it", async () => {
@@ -184,6 +242,48 @@ integration("issue scanner", () => {
     });
   });
 
+  test("requeues the same quota-waiting job once the account snapshot is available", async () => {
+    const waiting = await prisma.job.findFirstOrThrow({ where: { environment } });
+    await prisma.job.update({
+      where: { id: waiting.id },
+      data: {
+        status: "WAITING_FOR_QUOTA",
+        completedAt: null,
+        quotaWaitStartedAt: new Date(Date.now() - 5_000),
+        quotaResetAt: new Date(Date.now() + 60_000),
+        quotaWindow: "codex:primary",
+        quotaUsedPercent: 100,
+        quotaMessage: "Codex quota exhausted",
+        activeIssueKey: `${waiting.repositoryId}:${waiting.issueNumber}`,
+      },
+    });
+    const available: ProviderUsageSnapshot = {
+      status: "available",
+      availability: "available",
+      spendControlReached: null,
+      rateLimitReachedType: null,
+      observedAt: new Date().toISOString(),
+      windows: [],
+    };
+    let reads = 0;
+    enqueuedJobs.length = 0;
+    const scanner = createScanService({
+      config: { ...config, APP_ENV: environment as "test" },
+      github,
+      queue: { enqueue: async (jobId) => { enqueuedJobs.push(jobId); } },
+      providerUsage: { readAccountUsage: async () => { reads += 1; return available; } },
+      syncRepository: sync,
+    });
+
+    const scan = await scanner.run("MANUAL");
+    const requeued = await prisma.job.findUniqueOrThrow({ where: { id: waiting.id } });
+    expect(scan.status).toBe("COMPLETED");
+    expect(reads).toBe(1);
+    expect(requeued).toMatchObject({ id: waiting.id, status: "QUEUED", activeIssueKey: `${waiting.repositoryId}:${waiting.issueNumber}`, completedAt: null });
+    expect(enqueuedJobs).toEqual([waiting.id]);
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: waiting.id, type: "JOB_QUOTA_RESUME_QUEUED" } })).not.toBeNull();
+  });
+
   test("a failed label acquisition releases the issue key and fails the queued row", async () => {
     issueNumber = 43;
     labelFailure = true;
@@ -210,8 +310,8 @@ integration("pull request scanner", () => {
     GITHUB_TOKEN: "test-token",
     GITHUB_REPOSITORIES: "acme/app",
     AGENT_PROVIDER: "codex",
-    CODEX_CODING_MODEL: "gpt-5.6-coding",
-    CODEX_REVIEW_MODEL: "gpt-5.6-review",
+    CODEX_CODING_MODEL: "gpt-5.6-sol",
+    CODEX_REVIEW_MODEL: "gpt-6-astra",
     CODEX_CODING_REASONING_EFFORT: "low",
     CODEX_REVIEW_REASONING_EFFORT: "high",
     APP_ENV: "test",
@@ -338,7 +438,7 @@ integration("pull request scanner", () => {
       headSha: firstSha,
       trigger: "PR_REVIEW_REQUESTED",
       provider: "CODEX",
-      model: "gpt-5.6-review",
+      model: "gpt-6-astra",
       reasoningEffort: "high",
     });
     expect(enqueuedJobs).toEqual([job.id]);
@@ -371,13 +471,13 @@ integration("pull request scanner", () => {
       select: { jobType: true, provider: true, model: true, reasoningEffort: true },
     });
     expect(beforeSettingsChange).toEqual(expect.arrayContaining([
-      expect.objectContaining({ jobType: "FIX", provider: "CODEX", model: "gpt-5.6-coding", reasoningEffort: "low" }),
-      expect.objectContaining({ jobType: "REVIEW", provider: "CODEX", model: "gpt-5.6-review", reasoningEffort: "high" }),
+      expect.objectContaining({ jobType: "FIX", provider: "CODEX", model: "gpt-5.6-sol", reasoningEffort: "low" }),
+      expect.objectContaining({ jobType: "REVIEW", provider: "CODEX", model: "gpt-6-astra", reasoningEffort: "high" }),
     ]));
 
-    config.CODEX_CODING_MODEL = "gpt-5.6-coding-changed";
-    config.CODEX_REVIEW_MODEL = "gpt-5.6-review-changed";
-    config.CODEX_CODING_REASONING_EFFORT = "minimal";
+    config.CODEX_CODING_MODEL = "gpt-5.6-terra";
+    config.CODEX_REVIEW_MODEL = "gpt-5.6-luna";
+    config.CODEX_CODING_REASONING_EFFORT = "none";
     config.CODEX_REVIEW_REASONING_EFFORT = "max";
     const afterSettingsChange = await prisma.job.findMany({
       where: { environment },
@@ -386,8 +486,8 @@ integration("pull request scanner", () => {
     });
     expect(afterSettingsChange).toEqual(beforeSettingsChange);
 
-    config.CODEX_CODING_MODEL = "gpt-5.6-coding";
-    config.CODEX_REVIEW_MODEL = "gpt-5.6-review";
+    config.CODEX_CODING_MODEL = "gpt-5.6-sol";
+    config.CODEX_REVIEW_MODEL = "gpt-6-astra";
     config.CODEX_CODING_REASONING_EFFORT = "low";
     config.CODEX_REVIEW_REASONING_EFFORT = "high";
   });

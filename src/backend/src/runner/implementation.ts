@@ -4,11 +4,11 @@ import { jobRepository } from "../repositories/jobs.ts";
 import { safeWorktreePath } from "./paths.ts";
 import {
   applyPullRequestLabels,
-  duration,
   implementationContext,
   parseJobOutcome,
   parsePullRequestUrl,
   parseTldr,
+  prepareJobWorktree,
   safeError,
 } from "./helpers.ts";
 import type { JobFlow } from "./types.ts";
@@ -21,19 +21,24 @@ export const runImplementation: JobFlow = async (context) => {
 
   if (!job.repository.localPath) throw new Error("Repository has no synchronized local path");
   const localPath = job.repository.localPath;
-  const worktreePath = safeWorktreePath(config.DATA_DIR, job.id);
-  const gitEnvironment = githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl);
-  await context.createWorktree({
-    repositoryPath: localPath,
-    worktreePath,
-    branchName: job.branchName,
-    baselineCommit: job.baselineCommit,
-    gitEnvironment,
+  const worktree = await prepareJobWorktree(job, safeWorktreePath(config.DATA_DIR, job.id, job.attempts), async () => {
+    await context.createWorktree({
+      repositoryPath: localPath,
+      worktreePath: safeWorktreePath(config.DATA_DIR, job.id, job.attempts),
+      branchName: job.branchName,
+      baselineCommit: job.baselineCommit,
+      gitEnvironment: githubGitEnvironment(config.GITHUB_TOKEN, job.repository.cloneUrl),
+    });
   });
+  const worktreePath = worktree.path;
   context.state.worktreeCreated = true;
   context.state.worktreePath = worktreePath;
   context.state.repositoryPath = localPath;
-  if (!await jobRepository.setWorktree(job.id, worktreePath)) return;
+  context.state.worktreePersisted = !worktree.created;
+  if (worktree.created) {
+    if (!await jobRepository.setWorktree(job.id, job.claimToken, worktreePath)) return;
+    context.state.worktreePersisted = true;
+  }
 
   await events.record({
     type: "JOB_STARTED",
@@ -53,7 +58,7 @@ export const runImplementation: JobFlow = async (context) => {
     signal,
     job,
   );
-  await jobRepository.setImplementationResult(job.id, implementation.sessionId, implementation.exitCode);
+  await jobRepository.setExecutionResult(job.id, job.claimToken, implementation.sessionId, implementation.exitCode);
   if (implementation.exitCode !== 0) {
     throw new Error(implementation.stderr || `${provider.name} exited with ${implementation.exitCode}`);
   }
@@ -89,7 +94,7 @@ export const runImplementation: JobFlow = async (context) => {
     if (!managedPullRequestId) {
       throw new Error(`Could not persist managed pull request ${fullName}#${pullRequest.number}`);
     }
-    const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: implementation.response,
       exitCode: implementation.exitCode,
       pullRequestNumber: pullRequest.number,
@@ -140,7 +145,7 @@ export const runImplementation: JobFlow = async (context) => {
     }
     await events.record({
       type: "JOB_COMPLETED",
-      message: `Completed ${fullName}#${job.issueNumber} with PR #${pullRequest.number} using ${provider.name}/${job.model} in ${duration(job.startedAt)}`,
+      message: `Completed ${fullName}#${job.issueNumber} with PR #${pullRequest.number} using ${provider.name}/${job.model}`,
       jobId: job.id,
       repositoryId: job.repositoryId,
       scanRunId: job.scanRunId ?? undefined,
@@ -158,7 +163,7 @@ export const runImplementation: JobFlow = async (context) => {
   }
 
   if (outcome === "requires_decomposition") {
-    const finished = await jobRepository.finishRunning(job.id, "COMPLETED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: implementation.response,
       exitCode: implementation.exitCode,
     });
@@ -204,7 +209,7 @@ export const runImplementation: JobFlow = async (context) => {
   }
 
   if (outcome === "blocked") {
-    const finished = await jobRepository.finishRunning(job.id, "BLOCKED", {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "BLOCKED", {
       result: implementation.response,
       exitCode: implementation.exitCode,
     });

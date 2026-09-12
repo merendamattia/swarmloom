@@ -16,6 +16,7 @@ enum RepositoryStatus {
 enum JobStatus {
   QUEUED
   RUNNING
+  WAITING_FOR_QUOTA
   COMPLETED
   FAILED
   BLOCKED
@@ -116,13 +117,21 @@ model Job {
   status                   JobStatus     @default(QUEUED)
   activeIssueKey          String?       @unique
   activePrKey             String?       @unique
-  queueJobId               String        @unique
   queuedAt                DateTime      @default(now())
   startedAt               DateTime?
+  activeStartedAt         DateTime?
   completedAt             DateTime?
   durationMs              Int?
+  activeDurationMs        Int           @default(0)
+  quotaWaitDurationMs     Int           @default(0)
+  quotaWaitStartedAt      DateTime?
+  quotaResetAt            DateTime?
+  quotaWindow             String?
+  quotaUsedPercent        Float?
+  quotaMessage            String?       @db.Text
   branchName              String
   worktreePath            String?
+  worktreeCleanupRequired Boolean       @default(false)
   baselineCommit          String
   pullRequestNumber       Int?
   pullRequestUrl          String?
@@ -133,7 +142,13 @@ model Job {
   provider                AgentProvider
   model                   String
   reasoningEffort         String?
-  implementationSessionId String?
+  sessionId               String?
+  inputTokens             BigInt?
+  cachedInputTokens       BigInt?
+  outputTokens            BigInt?
+  reasoningOutputTokens   BigInt?
+  totalTokens             BigInt?
+  tokenUsageUpdatedAt     DateTime?
   exitCode                Int?
   result                   Json?         @db.JsonB
   errorMessage             String?       @db.Text
@@ -144,6 +159,9 @@ model Job {
   supportIssueCreatingAt  DateTime?
   supportIssueReconcileRequired Boolean   @default(false)
   workerId                 String?
+  claimToken               String?
+  cleanupToken             String?
+  cleanupLeaseExpiresAt    DateTime?
   attempts                 Int           @default(0)
   heartbeatAt              DateTime?
   createdAt                DateTime      @default(now())
@@ -156,6 +174,8 @@ model Job {
   @@index([environment, status, queuedAt])
   @@index([provider, createdAt])
   @@index([repositoryId, pullRequestNumber])
+  @@index([environment, status, quotaWaitStartedAt])
+  @@index([environment, status, worktreeCleanupRequired])
   @@map("job")
 }
 
@@ -192,6 +212,7 @@ model Review {
   id               String             @id @default(cuid())
   jobId            String             @unique
   job              Job                @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  claimToken       String?
   pullRequestId    String?
   pullRequest      ManagedPullRequest? @relation(fields: [pullRequestId], references: [id], onDelete: SetNull)
   pullRequestNumber Int?
@@ -294,6 +315,48 @@ model RuntimeSetting {
   @@unique([environment, key])
   @@index([environment, updatedAt])
   @@map("runtime_setting")
+}
+
+model CodexModel {
+  id                     String                         @id @default(cuid())
+  slug                   String                         @unique
+  label                  String
+  description            String                         @db.Text
+  enabled                Boolean                        @default(true)
+  sortOrder              Int                            @default(0)
+  defaultReasoningEffort String
+  createdAt              DateTime                       @default(now())
+  updatedAt              DateTime                       @updatedAt
+  efforts                CodexModelReasoningEffort[]
+
+  @@index([enabled, sortOrder])
+  @@map("codex_model")
+}
+
+model CodexReasoningEffort {
+  id        String                         @id @default(cuid())
+  slug      String                         @unique
+  label     String
+  enabled   Boolean                        @default(true)
+  sortOrder Int                            @default(0)
+  createdAt DateTime                       @default(now())
+  updatedAt DateTime                       @updatedAt
+  models    CodexModelReasoningEffort[]
+
+  @@index([enabled, sortOrder])
+  @@map("codex_reasoning_effort")
+}
+
+model CodexModelReasoningEffort {
+  modelId           String
+  reasoningEffortId String
+  isDefault         Boolean              @default(false)
+  model             CodexModel           @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  reasoningEffort   CodexReasoningEffort @relation(fields: [reasoningEffortId], references: [id], onDelete: Cascade)
+
+  @@id([modelId, reasoningEffortId])
+  @@index([reasoningEffortId])
+  @@map("codex_model_reasoning_effort")
 }
 
 model DashboardExceptionAcknowledgement {

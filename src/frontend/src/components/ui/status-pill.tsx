@@ -18,6 +18,7 @@ type Tone = "neutral" | "active" | "success" | "warning" | "danger";
 const states: Record<string, { tone: Tone; icon: LucideIcon }> = {
   QUEUED: { tone: "neutral", icon: Clock3 },
   RUNNING: { tone: "active", icon: LoaderCircle },
+  WAITING_FOR_QUOTA: { tone: "neutral", icon: Clock3 },
   COMPLETED: { tone: "success", icon: CircleCheck },
   IMPLEMENTED: { tone: "success", icon: CircleCheck },
   PASSED: { tone: "success", icon: CircleCheck },

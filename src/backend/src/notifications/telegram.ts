@@ -41,6 +41,7 @@ const eventTitles: Record<string, [string, string]> = {
   JOB_DECOMPOSED: ["🧩", "Job decomposed"],
   JOB_CANCELLED: ["🛑", "Job cancelled"],
   JOB_RETRY_REQUESTED: ["🔁", "Job retry requested"],
+  JOB_RESUME_REQUESTED: ["🔁", "Job resume requested"],
   PR_OPENED: ["🔗", "Pull request opened"],
   PR_REVIEW_REQUESTED: ["🧪", "Review requested"],
   PR_FIX_REQUESTED: ["🛠️", "Fix requested"],
