@@ -220,8 +220,8 @@ validation.
 | `AGENT_RUNTIME_DIR` | `/app/agent-runtime` | Canonical runtime path inside the container |
 | `AGENT_RUNTIME_HOST_PATH` | `./agent-runtime`, local Compose only | Host directory mounted read-only at `AGENT_RUNTIME_DIR` during development |
 | `AGENT_PROVIDER` | required; `codex` example | Exactly `codex` or `opencode` |
-| `CODEX_CODING_MODEL` | `gpt-5.6-luna` | Enabled catalog model stored on coding jobs (`IMPLEMENTATION`, `FIX`, and `DECOMPOSITION`) |
-| `CODEX_REVIEW_MODEL` | `gpt-5.6-luna` | Enabled catalog model stored on `REVIEW` jobs |
+| `CODEX_CODING_MODEL` | `gpt-6-luna` | Enabled catalog model stored on coding jobs (`IMPLEMENTATION`, `FIX`, and `DECOMPOSITION`) |
+| `CODEX_REVIEW_MODEL` | `gpt-6-luna` | Enabled catalog model stored on `REVIEW` jobs |
 | `CODEX_CODING_REASONING_EFFORT` | `max` | Catalog-supported Codex effort stored on coding jobs |
 | `CODEX_REVIEW_REASONING_EFFORT` | `max` | Catalog-supported Codex effort stored on review jobs |
 | `OPENCODE_CODING_MODEL` | `opencode-go/deepseek-v4-flash` | OpenCode `provider/model` stored on coding jobs |
@@ -240,7 +240,7 @@ validation.
 | `BACKEND_PORT` | `18421` | Loopback API host port |
 | `REDIS_PORT` | `18422` locally | Loopback Redis host port; production uses the external `REDIS_URL` |
 | `POSTGRES_PORT` | `17432` locally | Local-only host port; production PostgreSQL is not published |
-| `CODEX_CLI_VERSION` | `0.147.0` | Docker build pin |
+| `CODEX_CLI_VERSION` | `0.156.1` | OpenAI Codex CLI version installed in the production image |
 | `OPENCODE_CLI_VERSION` | `1.18.18` | Docker build pin; must support the configured `opencode-go` provider |
 
 `PORT` is an internal backend variable set to `18421` by Compose. `GH_TOKEN` and Git committer
@@ -431,19 +431,23 @@ The default tested configuration is:
 
 ```dotenv
 AGENT_PROVIDER=codex
-CODEX_CODING_MODEL=gpt-5.6-luna
-CODEX_REVIEW_MODEL=gpt-5.6-luna
+CODEX_CODING_MODEL=gpt-6-luna
+CODEX_REVIEW_MODEL=gpt-6-luna
 CODEX_CODING_REASONING_EFFORT=max
 CODEX_REVIEW_REASONING_EFFORT=max
 CODEX_HOME=/data/codex-home
 ```
 
-The migration seeds four enabled Codex models: `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`, and
-`gpt-6-astra`. Luna, Terra, and Sol support `none`, `low`, `medium`, `high`, `xhigh`, and `max`;
-Astra supports `low`, `medium`, `high`, `xhigh`, and `max` only. Settings shows these catalog values
-in separate coding and review selectors and changes an effort to the selected model's default when
-the prior effort is incompatible. The bootstrap `CODEX_*` values are checked against the same
-catalog during startup and Settings updates.
+The migrations seed six enabled Codex models: `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`,
+`gpt-6-astra`, `gpt-6-sol`, and `gpt-6-luna`. The GPT-5.6 models, GPT-6 Sol, and GPT-6 Luna support
+`none`, `low`, `medium`, `high`, `xhigh`, and `max`; Astra supports `low`, `medium`, `high`, `xhigh`,
+and `max`. Settings shows these catalog values in separate coding and review selectors and changes
+an effort to the selected model's default when the prior effort is incompatible. The bootstrap
+`CODEX_*` values are checked against the same catalog during startup and Settings updates.
+
+On an existing deployment, persisted Settings values take precedence over Coolify's `CODEX_*`
+bootstrap variables. After deploying a new model, select it in Settings to change the existing
+coding and review defaults; update the Coolify variables for fresh installs and future bootstrap.
 
 Each invocation is a new `codex exec --json` process using `workspace-write`, automatic approval
 review, the role-specific model/reasoning, the assigned worktree, and the response file path. A

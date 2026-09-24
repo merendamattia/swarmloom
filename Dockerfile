@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 RUN find node_modules -type f -path '*/msgpackr-extract/build/Release/*.node' -delete
 
 FROM dependencies AS runtime-tools
-ARG CODEX_CLI_VERSION=0.147.0
+ARG CODEX_CLI_VERSION=0.156.1
 ARG OPENCODE_CLI_VERSION=1.18.18
 USER root
 ENV npm_config_cache=/root/.npm
