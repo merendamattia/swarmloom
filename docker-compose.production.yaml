@@ -36,8 +36,8 @@ x-app-environment: &app-environment
   AGENT_PROVIDER: ${AGENT_PROVIDER:-codex}
   OPENCODE_CODING_MODEL: ${OPENCODE_CODING_MODEL:-opencode-go/deepseek-v4-flash}
   OPENCODE_REVIEW_MODEL: ${OPENCODE_REVIEW_MODEL:-opencode-go/deepseek-v4-flash}
-  CODEX_CODING_MODEL: ${CODEX_CODING_MODEL:-gpt-5.6-luna}
-  CODEX_REVIEW_MODEL: ${CODEX_REVIEW_MODEL:-gpt-5.6-luna}
+  CODEX_CODING_MODEL: ${CODEX_CODING_MODEL:-gpt-6-luna}
+  CODEX_REVIEW_MODEL: ${CODEX_REVIEW_MODEL:-gpt-6-luna}
   CODEX_CODING_REASONING_EFFORT: ${CODEX_CODING_REASONING_EFFORT:-max}
   CODEX_REVIEW_REASONING_EFFORT: ${CODEX_REVIEW_REASONING_EFFORT:-max}
   TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-false}
@@ -67,7 +67,7 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL is required}
-        CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.147.0}
+        CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.156.1}
         OPENCODE_CLI_VERSION: ${OPENCODE_CLI_VERSION:-1.18.18}
     image: swarmloom:production
     restart: unless-stopped
@@ -85,6 +85,7 @@ services:
 
   worker:
     image: swarmloom:production
+    pull_policy: never
     restart: unless-stopped
     environment: *app-environment
     command: ["bun", "run", "--filter", "swarmloom-backend", "worker"]
@@ -99,6 +100,7 @@ services:
 
   frontend:
     image: swarmloom:production
+    pull_policy: never
     restart: unless-stopped
     environment: {NODE_ENV: production, PORT: 18420}
     command: ["bun", "run", "--filter", "swarmloom-frontend", "start"]

@@ -98,10 +98,10 @@ Read the [deployment and operations guide](docs/DEPLOYMENT.md) before running an
 ## Codex model catalog
 
 When Codex is selected, Settings provides separate catalog-backed model selectors for coding and
-review jobs. The initial catalog contains GPT-5.6 Luna (`gpt-5.6-luna`), GPT-5.6 Terra
-(`gpt-5.6-terra`), GPT-5.6 Sol (`gpt-5.6-sol`), and GPT-6 Astra (`gpt-6-astra`). Luna, Terra, and
-Sol expose `none`, `low`, `medium`, `high`, `xhigh`, and `max`; Astra exposes `low`, `medium`,
-`high`, `xhigh`, and `max`.
+review jobs. The catalog contains GPT-5.6 Luna (`gpt-5.6-luna`), GPT-5.6 Terra (`gpt-5.6-terra`),
+GPT-5.6 Sol (`gpt-5.6-sol`), GPT-6 Astra (`gpt-6-astra`), GPT-6 Sol (`gpt-6-sol`), and GPT-6 Luna
+(`gpt-6-luna`). The GPT-5.6 models, GPT-6 Sol, and GPT-6 Luna expose `none`, `low`, `medium`,
+`high`, `xhigh`, and `max`; Astra exposes `low`, `medium`, `high`, `xhigh`, and `max`.
 
 The `CODEX_*` environment variables are bootstrap values and must match the catalog. New jobs keep
 the selected provider, model, and reasoning effort snapshot even after Settings changes. OpenCode
