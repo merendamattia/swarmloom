@@ -67,7 +67,7 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL is required}
-        CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.147.0}
+        CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.156.1}
         OPENCODE_CLI_VERSION: ${OPENCODE_CLI_VERSION:-1.18.18}
     image: swarmloom:production
     restart: unless-stopped

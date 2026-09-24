@@ -240,7 +240,7 @@ validation.
 | `BACKEND_PORT` | `18421` | Loopback API host port |
 | `REDIS_PORT` | `18422` locally | Loopback Redis host port; production uses the external `REDIS_URL` |
 | `POSTGRES_PORT` | `17432` locally | Local-only host port; production PostgreSQL is not published |
-| `CODEX_CLI_VERSION` | `0.147.0` | Docker build pin |
+| `CODEX_CLI_VERSION` | `0.156.1` | OpenAI Codex CLI version installed in the production image |
 | `OPENCODE_CLI_VERSION` | `1.18.18` | Docker build pin; must support the configured `opencode-go` provider |
 
 `PORT` is an internal backend variable set to `18421` by Compose. `GH_TOKEN` and Git committer
