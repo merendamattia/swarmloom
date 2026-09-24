@@ -1,3 +1,10 @@
+# [1.16.0](https://github.com/merendamattia/swarmloom/compare/v1.15.0...v1.16.0) (2026-09-24)
+
+
+### Features
+
+* **codex:** add GPT-6 catalog models ([a88e7a5](https://github.com/merendamattia/swarmloom/commit/a88e7a57673ef47ca7752a8670a2c94ac1e2db74))
+
 # [1.15.0](https://github.com/merendamattia/swarmloom/compare/v1.14.0...v1.15.0) (2026-09-12)
 
 
