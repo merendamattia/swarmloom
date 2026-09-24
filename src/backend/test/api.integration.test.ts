@@ -401,12 +401,24 @@ integration("operations API", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.models.map((model: { slug: string }) => model.slug)).toEqual([
-      "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra",
+      "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
     ]);
     expect(body.models.find((model: { slug: string }) => model.slug === "gpt-6-astra")).toMatchObject({
       defaultReasoningEffort: "max",
       reasoningEfforts: [
         { slug: "low" }, { slug: "medium" }, { slug: "high" }, { slug: "xhigh" }, { slug: "max", isDefault: true },
+      ],
+    });
+    expect(body.models.find((model: { slug: string }) => model.slug === "gpt-6-sol")).toMatchObject({
+      defaultReasoningEffort: "max",
+      reasoningEfforts: [
+        { slug: "none" }, { slug: "low" }, { slug: "medium" }, { slug: "high" }, { slug: "xhigh" }, { slug: "max", isDefault: true },
+      ],
+    });
+    expect(body.models.find((model: { slug: string }) => model.slug === "gpt-6-luna")).toMatchObject({
+      defaultReasoningEffort: "max",
+      reasoningEfforts: [
+        { slug: "none" }, { slug: "low" }, { slug: "medium" }, { slug: "high" }, { slug: "xhigh" }, { slug: "max", isDefault: true },
       ],
     });
     const sol = body.models.find((model: { slug: string }) => model.slug === "gpt-5.6-sol");
