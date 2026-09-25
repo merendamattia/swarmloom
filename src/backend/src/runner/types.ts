@@ -18,6 +18,7 @@ export type CreateWorktree = typeof createJobWorktree;
 export type CreateReviewWorktree = typeof createReviewWorktree;
 export type RemoveWorktree = typeof removeJobWorktree;
 export type GcRepository = typeof gcRepository;
+export type ReadWorktreeHead = (worktreePath: string) => Promise<string>;
 
 export type SessionState = {
   worktreePath?: string;
@@ -47,6 +48,7 @@ export type RunnerContext = {
   queue: Pick<JobQueue, "enqueue">;
   createWorktree: CreateWorktree;
   createReviewWorktree: CreateReviewWorktree;
+  readWorktreeHead: ReadWorktreeHead;
   job: RunningJob;
   provider: AgentProvider;
   signal: AbortSignal;

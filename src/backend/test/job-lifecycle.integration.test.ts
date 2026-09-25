@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { parseConfig } from "../src/core/config-schema.ts";
 import type { GitHubClient } from "../src/github/client.ts";
 
@@ -255,10 +257,10 @@ integration("PostgreSQL job lifecycle", () => {
     });
     expect(await jobs.requeueForRetry(claimed!.id, environment)).toBeNull();
 
-    const retriedClaim = await jobs.claim(claimed!.id, environment, "test-worker");
-    expect(retriedClaim).not.toBeNull();
+    const retryClaim = (await jobs.claim(claimed!.id, environment, "test-worker"))!;
+    expect(retryClaim).not.toBeNull();
     await prisma.job.update({ where: { id: claimed!.id }, data: { errorMessage: "stale retry error" } });
-    expect(await jobs.complete(claimed!.id, (await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).claimToken!, { outcome: "implemented" }, 0)).toBe(true);
+    expect(await jobs.complete(claimed!.id, retryClaim.claimToken!, { outcome: "implemented" }, 0)).toBe(true);
     expect((await prisma.job.findUniqueOrThrow({ where: { id: claimed!.id } })).errorMessage).toBeNull();
   });
 
@@ -271,7 +273,7 @@ integration("PostgreSQL job lifecycle", () => {
     });
 
     expect(await jobs.recoverStaleBefore(environment, new Date(Date.now() - 60_000))).toHaveLength(1);
-    expect(await jobs.releaseWorker(queued!.id, "same-worker", first!.claimToken!)).toBe(true);
+    expect(await jobs.releaseWorker(queued!.id, "same-worker", first!.claimToken!, true)).toBe(true);
     expect(await jobs.requeueForRetry(queued!.id, environment)).not.toBeNull();
     const second = await jobs.claim(queued!.id, environment, "same-worker");
     expect(second?.claimToken).not.toBe(first?.claimToken);
@@ -315,6 +317,7 @@ integration("PostgreSQL job lifecycle", () => {
       status: "QUEUED",
       activeIssueKey: `${repositoryId}:${issuePrefix + 23}`,
     });
+    expect(await jobs.cancel(claimed!.id)).toBe(true);
   });
 
   test("does not requeue a cancelled worker until its cleanup releases the retained worktree", async () => {
@@ -332,6 +335,7 @@ integration("PostgreSQL job lifecycle", () => {
       status: "CANCELLED",
       workerId: "test-worker",
       worktreePath,
+      heartbeatAt: expect.any(Date),
       worktreeCleanupRequired: true,
     });
 
@@ -341,12 +345,182 @@ integration("PostgreSQL job lifecycle", () => {
     expect(await jobs.clearWorktree(claimed!.id, claimed!.claimToken!, cleanup!.cleanupToken)).toBe(true);
     expect(await jobs.releaseWorker(claimed!.id, "test-worker", claimed!.claimToken!)).toBe(true);
 
-    expect(await jobs.requeueForRetry(claimed!.id, environment)).toMatchObject({
+    const requeued = await jobs.requeueForRetry(claimed!.id, environment);
+    expect(requeued).toMatchObject({
       id: claimed!.id,
       status: "QUEUED",
       worktreePath: null,
       sessionId: null,
     });
+    expect(await jobs.cancel(claimed!.id)).toBe(true);
+  });
+
+  test("reconciles a cancelled running worktree after its worker is lost", async () => {
+    const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 29));
+    const claimed = await jobs.claim(queued!.id, environment, "lost-worker");
+    const worktreePath = await mkdtemp(join(import.meta.dir, "cancelled-recovery-"));
+    await prisma.job.update({ where: { id: queued!.id }, data: { worktreePath } });
+    expect(await jobs.cancel(queued!.id)).toBe(true);
+    await prisma.job.update({
+      where: { id: queued!.id },
+      data: { heartbeatAt: new Date(Date.now() - 120_000) },
+    });
+
+    try {
+      const { recoverCancelledWorktrees } = await import("../src/worktrees/recovery.ts");
+      const { createEventService } = await import("../src/events/service.ts");
+      let removeCalls = 0;
+      expect(await recoverCancelledWorktrees(
+        { ...config, APP_ENV: environment },
+        createEventService(),
+        async ({ worktreePath: path }) => {
+          removeCalls += 1;
+          await rm(path, { recursive: true, force: true });
+        },
+      )).toBe(1);
+      expect(removeCalls).toBe(1);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: queued!.id } })).toMatchObject({
+        status: "CANCELLED",
+        workerId: null,
+        claimToken: null,
+        worktreePath: null,
+      });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("reclaims a terminal cleanup lease after a worker dies between claim and clear", async () => {
+    const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 31));
+    const claimed = await jobs.claim(queued!.id, environment, "dead-worker");
+    const worktreePath = await mkdtemp(join(import.meta.dir, "cleanup-lease-"));
+    await prisma.job.update({
+      where: { id: queued!.id },
+      data: {
+        status: "COMPLETED",
+        completedAt: new Date(Date.now() - 10 * 60_000),
+        worktreePath,
+      },
+    });
+
+    try {
+      const firstClaim = await jobs.claimWorktreeCleanup(
+        queued!.id,
+        "dead-worker",
+        claimed!.claimToken!,
+        worktreePath,
+        10,
+      );
+      expect(firstClaim).toMatchObject({ path: worktreePath });
+
+      await prisma.job.update({
+        where: { id: queued!.id },
+        data: { cleanupLeaseExpiresAt: new Date(Date.now() - 1) },
+      });
+      const recoveredClaim = await jobs.reclaimTerminalWorktreeCleanup(queued!.id, worktreePath);
+
+      expect(recoveredClaim).toMatchObject({ path: worktreePath });
+      expect(recoveredClaim?.cleanupToken).not.toBe(firstClaim?.cleanupToken);
+      expect(await jobs.clearWorktree(queued!.id, null, firstClaim!.cleanupToken)).toBe(false);
+      expect(await jobs.clearWorktree(queued!.id, null, recoveredClaim!.cleanupToken)).toBe(true);
+      expect(await jobs.releaseWorker(queued!.id, null, null)).toBe(true);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: queued!.id } })).toMatchObject({
+        worktreePath: null,
+        cleanupToken: null,
+        cleanupLeaseExpiresAt: null,
+        workerId: null,
+        claimToken: null,
+      });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("finishes terminal ownership cleanup atomically after filesystem cleanup is complete", async () => {
+    const cleanupHead = "7".repeat(40);
+    const failed = await jobs.tryCreateQueued(queuedPrJob("REVIEW", cleanupHead, config.APP_ENV));
+    const worktreePath = await mkdtemp(join(import.meta.dir, "terminal-finalization-"));
+    await prisma.job.update({
+      where: { id: failed!.id },
+      data: {
+        status: "FAILED",
+        completedAt: new Date(),
+        worktreePath,
+        activePrKey: `${repositoryId}:${managedPrId}:${cleanupHead}:REVIEW`,
+      },
+    });
+
+    try {
+      const cleanup = await jobs.claimWorktreeCleanup(failed!.id, null, null, worktreePath);
+      expect(cleanup).not.toBeNull();
+
+      await rm(worktreePath, { recursive: true, force: true });
+      expect(await jobs.finalizeTerminalCleanup(failed!.id, null, cleanup!.cleanupToken)).toBe(true);
+      expect(await jobs.finalizeTerminalCleanup(failed!.id, null, cleanup!.cleanupToken)).toBe(true);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: failed!.id } })).toMatchObject({
+        status: "FAILED",
+        worktreePath: null,
+        activePrKey: null,
+        workerId: null,
+        claimToken: null,
+        cleanupToken: null,
+        cleanupLeaseExpiresAt: null,
+      });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("reaps an unclaimed terminal worktree after worker loss", async () => {
+    const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 25));
+    const claimed = await jobs.claim(queued!.id, environment, "dead-worker");
+    const worktreePath = await mkdtemp(join(import.meta.dir, "terminal-reaper-"));
+    await prisma.job.update({
+      where: { id: queued!.id },
+      data: {
+        status: "COMPLETED",
+        completedAt: new Date(Date.now() - 10 * 60_000),
+        worktreePath,
+      },
+    });
+
+    try {
+      const { recoverTerminalWorktrees } = await import("../src/worker/recovery.ts");
+      const { createEventService } = await import("../src/events/service.ts");
+      let removeCalls = 0;
+      const reaperConfig = { ...config, APP_ENV: environment };
+
+      expect(await recoverTerminalWorktrees(
+        reaperConfig,
+        createEventService(),
+        async ({ worktreePath: path }) => {
+          removeCalls += 1;
+          await rm(path, { recursive: true, force: true });
+        },
+      )).toBe(1);
+      expect(removeCalls).toBe(1);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: queued!.id } })).toMatchObject({
+        status: "COMPLETED",
+        worktreePath: null,
+        workerId: null,
+        claimToken: null,
+      });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("reconciles queued jobs that have no BullMQ delivery", async () => {
+    const queued = await jobs.tryCreateQueued(queuedJob(issuePrefix + 30));
+    const deliveries: string[][] = [];
+    const { reconcileQueuedJobs } = await import("../src/worker/service.ts");
+
+    expect(await reconcileQueuedJobs(environment, {
+      enqueueMissing: async (jobIds) => { deliveries.push(jobIds); },
+    })).toBe(1);
+    expect(deliveries).toEqual([[queued!.id]]);
+
+    expect(await jobs.cancel(queued!.id)).toBe(true);
   });
 
   test("deduplicates PR jobs by repository, PR, head SHA, and job kind", async () => {
@@ -451,7 +625,7 @@ integration("PostgreSQL job lifecycle", () => {
     });
 
     expect(await jobs.recoverStaleBefore(environment, new Date(Date.now() - 60_000))).toHaveLength(1);
-    expect(await jobs.releaseWorker(queued!.id, "stale-worker", staleClaim!.claimToken!)).toBe(true);
+    expect(await jobs.releaseWorker(queued!.id, "stale-worker", staleClaim!.claimToken!, true)).toBe(true);
     expect(await jobs.requeueForRetry(queued!.id, environment)).not.toBeNull();
     const currentClaim = await jobs.claim(queued!.id, environment, "replacement-worker");
     expect(currentClaim?.attempts).toBe((staleClaim?.attempts ?? 0) + 1);
@@ -528,6 +702,40 @@ integration("PostgreSQL job lifecycle", () => {
 
     expect(await recoverStaleJobs(config, github as unknown as GitHubClient, createEventService())).toBe(1);
     expect(labelCalls[0]).toEqual(["bug", config.ISSUE_BLOCKED_LABEL]);
+  });
+
+  test("keeps the stale claim until GitHub reconciliation finishes", async () => {
+    const { recoverStaleJobs } = await import("../src/worker/recovery.ts");
+    const { createEventService } = await import("../src/events/service.ts");
+    const stale = await jobs.tryCreateQueued(queuedJob(issuePrefix + 4, config.APP_ENV));
+    const claimed = await jobs.claim(stale!.id, config.APP_ENV, "dead-worker");
+    await prisma.job.update({
+      where: { id: stale!.id },
+      data: { heartbeatAt: new Date(Date.now() - 120_000) },
+    });
+
+    let releaseLabels!: () => void;
+    let labelsStarted!: () => void;
+    const labelsReleased = new Promise<void>((resolve) => { releaseLabels = resolve; });
+    const reconciliationStarted = new Promise<void>((resolve) => { labelsStarted = resolve; });
+    const github = {
+      getIssue: async () => ({ number: stale!.issueNumber, labels: ["bug", config.ISSUE_WORKING_LABEL] }),
+      setIssueLabels: async () => {
+        labelsStarted();
+        await labelsReleased;
+      },
+      addIssueComment: async () => {},
+    };
+
+    const recovery = recoverStaleJobs(config, github as unknown as GitHubClient, createEventService());
+    await reconciliationStarted;
+
+    expect(await jobs.requeueForRetry(stale!.id, config.APP_ENV)).toBeNull();
+    releaseLabels();
+    expect(await recovery).toBe(1);
+    expect(await jobs.releaseWorker(stale!.id, "dead-worker", claimed!.claimToken!, true)).toBe(false);
+    expect(await jobs.requeueForRetry(stale!.id, config.APP_ENV)).not.toBeNull();
+    expect(await jobs.cancel(stale!.id)).toBe(true);
   });
 
   test("reconciles a cancelled quota worktree after the API handoff is interrupted", async () => {

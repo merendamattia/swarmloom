@@ -1,4 +1,5 @@
 import { githubGitEnvironment } from "../github/git-auth.ts";
+import { isOpenPullRequest } from "../github/client.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import { managedPullRequestRepository } from "../repositories/managed-prs.ts";
 import { reviewRepository } from "../repositories/reviews.ts";
@@ -25,24 +26,39 @@ export const runReview: JobFlow = async (context) => {
   }
   const pullRequest = job.pullRequest;
 
-  const stale = async () => {
-    await reviewRepository.failStaleForJob(job.id, job.claimToken);
+  const discard = async (message: string) => {
     const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
-      result: `Stale review: the pull request head moved past ${job.headSha} before this review could apply.`,
+      result: message,
     });
     if (!finished) return;
     await events.record({
       type: "STALE_RESULT_DISCARDED",
-      message: `Discarded the review result for ${fullName}#${pullRequest.prNumber} because the pull request head moved past ${job.headSha}`,
+      message,
       jobId: job.id,
       repositoryId: job.repositoryId,
       scanRunId: job.scanRunId ?? undefined,
       metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl ?? undefined, headSha: job.headSha },
     });
   };
+  const stale = async () => {
+    await reviewRepository.failStaleForJob(job.id, job.claimToken);
+    await discard(`Stale review: the pull request head moved past ${job.headSha} before this review could apply.`);
+  };
+  const closed = async () => {
+    await reviewRepository.failForJob(
+      job.id,
+      `Review discarded because pull request #${pullRequest.prNumber} is no longer open.`,
+      job.claimToken,
+    );
+    await discard(`Skipped review: pull request #${pullRequest.prNumber} is no longer open.`);
+  };
 
   const initial = await github.getPullRequest(fullName, pullRequest.prNumber);
   context.state.activePullRequest = { number: initial.number, url: initial.url };
+  if (!isOpenPullRequest(initial)) {
+    await closed();
+    return;
+  }
   if (initial.headSha !== job.headSha) {
     await stale();
     return;
@@ -73,6 +89,17 @@ export const runReview: JobFlow = async (context) => {
     context.state.worktreePersisted = true;
   }
 
+  const beforeExecution = await github.getPullRequest(fullName, pullRequest.prNumber);
+  context.state.activePullRequest = { number: beforeExecution.number, url: beforeExecution.url };
+  if (!isOpenPullRequest(beforeExecution)) {
+    await closed();
+    return;
+  }
+  if (beforeExecution.headSha !== job.headSha) {
+    await stale();
+    return;
+  }
+
   await events.record({
     type: "JOB_STARTED",
     message: `Started REVIEW on ${fullName}#${pullRequest.prNumber} at ${job.headSha}`,
@@ -90,9 +117,9 @@ export const runReview: JobFlow = async (context) => {
 
   const reviewRow = await reviewRepository.start(
     job.id,
+    job.claimToken,
     job.provider,
     job.model,
-    job.claimToken,
     job.reasoningEffort,
     {
       pullRequestId: pullRequest.id,
@@ -114,6 +141,16 @@ export const runReview: JobFlow = async (context) => {
     if (result.exitCode !== 0) throw new Error(result.stderr || "Automated review failed");
     const verdict = parseReviewOutcome(result.response);
     const tldr = parseTldr(result.response);
+    const current = await github.getPullRequest(fullName, pullRequest.prNumber);
+    context.state.activePullRequest = { number: current.number, url: current.url };
+    if (!isOpenPullRequest(current)) {
+      await closed();
+      return;
+    }
+    if (current.headSha !== job.headSha) {
+      await stale();
+      return;
+    }
     const reviewFinished = await reviewRepository.finish(
       reviewRow.id,
       job.claimToken,
@@ -125,6 +162,7 @@ export const runReview: JobFlow = async (context) => {
       },
     );
     if (!reviewFinished) return;
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await events.record({
       type: "REVIEW_COMPLETED",
       message: `Review ${verdict} for ${fullName}#${pullRequest.prNumber} at ${job.headSha}`,
@@ -140,18 +178,24 @@ export const runReview: JobFlow = async (context) => {
         tldr,
       },
     });
-    const current = await github.getPullRequest(fullName, pullRequest.prNumber);
-    if (current.headSha !== job.headSha) {
-      await stale();
-      return;
-    }
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await context.commentOnPullRequest(job, pullRequest.prNumber, result.response);
 
     if (verdict === "pass") {
       try {
-        await applyPullRequestLabels(github, config, job, pullRequest.prNumber, [config.PR_REVIEW_PASSED_LABEL]);
+        if (!await applyPullRequestLabels(
+          github,
+          config,
+          job,
+          pullRequest.prNumber,
+          [config.PR_REVIEW_PASSED_LABEL],
+          () => jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken),
+        )) return;
+        if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
         await managedPullRequestRepository.setWorkflow(job.repositoryId, pullRequest.prNumber, "REVIEW_PASSED");
+        if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
         await managedPullRequestRepository.resetFixCycle(job.repositoryId, pullRequest.prNumber);
+        if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
         await events.record({
           type: "REVIEW_PASSED",
           message: `Review passed for ${fullName}#${pullRequest.prNumber} at ${job.headSha}`,
@@ -172,6 +216,7 @@ export const runReview: JobFlow = async (context) => {
         });
         throw error;
       }
+      if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
       const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
         result: result.response,
         exitCode: result.exitCode,
@@ -211,13 +256,22 @@ export const runReview: JobFlow = async (context) => {
     }
 
     try {
-      await applyPullRequestLabels(github, config, job, pullRequest.prNumber, [config.PR_FIX_REQUESTED_LABEL]);
+      if (!await applyPullRequestLabels(
+        github,
+        config,
+        job,
+        pullRequest.prNumber,
+        [config.PR_FIX_REQUESTED_LABEL],
+        () => jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken),
+      )) return;
+      if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
       await managedPullRequestRepository.setWorkflow(
         job.repositoryId,
         pullRequest.prNumber,
         "FIX_REQUESTED",
         { fixReason: "REVIEW_CHANGES_REQUESTED", fixDetails: result.response },
       );
+      if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
       await events.record({
         type: "PR_FIX_REQUESTED",
         message: `Review requested changes on ${fullName}#${pullRequest.prNumber}`,
@@ -244,6 +298,7 @@ export const runReview: JobFlow = async (context) => {
       });
       throw error;
     }
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: result.response,
       exitCode: result.exitCode,

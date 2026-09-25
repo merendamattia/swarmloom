@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { parseConfig } from "../src/core/config-schema.ts";
 import { readApplicationVersion } from "../src/core/version.ts";
 
@@ -25,6 +27,8 @@ integration("operations API", () => {
   let findIssueCalls = 0;
   const removedWorktrees: string[] = [];
   let pullRequestHead = "a".repeat(40);
+  let pullRequestState = "open";
+  let pullRequestMerged = false;
   const pullRequestLabels = ["agent:review-requested"];
   const config = parseConfig({
     APP_ENV: "test",
@@ -119,8 +123,8 @@ integration("operations API", () => {
           base: "develop",
           head: "agent/issue-456",
           headSha: pullRequestHead,
-          state: "open",
-          merged: false,
+          state: pullRequestState,
+          merged: pullRequestMerged,
           body: "Closes #456",
           additions: 1,
           deletions: 1,
@@ -136,7 +140,10 @@ integration("operations API", () => {
         remove: async () => true,
         enqueue: async (id) => { enqueuedJobs.push(id); },
       },
-      removeWorktree: async ({ worktreePath }) => { removedWorktrees.push(worktreePath); },
+      removeWorktree: async ({ worktreePath }) => {
+        removedWorktrees.push(worktreePath);
+        await rm(worktreePath, { recursive: true, force: true });
+      },
       settings: createSettingsService(config),
       scheduler: { restart: () => { restartCalls += 1; } },
     });
@@ -506,22 +513,26 @@ integration("operations API", () => {
   });
 
   test("retry after a terminal failure requeues the job directly", async () => {
-    await prisma.job.update({
-      where: { id: jobId },
-      data: { status: "FAILED", activeIssueKey: null, attempts: 1, sessionId: "api-session" },
-    });
-    labels.splice(0, labels.length, "bug", config.ISSUE_BLOCKED_LABEL);
-    const retry = await app.request(`/api/jobs/${jobId}/retry`, { method: "POST" });
-    expect(retry.status).toBe(202);
-    expect(await retry.json()).toEqual({ jobId, status: "QUEUED", sessionResumed: true });
-    expect(labels).toEqual(["bug", config.ISSUE_WORKING_LABEL]);
-    expect(enqueuedJobs).toEqual([jobId, jobId]);
-    expect(await prisma.jobEvent.findFirst({ where: { jobId, type: "JOB_RESUME_REQUESTED" }, orderBy: { createdAt: "desc" } }))
-      .toMatchObject({ metadata: expect.objectContaining({ attempt: 2, sessionId: "api-session", sessionResumed: true }) });
+    const retainedWorktree = await mkdtemp(`/tmp/swarmloom-api-retry-${unique}-`);
+    try {
+      await prisma.job.update({
+        where: { id: jobId },
+        data: { status: "FAILED", activeIssueKey: null, attempts: 1, sessionId: "api-session", worktreePath: retainedWorktree },
+      });
+      labels.splice(0, labels.length, "bug", config.ISSUE_BLOCKED_LABEL);
+      const retry = await app.request(`/api/jobs/${jobId}/retry`, { method: "POST" });
+      expect(retry.status).toBe(202);
+      expect(await retry.json()).toEqual({ jobId, status: "QUEUED", sessionResumed: true });
+      expect(labels).toEqual(["bug", config.ISSUE_WORKING_LABEL]);
+      expect(enqueuedJobs).toEqual([jobId, jobId]);
+      expect(await prisma.jobEvent.findFirst({ where: { jobId, type: "JOB_RESUME_REQUESTED" }, orderBy: { createdAt: "desc" } }))
+        .toMatchObject({ metadata: expect.objectContaining({ attempt: 2, sessionId: "api-session", sessionResumed: true }) });
+    } finally {
+      await rm(retainedWorktree, { recursive: true, force: true });
+    }
   });
 
   test("rejects a stale pull request retry and restores its current review trigger", async () => {
-    const staleWorktreePath = `/worker_data/worktrees/${crypto.randomUUID()}`;
     const managed = await prisma.managedPullRequest.create({
       data: {
         repositoryId,
@@ -535,6 +546,8 @@ integration("operations API", () => {
         workflow: "REVIEW_REQUESTED",
       },
     });
+    const staleWorktreePath = `/tmp/swarmloom-api-stale-${unique}`;
+    await mkdir(staleWorktreePath, { recursive: true });
     const stale = await prisma.job.create({
       data: {
         repositoryId,
@@ -554,6 +567,7 @@ integration("operations API", () => {
         headSha: "a".repeat(40),
         provider: "CODEX",
         model: "gpt-5.6-luna",
+        claimToken: "stale-claim",
         worktreePath: staleWorktreePath,
         activePrKey: `${repositoryId}:${managed.id}:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:REVIEW`,
       },
@@ -571,10 +585,274 @@ integration("operations API", () => {
     expect(await prisma.job.findUniqueOrThrow({ where: { id: stale.id } })).toMatchObject({
       status: "FAILED",
       headSha: "a".repeat(40),
-      activePrKey: null,
       worktreePath: null,
+      activePrKey: null,
     });
+    expect(existsSync(staleWorktreePath)).toBe(false);
     pullRequestHead = "a".repeat(40);
+  });
+
+  test("discards every supported non-failed terminal status when a pull request head changed", async () => {
+    const statuses = ["BLOCKED", "CANCELLED", "STALE"] as const;
+    pullRequestHead = "f".repeat(40);
+
+    for (const [index, status] of statuses.entries()) {
+      const job = await prisma.job.create({
+        data: {
+          repositoryId,
+          environment: "test",
+          jobType: "REVIEW",
+          subjectType: "PULL_REQUEST",
+          issueNumber: 470 + index,
+          issueTitle: `Changed head ${status}`,
+          issueUrl: `https://github.com/acme/api-${unique}/issues/${470 + index}`,
+          issueBody: "Retry this pull request",
+          status,
+          branchName: `agent/issue-${470 + index}`,
+          baselineCommit: "b".repeat(40),
+          pullRequestNumber: 470 + index,
+          pullRequestUrl: `https://github.com/acme/api-test/pull/${470 + index}`,
+          headSha: "a".repeat(40),
+          activePrKey: `${repositoryId}:changed-head-${index}`,
+          provider: "CODEX",
+          model: "gpt-5.6-luna",
+        },
+      });
+      pullRequestLabels.splice(0, pullRequestLabels.length, "bug");
+
+      const response = await app.request(`/api/jobs/${job.id}/retry`, { method: "POST" });
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: "Pull request head changed; retry was not queued" });
+      expect(pullRequestLabels).toEqual(["bug", config.PR_REVIEW_REQUESTED_LABEL]);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+        status,
+        activePrKey: null,
+        worktreePath: null,
+        workerId: null,
+        cleanupToken: null,
+      });
+    }
+
+    pullRequestHead = "a".repeat(40);
+  });
+
+  test("removes scanner trigger labels on a normal same-head pull request retry", async () => {
+    const retry = await prisma.job.create({
+      data: {
+        repositoryId,
+        environment: "test",
+        jobType: "REVIEW",
+        subjectType: "PULL_REQUEST",
+        issueNumber: 456,
+        issueTitle: "Pull request retry",
+        issueUrl: `https://github.com/acme/api-${unique}/issues/456`,
+        issueBody: "Review this pull request",
+        status: "FAILED",
+        branchName: "agent/issue-456",
+        baselineCommit: "b".repeat(40),
+        pullRequestNumber: 456,
+        pullRequestUrl: "https://github.com/acme/api-test/pull/456",
+        headSha: "d".repeat(40),
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+      },
+    });
+    pullRequestHead = "d".repeat(40);
+    pullRequestLabels.splice(0, pullRequestLabels.length, "bug", config.PR_REVIEW_REQUESTED_LABEL);
+
+    const response = await app.request(`/api/jobs/${retry.id}/retry`, { method: "POST" });
+
+    expect(response.status).toBe(202);
+    expect(pullRequestLabels).toEqual(["bug"]);
+    expect(enqueuedJobs).toContain(retry.id);
+    expect((await prisma.job.findUniqueOrThrow({ where: { id: retry.id } })).status).toBe("QUEUED");
+    expect((await app.request(`/api/jobs/${retry.id}/cancel`, { method: "POST" })).status).toBe(200);
+    pullRequestHead = "a".repeat(40);
+  });
+
+  test("rejects same-head retries for closed and merged pull requests before enqueueing", async () => {
+    const cases = [
+      { issueNumber: 482, state: "closed", merged: false },
+      { issueNumber: 483, state: "closed", merged: true },
+    ];
+
+    for (const current of cases) {
+      const retainedWorktree = await mkdtemp(`/tmp/swarmloom-api-closed-${unique}-${current.issueNumber}-`);
+      const job = await prisma.job.create({
+        data: {
+          repositoryId,
+          environment: "test",
+          jobType: "REVIEW",
+          subjectType: "PULL_REQUEST",
+          issueNumber: current.issueNumber,
+          issueTitle: `Closed pull request ${current.issueNumber}`,
+          issueUrl: `https://github.com/acme/api-${unique}/issues/${current.issueNumber}`,
+          issueBody: "Retry this pull request",
+          status: "FAILED",
+          branchName: `agent/issue-${current.issueNumber}`,
+          baselineCommit: "b".repeat(40),
+          pullRequestNumber: 456,
+          pullRequestUrl: "https://github.com/acme/api-test/pull/456",
+          headSha: "a".repeat(40),
+          provider: "CODEX",
+          model: "gpt-5.6-luna",
+          worktreePath: retainedWorktree,
+          activePrKey: `${repositoryId}:closed-pr-${current.issueNumber}`,
+        },
+      });
+      pullRequestHead = "a".repeat(40);
+      pullRequestState = current.state;
+      pullRequestMerged = current.merged;
+
+      try {
+        const response = await app.request(`/api/jobs/${job.id}/retry`, { method: "POST" });
+
+        expect(response.status).toBe(409);
+        expect(await response.json()).toEqual({ error: "Pull request is closed or merged; retry was not queued" });
+        expect(enqueuedJobs).not.toContain(job.id);
+        expect(existsSync(retainedWorktree)).toBe(false);
+        expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+          status: "FAILED",
+          worktreePath: null,
+          activePrKey: null,
+          cleanupToken: null,
+          cleanupLeaseExpiresAt: null,
+          workerId: null,
+          claimToken: null,
+        });
+      } finally {
+        await rm(retainedWorktree, { recursive: true, force: true });
+      }
+    }
+
+    pullRequestState = "open";
+    pullRequestMerged = false;
+  });
+
+  test("rejects a retry when its retained worktree is missing without discarding the session", async () => {
+    const missingPath = `/tmp/swarmloom-api-missing-${unique}`;
+    const job = await prisma.job.create({
+      data: {
+        repositoryId,
+        environment: "test",
+        jobType: "IMPLEMENTATION",
+        subjectType: "ISSUE",
+        issueNumber: 484,
+        issueTitle: "Missing retained worktree",
+        issueUrl: `https://github.com/acme/api-${unique}/issues/484`,
+        issueBody: "Retry this issue",
+        status: "FAILED",
+        branchName: "agent/issue-484",
+        baselineCommit: "b".repeat(40),
+        worktreePath: missingPath,
+        sessionId: "retained-session",
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+      },
+    });
+
+    const response = await app.request(`/api/jobs/${job.id}/retry`, { method: "POST" });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "Retained worktree is missing; retry cannot resume the job" });
+    expect(enqueuedJobs).not.toContain(job.id);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+      status: "FAILED",
+      worktreePath: missingPath,
+      sessionId: "retained-session",
+    });
+  });
+
+  test("rejects a migrated failed session that has no retained worktree", async () => {
+    const job = await prisma.job.create({
+      data: {
+        repositoryId,
+        environment: "test",
+        jobType: "IMPLEMENTATION",
+        subjectType: "ISSUE",
+        issueNumber: 485,
+        issueTitle: "Migrated session without worktree",
+        issueUrl: `https://github.com/acme/api-${unique}/issues/485`,
+        issueBody: "Retry this issue",
+        status: "FAILED",
+        branchName: "agent/issue-485",
+        baselineCommit: "b".repeat(40),
+        sessionId: "migrated-session",
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+      },
+    });
+
+    const response = await app.request(`/api/jobs/${job.id}/retry`, { method: "POST" });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "Retained worktree is missing; retry cannot resume the job" });
+    expect(enqueuedJobs).not.toContain(job.id);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+      status: "FAILED",
+      worktreePath: null,
+      sessionId: "migrated-session",
+    });
+  });
+
+  test("cleans ownership before rejecting a missing-worktree pull request retry", async () => {
+    const cases = [
+      { issueNumber: 486, state: "closed", merged: false, headSha: "a".repeat(40) },
+      { issueNumber: 487, state: "open", merged: false, headSha: "b".repeat(40) },
+    ];
+
+    for (const current of cases) {
+      const job = await prisma.job.create({
+        data: {
+          repositoryId,
+          environment: "test",
+          jobType: "REVIEW",
+          subjectType: "PULL_REQUEST",
+          issueNumber: current.issueNumber,
+          issueTitle: `Missing pull request workspace ${current.issueNumber}`,
+          issueUrl: `https://github.com/acme/api-${unique}/issues/${current.issueNumber}`,
+          issueBody: "Retry this pull request",
+          status: "FAILED",
+          branchName: `agent/issue-${current.issueNumber}`,
+          baselineCommit: "b".repeat(40),
+          pullRequestNumber: 456,
+          pullRequestUrl: "https://github.com/acme/api-test/pull/456",
+          headSha: "a".repeat(40),
+          sessionId: `missing-worktree-session-${current.issueNumber}`,
+          activePrKey: `${repositoryId}:missing-worktree-${current.issueNumber}`,
+          provider: "CODEX",
+          model: "gpt-5.6-luna",
+        },
+      });
+      pullRequestHead = current.headSha;
+      pullRequestState = current.state;
+      pullRequestMerged = current.merged;
+      pullRequestLabels.splice(0, pullRequestLabels.length, "bug");
+
+      const response = await app.request(`/api/jobs/${job.id}/retry`, { method: "POST" });
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: current.state === "closed"
+          ? "Pull request is closed or merged; retry was not queued"
+          : "Pull request head changed; retry was not queued",
+      });
+      expect(enqueuedJobs).not.toContain(job.id);
+      expect(pullRequestLabels).toEqual(current.state === "closed"
+        ? ["bug"]
+        : ["bug", config.PR_REVIEW_REQUESTED_LABEL]);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+        status: "FAILED",
+        worktreePath: null,
+        sessionId: `missing-worktree-session-${current.issueNumber}`,
+        activePrKey: null,
+      });
+    }
+
+    pullRequestHead = "a".repeat(40);
+    pullRequestState = "open";
+    pullRequestMerged = false;
   });
 
   test("creates one sanitized support issue for a failed job and rejects non-failed jobs", async () => {
@@ -823,6 +1101,7 @@ integration("operations API", () => {
     const obsolete = await prisma.repository.create({
       data: { fullName: `acme/obsolete-${unique}`, cloneUrl: `https://github.com/acme/obsolete-${unique}.git` },
     });
+    const retainedWorktree = await mkdtemp(`/tmp/swarmloom-repository-delete-${unique}-`);
     await prisma.jobEvent.create({
       data: { type: "SCAN_STARTED", message: "Obsolete scan", repositoryId: obsolete.id },
     });
@@ -839,6 +1118,7 @@ integration("operations API", () => {
         baselineCommit: "c".repeat(40),
         provider: "CODEX",
         model: "gpt-5.6-luna",
+        worktreePath: retainedWorktree,
       },
     });
     await prisma.jobEvent.create({
@@ -855,28 +1135,75 @@ integration("operations API", () => {
     });
     await prisma.job.update({
       where: { id: obsoleteJob.id },
-      data: { status: "FAILED", worktreePath: `/worker_data/worktrees/${obsoleteJob.id}` },
+      data: { status: "FAILED" },
     });
     const blockedRetained = await app.request(`/api/repositories/${obsolete.id}`, { method: "DELETE" });
     expect(blockedRetained.status).toBe(409);
     expect(await prisma.repository.findUnique({ where: { id: obsolete.id } })).not.toBeNull();
     await prisma.job.update({
       where: { id: obsoleteJob.id },
-      data: { status: "COMPLETED", worktreePath: null },
+      data: { status: "COMPLETED" },
     });
     const listBefore = (await (await app.request("/api/repositories")).json()) as Array<{ id: string }>;
     expect(listBefore.some((repository) => repository.id === obsolete.id)).toBe(true);
 
-    const removed = await app.request(`/api/repositories/${obsolete.id}`, { method: "DELETE" });
-    expect(removed.status).toBe(200);
-    expect(await removed.json()).toEqual({ status: "removed" });
+    try {
+      const removed = await app.request(`/api/repositories/${obsolete.id}`, { method: "DELETE" });
+      expect(removed.status).toBe(200);
+      expect(await removed.json()).toEqual({ status: "removed" });
 
-    const repositories = (await (await app.request("/api/repositories")).json()) as Array<{ id: string }>;
-    expect(repositories.some((repository) => repository.id === obsolete.id)).toBe(false);
-    expect(await prisma.repository.findUnique({ where: { id: obsolete.id } })).toBeNull();
-    expect(await prisma.job.count({ where: { repositoryId: obsolete.id } })).toBe(0);
-    expect(await prisma.jobEvent.count({ where: { repositoryId: obsolete.id } })).toBe(0);
-    expect(await prisma.review.count({ where: { job: { repositoryId: obsolete.id } } })).toBe(0);
+      const repositories = (await (await app.request("/api/repositories")).json()) as Array<{ id: string }>;
+      expect(repositories.some((repository) => repository.id === obsolete.id)).toBe(false);
+      expect(await prisma.repository.findUnique({ where: { id: obsolete.id } })).toBeNull();
+      expect(await prisma.job.count({ where: { repositoryId: obsolete.id } })).toBe(0);
+      expect(await prisma.jobEvent.count({ where: { repositoryId: obsolete.id } })).toBe(0);
+      expect(await prisma.review.count({ where: { job: { repositoryId: obsolete.id } } })).toBe(0);
+      expect(existsSync(retainedWorktree)).toBe(false);
+    } finally {
+      await rm(retainedWorktree, { recursive: true, force: true });
+    }
+  });
+
+  test("blocks repository removal while a terminal job still holds its worker claim", async () => {
+    const { jobRepository: jobs } = await import("../src/repositories/jobs.ts");
+    const claimedRepository = await prisma.repository.create({
+      data: { fullName: `acme/claimed-${unique}`, cloneUrl: `https://github.com/acme/claimed-${unique}.git` },
+    });
+    const job = await prisma.job.create({
+      data: {
+        repositoryId: claimedRepository.id,
+        environment: "test",
+        issueNumber: 56,
+        issueTitle: "Claimed terminal job",
+        issueUrl: `https://github.com/acme/claimed-${unique}/issues/56`,
+        issueBody: "Body",
+        status: "QUEUED",
+        branchName: "agent/issue-56",
+        baselineCommit: "c".repeat(40),
+        provider: "CODEX",
+        model: "gpt-5.6-luna",
+      },
+    });
+    const claim = await jobs.claim(job.id, "test", "delete-race-worker");
+    expect(claim).not.toBeNull();
+    expect(await jobs.finishRunning(job.id, claim!.claimToken!, "FAILED", { errorMessage: "provider failed" })).toBe(true);
+
+    const blocked = await app.request(`/api/repositories/${claimedRepository.id}`, { method: "DELETE" });
+
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toEqual({
+      error: "Cannot remove the repository while 1 active job is queued, waiting, or running. Cancel or finish them first.",
+    });
+    expect(await prisma.repository.findUnique({ where: { id: claimedRepository.id } })).not.toBeNull();
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+      status: "FAILED",
+      workerId: "delete-race-worker",
+      claimToken: claim!.claimToken,
+    });
+
+    expect(await jobs.releaseWorker(job.id, "delete-race-worker", claim!.claimToken!)).toBe(true);
+    const removed = await app.request(`/api/repositories/${claimedRepository.id}`, { method: "DELETE" });
+    expect(removed.status).toBe(200);
   });
 
   test("blocks removal while jobs are active and reports unknown repositories", async () => {

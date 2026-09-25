@@ -17,9 +17,11 @@ type CancelledWorktreeJob = {
 };
 
 type RemoveWorktree = typeof removeJobWorktree;
+type CleanupConfig = Pick<Config, "DATA_DIR">;
+type CancelledWorktreeConfig = CleanupConfig & Pick<Config, "STALE_JOB_THRESHOLD_MS"> & { APP_ENV: string };
 
 export async function cleanupCancelledWorktree(
-  config: Config,
+  config: CleanupConfig,
   events: Pick<EventService, "record">,
   job: CancelledWorktreeJob,
   removeWorktree: RemoveWorktree = removeJobWorktree,
@@ -52,7 +54,7 @@ export async function cleanupCancelledWorktree(
 }
 
 export async function recoverCancelledWorktrees(
-  config: Config,
+  config: CancelledWorktreeConfig,
   events: EventService,
   removeWorktree: RemoveWorktree = removeJobWorktree,
   staleBefore = new Date(Date.now() - config.STALE_JOB_THRESHOLD_MS),

@@ -22,10 +22,10 @@ export function recoveryLabel(job: RecoveryJob) {
       return metadata?.attempt === requestMetadata.attempt
         && metadata?.sessionId === requestMetadata.sessionId;
     });
-    return resumed ? "Session resumed" : "Session resume queued";
+    return resumed ? "Session resumed" : "Recovery not confirmed";
   }
   if (job.attempts <= 1) return "Initial execution";
-  return job.sessionId ? "Session resumed" : "Restarted without session";
+  return "Recovery not confirmed";
 }
 
 function metadataRecord(value: unknown) {

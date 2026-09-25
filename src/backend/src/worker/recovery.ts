@@ -4,12 +4,13 @@ import { replacePullRequestLabels, replaceWorkerLabels } from "../github/labels.
 import { redactSecrets } from "../core/secrets.ts";
 import type { Config } from "../core/config-schema.ts";
 import { removeJobWorktree, repositoryPath } from "../git/repositories.ts";
-import { jobRepository } from "../repositories/jobs.ts";
+import { jobRepository, WORKTREE_CLEANUP_LEASE_MS } from "../repositories/jobs.ts";
 import { reviewRepository } from "../repositories/reviews.ts";
 import { recoverCancelledWorktrees } from "../worktrees/recovery.ts";
 
 type RemoveWorktree = typeof removeJobWorktree;
 type TerminalRecoveryConfig = Pick<Config, "APP_ENV" | "DATA_DIR" | "STALE_JOB_THRESHOLD_MS">;
+type TerminalWorktreeRecoveryConfig = { APP_ENV: string; DATA_DIR: string };
 
 export async function recoverTerminalJobs(
   config: TerminalRecoveryConfig,
@@ -33,8 +34,7 @@ export async function recoverTerminalJobs(
             repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
             gitEnvironment: undefined,
           });
-          if (!await jobRepository.clearWorktree(job.id, null, cleanup.cleanupToken)) continue;
-          if (await jobRepository.discardFailedJob(job.id, null)) recovered += 1;
+          if (await jobRepository.finalizeTerminalCleanup(job.id, null, cleanup.cleanupToken)) recovered += 1;
         } catch (error) {
           await events.record({
             type: "WORKTREE_CLEANUP_REQUIRED",
@@ -70,8 +70,7 @@ export async function recoverTerminalJobs(
         repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
         gitEnvironment: undefined,
       });
-      if (!await jobRepository.clearWorktree(job.id, null, cleanup.cleanupToken)) continue;
-      if (await jobRepository.releaseWorker(job.id, null, null)) recovered += 1;
+      if (await jobRepository.finalizeTerminalCleanup(job.id, null, cleanup.cleanupToken)) recovered += 1;
     } catch (error) {
       await events.record({
         type: "WORKTREE_CLEANUP_REQUIRED",
@@ -174,7 +173,63 @@ export async function recoverStaleJobs(
         repositoryId: job.repositoryId,
         metadata: { issueUrl: job.issueUrl, pullRequestNumber: job.pullRequestNumber ?? undefined },
       });
+    } finally {
+      // The claim fences the reconciliation window. If another owner completed cleanup,
+      // releaseWorker still verifies that no cleanup lease remains before releasing it.
+      await jobRepository.releaseWorker(job.id, job.workerId, job.claimToken, true);
     }
   }
+  await recoverTerminalWorktrees(config, events);
   return staleJobs.length;
+}
+
+export async function recoverTerminalWorktrees(
+  config: TerminalWorktreeRecoveryConfig,
+  events: EventService,
+  removeWorktree: RemoveWorktree = removeJobWorktree,
+) {
+  const jobs = await jobRepository.findTerminalRecoveryJobs(
+    config.APP_ENV,
+    new Date(Date.now() - WORKTREE_CLEANUP_LEASE_MS),
+  );
+  const staleBefore = new Date(Date.now() - WORKTREE_CLEANUP_LEASE_MS);
+  let recovered = 0;
+
+  for (const job of jobs) {
+    if (!job.worktreePath) {
+      if (job.completedAt && job.completedAt < staleBefore) {
+        await jobRepository.releaseWorker(job.id, job.workerId, job.claimToken, job.status === "STALE");
+      }
+      continue;
+    }
+    if (job.status === "FAILED" && !job.cleanupToken) {
+      if (job.completedAt && job.completedAt < staleBefore) {
+        await jobRepository.releaseWorker(job.id, job.workerId, job.claimToken);
+      }
+      continue;
+    }
+
+    const cleanup = await jobRepository.reclaimTerminalWorktreeCleanup(job.id, job.worktreePath);
+    if (!cleanup) continue;
+    try {
+      await removeWorktree({
+        worktreePath: cleanup.path,
+        repositoryPath: job.repository.localPath ?? repositoryPath(config.DATA_DIR, job.repository.fullName),
+        gitEnvironment: undefined,
+      });
+      if (await jobRepository.finalizeTerminalCleanup(job.id, null, cleanup.cleanupToken)) recovered += 1;
+    } catch (error) {
+      await events.record({
+        type: "GITHUB_RECONCILIATION_REQUIRED",
+        level: "ERROR",
+        message: `Could not reclaim terminal ${job.jobType} worktree ${job.worktreePath}: ${redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
+        jobId: job.id,
+        repositoryId: job.repositoryId,
+        scanRunId: job.scanRunId ?? undefined,
+        metadata: { issueUrl: job.issueUrl },
+      });
+    }
+  }
+
+  return recovered;
 }

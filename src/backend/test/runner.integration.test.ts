@@ -11,6 +11,7 @@ const integration = process.env.RUN_INTEGRATION === "1" ? describe : describe.sk
 integration("job runner", () => {
   let prisma: typeof import("../src/core/db.ts").prisma;
   let jobs: typeof import("../src/repositories/jobs.ts").jobRepository;
+  let reviews: typeof import("../src/repositories/reviews.ts").reviewRepository;
   let createJobRunner: typeof import("../src/runner/service.ts").createJobRunner;
   let repositoryId = "";
   const environment = `runner-${crypto.randomUUID()}`;
@@ -30,6 +31,7 @@ integration("job runner", () => {
   beforeAll(async () => {
     ({ prisma } = await import("../src/core/db.ts"));
     ({ jobRepository: jobs } = await import("../src/repositories/jobs.ts"));
+    ({ reviewRepository: reviews } = await import("../src/repositories/reviews.ts"));
     ({ createJobRunner } = await import("../src/runner/service.ts"));
     repositoryId = (await prisma.repository.create({
       data: {
@@ -483,9 +485,9 @@ integration("job runner", () => {
         gcRepository: async () => { gcCalls += 1; },
       });
 
-      const resumedClaim = await jobs.claim(job.id, environment, "runner-worker");
-      expect(resumedClaim).not.toBeNull();
-      expect(await resumedRunner.run(job.id, "runner-worker", resumedClaim!.claimToken!)).toBe(true);
+      const resumed = (await jobs.claim(job.id, environment, "runner-worker"))!;
+      expect(resumed).not.toBeNull();
+      expect(await resumedRunner.run(job.id, "runner-worker", resumed.claimToken!)).toBe(true);
       expect(resumedCalls[0]).toMatchObject({ workingDirectory: worktreePath, resumeSessionId: "resume-session" });
       expect(await Bun.file(join(worktreePath, "partial-progress.txt")).exists()).toBe(false);
       expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({ status: "BLOCKED", sessionId: "resume-session", worktreePath: null });
@@ -519,6 +521,140 @@ integration("job runner", () => {
     expect(stored.errorMessage).toContain("without writing the response");
   });
 
+  test("does not accept a response left by a failed attempt on a later same-job retry", async () => {
+    const job = await claimed(issueBase + 24, "IMPLEMENTATION", "ISSUE");
+    const worktreePath = await mkdtemp(join(import.meta.dir, "response-retry-worktree-"));
+    await prisma.job.update({ where: { id: job.id }, data: { worktreePath } });
+    let calls = 0;
+    const staleResponse = `Outcome: implemented\nPR: https://github.com/acme/runner/pull/${job.issueNumber}\nTL;DR: stale\nStale response`;
+    const provider: AgentProvider = {
+      name: "codex",
+      execute: async (request) => {
+        calls += 1;
+        if (calls === 1) await Bun.write(request.responseFilePath!, staleResponse);
+        return {
+          provider: "codex",
+          sessionId: "response-session-1",
+          exitCode: calls === 1 ? 1 : 0,
+          finalOutput: "",
+          stderr: calls === 1 ? "provider failed" : "",
+        };
+      },
+    };
+    const runner = createJobRunner({
+      config,
+      provider,
+      github: fakeGitHub(job.issueNumber, job.branchName, "a".repeat(40)),
+      createWorktree: async () => { throw new Error("must reuse the retained worktree"); },
+    });
+
+    try {
+      expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
+      expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("FAILED");
+
+      expect(await jobs.requeueForRetry(job.id, environment)).not.toBeNull();
+      const retry = (await jobs.claim(job.id, environment, "runner-worker"))!;
+      expect(await runner.run(retry.id, "runner-worker", retry.claimToken!)).toBe(true);
+
+      expect(calls).toBe(3);
+      const failed = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+      expect(failed.status).toBe("FAILED");
+      expect(failed.errorMessage).toContain("without writing the response");
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps a retry response available while a stale provider cleans up", async () => {
+    const job = await claimed(issueBase + 25, "IMPLEMENTATION", "ISSUE");
+    const staleWorktreePath = await mkdtemp(join(import.meta.dir, "stale-response-worktree-"));
+    await prisma.job.update({ where: { id: job.id }, data: { worktreePath: staleWorktreePath } });
+
+    let releaseStaleProvider!: () => void;
+    let signalStaleProviderStarted!: () => void;
+    let signalRetryResponseWritten!: () => void;
+    let releaseRetryProvider!: () => void;
+    const staleProviderStarted = new Promise<void>((resolve) => { signalStaleProviderStarted = resolve; });
+    const staleProviderRelease = new Promise<void>((resolve) => { releaseStaleProvider = resolve; });
+    const retryResponseWritten = new Promise<void>((resolve) => { signalRetryResponseWritten = resolve; });
+    const retryProviderRelease = new Promise<void>((resolve) => { releaseRetryProvider = resolve; });
+    const staleResponse = "Outcome: implemented\nPR: https://github.com/acme/runner/pull/1\nTL;DR: stale\nStale attempt.";
+    const retryResponse = "Outcome: blocked\nTL;DR: Retry response parsed.\nThe retry response was parsed.";
+    let staleResponsePath = "";
+    let retryResponsePath = "";
+    let retryCalls = 0;
+
+    const firstRunner = createJobRunner({
+      config,
+      provider: {
+        name: "codex",
+        execute: async (request) => {
+          staleResponsePath = request.responseFilePath!;
+          await request.onEvent?.({
+            type: "SESSION_STARTED",
+            timestamp: "2026-08-20T00:00:00.000Z",
+            metadata: { sessionId: "stale-response-session" },
+          });
+          signalStaleProviderStarted();
+          await staleProviderRelease;
+          await Bun.write(request.responseFilePath!, staleResponse);
+          return { provider: "codex", sessionId: "stale-response-session", exitCode: 1, finalOutput: "", stderr: "stale provider failed" };
+        },
+      },
+      github: fakeGitHub(job.issueNumber, job.branchName, "a".repeat(40)),
+      createWorktree: async () => { throw new Error("must reuse the retained worktree"); },
+    });
+    const firstRun = firstRunner.run(job.id, "runner-worker", job.claimToken!);
+    await staleProviderStarted;
+
+    await prisma.job.update({ where: { id: job.id }, data: { heartbeatAt: new Date(Date.now() - 120_000) } });
+    expect(await jobs.recoverStaleBefore(environment, new Date(Date.now() - 60_000))).toHaveLength(1);
+    await prisma.job.update({ where: { id: job.id }, data: { worktreePath: null } });
+    expect(await jobs.releaseWorker(job.id, "runner-worker", job.claimToken!, true)).toBe(true);
+    expect(await jobs.requeueForRetry(job.id, environment)).not.toBeNull();
+    const retry = (await jobs.claim(job.id, environment, "runner-worker"))!;
+
+    const retryRunner = createJobRunner({
+      config,
+      provider: {
+        name: "codex",
+        execute: async (request) => {
+          retryCalls += 1;
+          retryResponsePath = request.responseFilePath!;
+          if (retryCalls === 1) {
+            await request.onEvent?.({
+              type: "SESSION_STARTED",
+              timestamp: "2026-08-20T00:00:01.000Z",
+              metadata: { sessionId: "retry-response-session" },
+            });
+            await Bun.write(request.responseFilePath!, retryResponse);
+            signalRetryResponseWritten();
+            await retryProviderRelease;
+          }
+          return { provider: "codex", sessionId: "retry-response-session", exitCode: 0, finalOutput: "", stderr: "" };
+        },
+      },
+      github: fakeGitHub(job.issueNumber, job.branchName, "a".repeat(40)),
+      createWorktree: async (input) => input.worktreePath,
+      removeWorktree: async () => {},
+    });
+    const retryRun = retryRunner.run(job.id, "runner-worker", retry.claimToken!);
+    await retryResponseWritten;
+
+    expect(staleResponsePath).not.toBe(retryResponsePath);
+    releaseStaleProvider();
+    expect(await firstRun).toBe(true);
+    releaseRetryProvider();
+    expect(await retryRun).toBe(true);
+    expect(retryCalls).toBe(1);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+      status: "BLOCKED",
+      result: retryResponse,
+    });
+
+    await rm(staleWorktreePath, { recursive: true, force: true });
+  });
+
   test("fix updates the existing PR branch, restores review-requested, and rejects a push that never lands", async () => {
     const prHead = `agent/issue-${issueBase + 7}-existing`;
     const managed = await prisma.managedPullRequest.create({
@@ -537,7 +673,16 @@ integration("job runner", () => {
         fixDetails: "The reviewer reproduced CI locally: bun test failed",
       },
     });
-    const state = fixGitHub(config, issueBase + 7, prHead, managed.prNumber);
+    const state = fixGitHub(
+      config,
+      issueBase + 7,
+      prHead,
+      managed.prNumber,
+      "2".repeat(40),
+      "open",
+      false,
+      ["1".repeat(40), "1".repeat(40), "2".repeat(40)],
+    );
     const reviewWorktrees: string[] = [];
 
     const fixedResponse = "Outcome: implemented\nTL;DR: Fixed the failing test and pushed the branch.\nFixed the failing test and pushed to the same branch.";
@@ -547,6 +692,7 @@ integration("job runner", () => {
       provider,
       github: state,
       createReviewWorktree: async (input) => { reviewWorktrees.push(input.branchName); return "agent/fix-local"; },
+      readWorktreeHead: async () => "2".repeat(40),
     });
     const job = await claimed(issueBase + 7, "FIX", "PULL_REQUEST", {
       pullRequestId: managed.id,
@@ -587,6 +733,107 @@ integration("job runner", () => {
     expect(await unchangedRunner.run(unchanged.id, "runner-worker", unchanged.claimToken!)).toBe(true);
     expect((await prisma.job.findUniqueOrThrow({ where: { id: unchanged.id } })).status).toBe("FAILED");
     expect((await prisma.job.findUniqueOrThrow({ where: { id: unchanged.id } })).errorMessage).toContain("push was not detected");
+  });
+
+  test("does not execute a fix for a same-head closed or merged pull request", async () => {
+    const cases = [
+      { issueNumber: issueBase + 29, prNumber: 913, merged: false },
+      { issueNumber: issueBase + 30, prNumber: 914, merged: true },
+    ];
+
+    for (const current of cases) {
+      const headSha = "9".repeat(40);
+      const managed = await prisma.managedPullRequest.create({
+        data: {
+          repositoryId,
+          prNumber: current.prNumber,
+          issueNumber: current.issueNumber,
+          issueTitle: `Issue ${current.issueNumber}`,
+          issueUrl: `https://github.com/acme/runner/issues/${current.issueNumber}`,
+          headBranch: `agent/issue-${current.issueNumber}`,
+          headSha,
+          baseBranch: "develop",
+          state: "OPEN",
+          workflow: "FIX_REQUESTED",
+        },
+      });
+      const job = await claimed(current.issueNumber, "FIX", "PULL_REQUEST", {
+        pullRequestId: managed.id,
+        pullRequestNumber: managed.prNumber,
+        pullRequestUrl: `https://github.com/acme/runner/pull/${managed.prNumber}`,
+        headSha,
+        trigger: "REVIEW_CHANGES_REQUESTED",
+      });
+      const provider = new FakeProvider([success("Outcome: implemented\nTL;DR: should not run\nShould not run.", "closed-fix")]);
+      const github = fixGitHub(config, current.issueNumber, managed.headBranch, managed.prNumber, headSha, "closed", current.merged);
+      const runner = createJobRunner({
+        config,
+        provider,
+        github,
+        createReviewWorktree: async () => { throw new Error("must not create a closed pull request worktree"); },
+      });
+
+      expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
+      expect(provider.calls).toEqual([]);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+        status: "COMPLETED",
+        result: expect.stringContaining("no longer open"),
+      });
+    }
+  });
+
+  test("discards a fix when the open pull request already advanced before execution", async () => {
+    const issueNumber = issueBase + 31;
+    const capturedHead = "a".repeat(40);
+    const currentHead = "b".repeat(40);
+    const managed = await prisma.managedPullRequest.create({
+      data: {
+        repositoryId,
+        prNumber: 915,
+        issueNumber,
+        issueTitle: `Issue ${issueNumber}`,
+        issueUrl: `https://github.com/acme/runner/issues/${issueNumber}`,
+        headBranch: `agent/issue-${issueNumber}`,
+        headSha: capturedHead,
+        baseBranch: "develop",
+        state: "OPEN",
+        workflow: "FIX_REQUESTED",
+        fixReason: "REVIEW_CHANGES_REQUESTED",
+        fixDetails: "The previous review found a failure.",
+      },
+    });
+    const provider = new FakeProvider([success("Outcome: implemented\nTL;DR: should not run\nShould not run.", "advanced-fix")]);
+    const github = fixGitHub(config, issueNumber, managed.headBranch, managed.prNumber, currentHead);
+    let worktreeCalls = 0;
+    const runner = createJobRunner({
+      config,
+      provider,
+      github,
+      createReviewWorktree: async () => {
+        worktreeCalls += 1;
+        return "agent/fix-local";
+      },
+    });
+    const job = await claimed(issueNumber, "FIX", "PULL_REQUEST", {
+      pullRequestId: managed.id,
+      pullRequestNumber: managed.prNumber,
+      pullRequestUrl: `https://github.com/acme/runner/pull/${managed.prNumber}`,
+      headSha: capturedHead,
+      trigger: "REVIEW_CHANGES_REQUESTED",
+    });
+
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
+
+    expect(provider.calls).toEqual([]);
+    expect(worktreeCalls).toBe(0);
+    expect(github.prLabels).toEqual([config.PR_FIX_REQUESTED_LABEL]);
+    expect(await prisma.managedPullRequest.findUniqueOrThrow({ where: { id: managed.id } }))
+      .toMatchObject({ headSha: capturedHead, workflow: "FIX_REQUESTED", fixReason: "REVIEW_CHANGES_REQUESTED" });
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "PR_REVIEW_REQUESTED" } })).toBeNull();
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+      status: "COMPLETED",
+      result: expect.stringContaining(`advanced from ${capturedHead} to ${currentHead}`),
+    });
   });
 
   test("a blocked FIX stops without requiring a new pull request head", async () => {
@@ -635,6 +882,115 @@ integration("job runner", () => {
     });
   });
 
+  test("discards a blocked FIX when the pull request changes during provider execution", async () => {
+    const issueNumber = issueBase + 32;
+    const capturedHead = "c".repeat(40);
+    const changedHead = "d".repeat(40);
+    const managed = await prisma.managedPullRequest.create({
+      data: {
+        repositoryId,
+        prNumber: 917,
+        issueNumber,
+        issueTitle: `Issue ${issueNumber}`,
+        issueUrl: `https://github.com/acme/runner/issues/${issueNumber}`,
+        headBranch: `agent/issue-${issueNumber}`,
+        headSha: capturedHead,
+        baseBranch: "develop",
+        state: "OPEN",
+        workflow: "FIX_REQUESTED",
+      },
+    });
+    const state = fixGitHub(
+      config,
+      issueNumber,
+      managed.headBranch,
+      managed.prNumber,
+      changedHead,
+      "open",
+      false,
+      [capturedHead, capturedHead, changedHead],
+    );
+    const job = await claimed(issueNumber, "FIX", "PULL_REQUEST", {
+      pullRequestId: managed.id,
+      pullRequestNumber: managed.prNumber,
+      pullRequestUrl: `https://github.com/acme/runner/pull/${managed.prNumber}`,
+      headSha: capturedHead,
+      trigger: "REVIEW_CHANGES_REQUESTED",
+    });
+    const response = "Outcome: blocked\nTL;DR: Blocked pending a product decision.\nThe requested change needs a product decision.";
+    const runner = createJobRunner({
+      config,
+      provider: new FakeProvider([success(response, "blocked-stale-fix")]),
+      github: state,
+      createReviewWorktree: async () => "agent/fix-local",
+    });
+
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
+
+    expect(await prisma.managedPullRequest.findUniqueOrThrow({ where: { id: managed.id } }))
+      .toMatchObject({ blocked: false, headSha: capturedHead, workflow: "FIX_REQUESTED" });
+    expect(state.prLabels).toEqual([config.PR_FIX_REQUESTED_LABEL]);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+      status: "COMPLETED",
+      result: expect.stringContaining(`advanced from ${capturedHead} to ${changedHead}`),
+    });
+  });
+
+  test("discards a FIX when the changed pull request head was not produced by its worktree", async () => {
+    const issueNumber = issueBase + 33;
+    const capturedHead = "e".repeat(40);
+    const humanHead = "f".repeat(40);
+    const managed = await prisma.managedPullRequest.create({
+      data: {
+        repositoryId,
+        prNumber: 918,
+        issueNumber,
+        issueTitle: `Issue ${issueNumber}`,
+        issueUrl: `https://github.com/acme/runner/issues/${issueNumber}`,
+        headBranch: `agent/issue-${issueNumber}`,
+        headSha: capturedHead,
+        baseBranch: "develop",
+        state: "OPEN",
+        workflow: "FIX_REQUESTED",
+      },
+    });
+    const state = fixGitHub(
+      config,
+      issueNumber,
+      managed.headBranch,
+      managed.prNumber,
+      humanHead,
+      "open",
+      false,
+      [capturedHead, capturedHead, humanHead],
+    );
+    const job = await claimed(issueNumber, "FIX", "PULL_REQUEST", {
+      pullRequestId: managed.id,
+      pullRequestNumber: managed.prNumber,
+      pullRequestUrl: `https://github.com/acme/runner/pull/${managed.prNumber}`,
+      headSha: capturedHead,
+      trigger: "REVIEW_CHANGES_REQUESTED",
+    });
+    const provider = new FakeProvider([success("Outcome: implemented\nTL;DR: should not publish\nThe provider result is stale.", "human-push-fix")]);
+    const runner = createJobRunner({
+      config,
+      provider,
+      github: state,
+      createReviewWorktree: async () => "agent/fix-local",
+      readWorktreeHead: async () => capturedHead,
+    });
+
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
+
+    expect(state.prLabels).toEqual([config.PR_FIX_REQUESTED_LABEL]);
+    expect(await prisma.managedPullRequest.findUniqueOrThrow({ where: { id: managed.id } }))
+      .toMatchObject({ blocked: false, headSha: capturedHead, workflow: "FIX_REQUESTED" });
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+      status: "COMPLETED",
+      result: expect.stringContaining(`was not produced by the provider worktree`),
+    });
+  });
+
   test("the loop guard blocks the workflow once the fix cycle limit is reached", async () => {
     const issueNumber = issueBase + 8;
     const managed = await prisma.managedPullRequest.create({
@@ -653,7 +1009,16 @@ integration("job runner", () => {
         fixCycleCount: config.MAX_AUTOMATIC_FIX_CYCLES - 1,
       },
     });
-    const state = fixGitHub(config, issueNumber, `agent/issue-${issueNumber}-existing`, managed.prNumber);
+    const state = fixGitHub(
+      config,
+      issueNumber,
+      `agent/issue-${issueNumber}-existing`,
+      managed.prNumber,
+      "4".repeat(40),
+      "open",
+      false,
+      ["3".repeat(40), "3".repeat(40), "4".repeat(40)],
+    );
     const job = await claimed(issueNumber, "FIX", "PULL_REQUEST", {
       pullRequestId: managed.id,
       pullRequestNumber: managed.prNumber,
@@ -666,6 +1031,7 @@ integration("job runner", () => {
       provider: new FakeProvider([success("Outcome: implemented\nTL;DR: Fixed the issue and pushed the branch again.\nFixed again.", "fix-loop")]),
       github: state,
       createReviewWorktree: async () => "agent/fix-local",
+      readWorktreeHead: async () => "4".repeat(40),
     });
 
     expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
@@ -858,6 +1224,52 @@ integration("job runner", () => {
     expect(state.comments.some((comment) => comment.issue === managed.prNumber)).toBe(false);
   });
 
+  test("does not execute a review for a same-head closed or merged pull request", async () => {
+    const cases = [
+      { issueNumber: issueBase + 27, prNumber: 911, merged: false },
+      { issueNumber: issueBase + 28, prNumber: 912, merged: true },
+    ];
+
+    for (const current of cases) {
+      const headSha = "8".repeat(40);
+      const managed = await prisma.managedPullRequest.create({
+        data: {
+          repositoryId,
+          prNumber: current.prNumber,
+          issueNumber: current.issueNumber,
+          issueTitle: `Issue ${current.issueNumber}`,
+          issueUrl: `https://github.com/acme/runner/issues/${current.issueNumber}`,
+          headBranch: `agent/issue-${current.issueNumber}`,
+          headSha,
+          baseBranch: "develop",
+          state: "OPEN",
+          workflow: "REVIEW_REQUESTED",
+        },
+      });
+      const job = await claimed(current.issueNumber, "REVIEW", "PULL_REQUEST", {
+        pullRequestId: managed.id,
+        pullRequestNumber: managed.prNumber,
+        pullRequestUrl: `https://github.com/acme/runner/pull/${managed.prNumber}`,
+        headSha,
+      });
+      const provider = new FakeProvider([success("Review: pass\nTL;DR: should not run\nShould not run.", "closed-review")]);
+      const github = reviewGitHub(config, current.issueNumber, managed.headBranch, managed.prNumber, headSha, undefined, "closed", current.merged);
+      const runner = createJobRunner({
+        config,
+        provider,
+        github,
+        createReviewWorktree: async () => { throw new Error("must not create a closed pull request worktree"); },
+      });
+
+      expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
+      expect(provider.calls).toEqual([]);
+      expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({
+        status: "COMPLETED",
+        result: expect.stringContaining("no longer open"),
+      });
+    }
+  });
+
   test("a stale review on a newer head discards the result before any agent session runs", async () => {
     const issueNumber = issueBase + 12;
     const managed = await prisma.managedPullRequest.create({
@@ -895,12 +1307,151 @@ integration("job runner", () => {
     expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "STALE_RESULT_DISCARDED" } })).not.toBeNull();
   });
 
+  test("does not finalize a review row or record completion after the pull request advances", async () => {
+    const issueNumber = issueBase + 34;
+    const capturedHead = "1".repeat(40);
+    const changedHead = "2".repeat(40);
+    const managed = await prisma.managedPullRequest.create({
+      data: {
+        repositoryId,
+        prNumber: 919,
+        issueNumber,
+        issueTitle: `Issue ${issueNumber}`,
+        issueUrl: `https://github.com/acme/runner/issues/${issueNumber}`,
+        headBranch: `agent/issue-${issueNumber}`,
+        headSha: capturedHead,
+        baseBranch: "develop",
+        state: "OPEN",
+        workflow: "REVIEW_REQUESTED",
+      },
+    });
+    const state = reviewGitHub(
+      config,
+      issueNumber,
+      managed.headBranch,
+      managed.prNumber,
+      capturedHead,
+      undefined,
+      "open",
+      false,
+      [capturedHead, capturedHead, changedHead],
+    );
+    const job = await claimed(issueNumber, "REVIEW", "PULL_REQUEST", {
+      pullRequestId: managed.id,
+      pullRequestNumber: managed.prNumber,
+      pullRequestUrl: `https://github.com/acme/runner/pull/${managed.prNumber}`,
+      headSha: capturedHead,
+    });
+    const response = "Review: pass\nTL;DR: The old review must not publish.\nOld review result.";
+    const runner = createJobRunner({
+      config,
+      provider: new FakeProvider([success(response, "stale-review-after-provider")]),
+      github: state,
+      createReviewWorktree: async () => "agent/review-local",
+    });
+
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
+
+    expect(await prisma.review.findUniqueOrThrow({ where: { jobId: job.id } })).toMatchObject({
+      status: "FAILED",
+      errorMessage: expect.stringContaining("head moved"),
+    });
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "REVIEW_COMPLETED" } })).toBeNull();
+    expect(state.comments).toEqual([]);
+    expect(state.prLabels).toEqual([config.PR_REVIEW_REQUESTED_LABEL]);
+  });
+
+  test("does not let an old review attempt finish or publish after stale recovery and requeue", async () => {
+    const issueNumber = issueBase + 26;
+    const managed = await prisma.managedPullRequest.create({
+      data: {
+        repositoryId,
+        prNumber: 910,
+        issueNumber,
+        issueTitle: `Issue ${issueNumber}`,
+        issueUrl: `https://github.com/acme/runner/issues/${issueNumber}`,
+        headBranch: `agent/issue-${issueNumber}`,
+        headSha: "a".repeat(40),
+        baseBranch: "develop",
+        state: "OPEN",
+        workflow: "REVIEW_REQUESTED",
+      },
+    });
+    const state = reviewGitHub(config, issueNumber, `agent/issue-${issueNumber}`, managed.prNumber, "a".repeat(40));
+    const job = await claimed(issueNumber, "REVIEW", "PULL_REQUEST", {
+      pullRequestId: managed.id,
+      pullRequestNumber: managed.prNumber,
+      pullRequestUrl: "https://github.com/acme/runner/pull/910",
+      headSha: "a".repeat(40),
+    });
+    const reviewResponse = "Review: pass\nTL;DR: The old review must not publish.\nOld review result.";
+    let releaseProvider!: () => void;
+    let signalProviderStarted!: () => void;
+    const providerStarted = new Promise<void>((resolve) => { signalProviderStarted = resolve; });
+    const providerRelease = new Promise<void>((resolve) => { releaseProvider = resolve; });
+    const firstRunner = createJobRunner({
+      config,
+      provider: {
+        name: "codex",
+        execute: async (request) => {
+          await request.onEvent?.({
+            type: "SESSION_STARTED",
+            timestamp: "2026-08-20T00:00:00.000Z",
+            metadata: { sessionId: "old-review-session" },
+          });
+          signalProviderStarted();
+          await providerRelease;
+          await Bun.write(request.responseFilePath!, reviewResponse);
+          return success(reviewResponse, "old-review-session");
+        },
+      },
+      github: state,
+      createReviewWorktree: async () => "agent/review-local",
+    });
+
+    const firstRun = firstRunner.run(job.id, "runner-worker", job.claimToken!);
+    await providerStarted;
+    const firstReview = await prisma.review.findUniqueOrThrow({ where: { jobId: job.id } });
+    await prisma.job.update({ where: { id: job.id }, data: { heartbeatAt: new Date(Date.now() - 120_000) } });
+    expect(await jobs.recoverStaleBefore(environment, new Date(Date.now() - 60_000))).toHaveLength(1);
+    await prisma.job.update({ where: { id: job.id }, data: { worktreePath: null } });
+    expect(await jobs.releaseWorker(job.id, "runner-worker", job.claimToken!, true)).toBe(true);
+    expect(await jobs.requeueForRetry(job.id, environment)).not.toBeNull();
+    expect(await reviews.finish(firstReview.id, job.claimToken!, "PASSED", { response: reviewResponse })).toBe(false);
+    const retry = (await jobs.claim(job.id, environment, "runner-worker"))!;
+    const retryReview = await reviews.start(
+      job.id,
+      retry.claimToken!,
+      job.provider,
+      job.model,
+      job.reasoningEffort,
+      { pullRequestId: managed.id, pullRequestNumber: managed.prNumber, headSha: job.headSha },
+    );
+    expect(retryReview).not.toBeNull();
+
+    releaseProvider();
+    expect(await firstRun).toBe(true);
+    const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id }, include: { review: true } });
+    expect(stored).toMatchObject({ status: "RUNNING", claimToken: retry.claimToken, workerId: "runner-worker" });
+    expect(stored.review).toMatchObject({ status: "RUNNING", claimToken: retry.claimToken });
+    expect(state.comments).toEqual([]);
+    expect(state.prLabels).toEqual([config.PR_REVIEW_REQUESTED_LABEL]);
+    expect(await prisma.managedPullRequest.findUniqueOrThrow({ where: { id: managed.id } }))
+      .toMatchObject({ workflow: "REVIEW_REQUESTED" });
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "REVIEW_COMPLETED" } })).toBeNull();
+
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { status: "FAILED", workerId: null, claimToken: null, worktreePath: null, activePrKey: null },
+    });
+  });
+
   test("finalizes a quota-waiting review row when its resumed pull request head is stale", async () => {
     const issueNumber = issueBase + 29;
     const managed = await prisma.managedPullRequest.create({
       data: {
         repositoryId,
-        prNumber: 912,
+        prNumber: 916,
         issueNumber,
         issueTitle: `Issue ${issueNumber}`,
         issueUrl: `https://github.com/acme/runner/issues/${issueNumber}`,
@@ -915,7 +1466,7 @@ integration("job runner", () => {
     const job = await claimed(issueNumber, "REVIEW", "PULL_REQUEST", {
       pullRequestId: managed.id,
       pullRequestNumber: managed.prNumber,
-      pullRequestUrl: "https://github.com/acme/runner/pull/912",
+      pullRequestUrl: "https://github.com/acme/runner/pull/916",
       headSha: "a".repeat(40),
     });
     await prisma.review.create({
@@ -949,7 +1500,7 @@ integration("job runner", () => {
   test("stale review completion cannot overwrite a retried review", async () => {
     const { reviewRepository } = await import("../src/repositories/reviews.ts");
     const first = await claimed(issueBase + 52, "REVIEW", "PULL_REQUEST");
-    const firstReview = await reviewRepository.start(first.id, first.provider, first.model, first.claimToken!, first.reasoningEffort, {
+    const firstReview = await reviewRepository.start(first.id, first.claimToken!, first.provider, first.model, first.reasoningEffort, {
       pullRequestId: null,
       pullRequestNumber: null,
       headSha: null,
@@ -962,7 +1513,7 @@ integration("job runner", () => {
     const second = await jobs.claim(first.id, environment, "runner-worker");
     expect(second).not.toBeNull();
     expect(await reviewRepository.failStaleForJob(first.id, second!.claimToken!)).toBe(true);
-    const secondReview = await reviewRepository.start(second!.id, second!.provider, second!.model, second!.claimToken!, second!.reasoningEffort, {
+    const secondReview = await reviewRepository.start(second!.id, second!.claimToken!, second!.provider, second!.model, second!.reasoningEffort, {
       pullRequestId: null,
       pullRequestNumber: null,
       headSha: null,
@@ -1045,7 +1596,7 @@ integration("job runner", () => {
         fixCycleCount: config.MAX_AUTOMATIC_FIX_CYCLES - 1,
       },
     });
-    const state = fixGitHub(config, issueNumber, `agent/issue-${issueNumber}-existing`, managed.prNumber);
+    const state = fixGitHub(config, issueNumber, `agent/issue-${issueNumber}-existing`, managed.prNumber, "9".repeat(40));
     const job = await claimed(issueNumber, "FIX", "PULL_REQUEST", {
       pullRequestId: managed.id,
       pullRequestNumber: managed.prNumber,
@@ -1125,7 +1676,7 @@ function success(finalOutput: string, sessionId: string): AgentResult {
   return { provider: "codex", sessionId, exitCode: 0, finalOutput, stderr: "" };
 }
 
-function pullRequestShape(number: number, head: string, issueNumber: number, headSha: string) {
+function pullRequestShape(number: number, head: string, issueNumber: number, headSha: string, state = "open", merged = false) {
   return {
     number,
     title: `Pull request ${number}`,
@@ -1133,8 +1684,8 @@ function pullRequestShape(number: number, head: string, issueNumber: number, hea
     base: "develop",
     head,
     headSha,
-    state: "open",
-    merged: false,
+    state,
+    merged,
     body: `Closes #${issueNumber}`,
     additions: 12,
     deletions: 3,
@@ -1179,38 +1730,57 @@ function fakeGitHub(issueNumber: number, branchName: string, headSha: string) {
   return state;
 }
 
-function fixGitHub(config: ReturnType<typeof parseConfig>, issueNumber: number, prHead: string, prNumber: number, nextSha = "2".repeat(40)) {
-  const state = fakeGitHub(issueNumber, prHead, nextSha);
-  state.prLabels = [config.PR_FIX_REQUESTED_LABEL];
+function fixGitHub(
+  config: ReturnType<typeof parseConfig>,
+  issueNumber: number,
+  prHead: string,
+  prNumber: number,
+  nextSha = "2".repeat(40),
+  state = "open",
+  merged = false,
+  headSequence: string[] = [],
+) {
+  const githubState = fakeGitHub(issueNumber, prHead, nextSha);
+  githubState.prLabels = [config.PR_FIX_REQUESTED_LABEL];
   return {
-    ...state,
+    ...githubState,
     async getPullRequest(_fullName: string, number: number) {
-      return pullRequestShape(number, prHead, issueNumber, nextSha);
+      return pullRequestShape(number, prHead, issueNumber, headSequence.shift() ?? nextSha, state, merged);
     },
     async getIssueContext() {
       return {
-        issue: await state.getIssue(),
+        issue: await githubState.getIssue(),
         issueComments: [],
-        pullRequests: [{ ...pullRequestShape(prNumber, prHead, issueNumber, nextSha), diff: "diff --git a/x.ts b/x.ts", reviews: [], comments: [] }],
+        pullRequests: [{ ...pullRequestShape(prNumber, prHead, issueNumber, nextSha, state, merged), diff: "diff --git a/x.ts b/x.ts", reviews: [], comments: [] }],
       };
     },
   };
 }
 
-function reviewGitHub(config: ReturnType<typeof parseConfig>, issueNumber: number, prHead: string, prNumber: number, headSha: string, movedSha?: string) {
-  const state = fakeGitHub(issueNumber, prHead, movedSha ?? headSha);
-  state.prLabels = [config.PR_REVIEW_REQUESTED_LABEL];
+function reviewGitHub(
+  config: ReturnType<typeof parseConfig>,
+  issueNumber: number,
+  prHead: string,
+  prNumber: number,
+  headSha: string,
+  movedSha?: string,
+  state = "open",
+  merged = false,
+  headSequence: string[] = [],
+) {
+  const githubState = fakeGitHub(issueNumber, prHead, movedSha ?? headSha);
+  githubState.prLabels = [config.PR_REVIEW_REQUESTED_LABEL];
   return {
-    ...state,
+    ...githubState,
     async getPullRequest(_fullName: string, number: number) {
-      return pullRequestShape(number, prHead, issueNumber, movedSha ?? headSha);
+      return pullRequestShape(number, prHead, issueNumber, headSequence.shift() ?? movedSha ?? headSha, state, merged);
     },
     async getIssueContext() {
       return {
-        issue: await state.getIssue(),
+        issue: await githubState.getIssue(),
         issueComments: [],
         pullRequests: [{
-          ...pullRequestShape(prNumber, prHead, issueNumber, movedSha ?? headSha),
+          ...pullRequestShape(prNumber, prHead, issueNumber, movedSha ?? headSha, state, merged),
           diff: "diff --git a/src/app.ts b/src/app.ts",
           reviews: [],
           comments: [],

@@ -12,6 +12,15 @@ type Runner = { run(jobId: string, workerId: string, claimToken: string): Promis
 type RecoverStaleJobs = () => Promise<number>;
 type ProviderQuotas = Partial<Record<AgentProvider["name"], ProviderUsageCapability>>;
 
+export async function reconcileQueuedJobs(
+  environment: string,
+  queue: Pick<JobQueue, "enqueueMissing">,
+) {
+  const queued = await jobRepository.findQueuedJobs(environment);
+  await queue.enqueueMissing(queued.map((job) => job.id));
+  return queued.length;
+}
+
 export function startWorkerLoops(
   config: Config,
   queue: JobQueue,
@@ -72,6 +81,7 @@ export function startWorkerLoops(
       worker.concurrency = config.MAX_PARALLEL_JOBS;
       await beat(config);
       await recoverStale?.();
+      await reconcileQueuedJobs(config.APP_ENV, queue);
     } catch (error) {
       logger.error("Worker refresh failed", { error: error instanceof Error ? error.message : String(error) });
     } finally {

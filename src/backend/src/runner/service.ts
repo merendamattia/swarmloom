@@ -7,6 +7,7 @@ import {
   gcRepository,
   removeJobWorktree as removeTargetWorktree,
 } from "../git/repositories.ts";
+import { runGit } from "../git/run-git.ts";
 import { githubGitEnvironment } from "../github/git-auth.ts";
 import type { AgentProvider } from "../providers/index.ts";
 import { eventRepository } from "../repositories/events.ts";
@@ -27,7 +28,7 @@ import { runImplementation } from "./implementation.ts";
 import { runReview } from "./review.ts";
 import { createSupportIssue } from "../support-issues/service.ts";
 import { AgentExecutionError, executionFailure, isQuotaFailure, minimalDiagnostics, type JobDiagnostics, type RoleExecution } from "./diagnostics.ts";
-import type { RunnerContext, RunnerGitHub, RunningJob, SessionState } from "./types.ts";
+import type { ReadWorktreeHead, RunnerContext, RunnerGitHub, RunningJob, SessionState } from "./types.ts";
 import { quotaAdmission } from "../providers/quota.ts";
 
 type RunnerDependencies = {
@@ -39,6 +40,7 @@ type RunnerDependencies = {
   queue?: Pick<JobQueue, "enqueue">;
   createWorktree?: typeof createTargetWorktree;
   createReviewWorktree?: typeof createTargetReviewWorktree;
+  readWorktreeHead?: ReadWorktreeHead;
   removeWorktree?: typeof removeTargetWorktree;
   gcRepository?: typeof gcRepository;
   heartbeatIntervalMs?: number;
@@ -53,6 +55,7 @@ export function createJobRunner({
   queue = { enqueue: async () => {} },
   createWorktree = createTargetWorktree,
   createReviewWorktree = createTargetReviewWorktree,
+  readWorktreeHead = (worktreePath) => runGit(["rev-parse", "HEAD"], worktreePath),
   removeWorktree = removeTargetWorktree,
   gcRepository: gc = gcRepository,
   heartbeatIntervalMs,
@@ -100,6 +103,7 @@ export function createJobRunner({
         queue,
         createWorktree,
         createReviewWorktree,
+        readWorktreeHead,
         job,
         provider,
         signal,
