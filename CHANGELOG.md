@@ -1,3 +1,27 @@
+# [1.17.0](https://github.com/merendamattia/swarmloom/compare/v1.16.0...v1.17.0) (2026-09-25)
+
+
+### Bug Fixes
+
+* **api:** preserve missing worktree retry guard ([3fd6f66](https://github.com/merendamattia/swarmloom/commit/3fd6f66f4238f9b07d8f7f60123b0a0c18d8cdc3))
+* **jobs:** fence durable retry attempts ([f31b602](https://github.com/merendamattia/swarmloom/commit/f31b602ea26cc2a8bb233aefcb9af588a38be84a))
+* **jobs:** reclaim fenced terminal execution ([5dce33a](https://github.com/merendamattia/swarmloom/commit/5dce33a7b2d6dec60b38d02fd67052967a18e0df))
+* **jobs:** serialize retry cleanup and PR head checks ([709dc69](https://github.com/merendamattia/swarmloom/commit/709dc693b3ce91dc2e8993dbac261b6a7b1f2be8))
+* **recovery:** clean terminal worktrees before repository removal ([af386a6](https://github.com/merendamattia/swarmloom/commit/af386a60b93aee9c8cf04edfa96fb5c6fea9e91c))
+* **recovery:** fence stale FIX heads and clean closed PR retries ([caa9b1f](https://github.com/merendamattia/swarmloom/commit/caa9b1fcf8b92224f0d2fb2269b72fcba0fd941d))
+* **recovery:** fence stale retries and terminal cleanup ([4b91a1f](https://github.com/merendamattia/swarmloom/commit/4b91a1fdd26a6b9b3935a6f0be5a40efff9c50db))
+* **recovery:** make terminal cleanup crash-safe ([c55aacd](https://github.com/merendamattia/swarmloom/commit/c55aacda2d78135537e90eafe03a93b79a4f4576))
+* **recovery:** reclaim cancelled job worktrees ([e87b85f](https://github.com/merendamattia/swarmloom/commit/e87b85f72e5306a3f27efbed7c99bc7353497545))
+* **repositories:** block deletion during terminal job finalization ([6e2a3a0](https://github.com/merendamattia/swarmloom/commit/6e2a3a09b89b4110914d6139603ad9b4e4b84bbb))
+* **runner:** fence stale recovery results ([6935269](https://github.com/merendamattia/swarmloom/commit/6935269a8db1c6fe77a7ae488cb0c25cc5572ce3))
+* **runner:** isolate response files per execution ([ed83ac6](https://github.com/merendamattia/swarmloom/commit/ed83ac6db69190f302f0708da84c548f06d04f79))
+* stop Codex on resumed-session mismatch ([41ec498](https://github.com/merendamattia/swarmloom/commit/41ec4986d06c968671747e7275b8a8319b445c73))
+
+
+### Features
+
+* **jobs:** resume failed executions from retained state ([0c35121](https://github.com/merendamattia/swarmloom/commit/0c3512119c4ef0d7098b0b7f421c5ca672689227))
+
 # [1.16.0](https://github.com/merendamattia/swarmloom/compare/v1.15.0...v1.16.0) (2026-09-24)
 
 
