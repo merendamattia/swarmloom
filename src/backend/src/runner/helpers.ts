@@ -16,9 +16,9 @@ import type { GitHubIssueContext } from "../github/client.ts";
 import type { RunningJob, RunnerContext, RunnerGitHub } from "./types.ts";
 import { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome, parseTldr } from "./response.ts";
 
-export function responseFilePathFor(dataDirectory: string, jobId: string, role: AgentRole) {
+export function responseFilePathFor(dataDirectory: string, jobId: string, role: AgentRole, executionId: string) {
   const root = resolve(dataDirectory, "outcomes");
-  const path = resolve(root, `${jobId}-${role}.txt`);
+  const path = resolve(root, `${jobId}-${role}-${executionId}.txt`);
   if (!path.startsWith(`${root}${sep}`)) throw new Error("Response file path escapes data directory");
   return path;
 }
@@ -64,7 +64,7 @@ export async function executeRole(
   job: RunningJob,
   resumeSessionId?: string,
 ) {
-  const responseFilePath = responseFilePathFor(context.config.DATA_DIR, job.id, role);
+  const responseFilePath = responseFilePathFor(context.config.DATA_DIR, job.id, role, crypto.randomUUID());
   await mkdir(dirname(responseFilePath), { recursive: true });
   const diagnosticEvents: DiagnosticEvent[] = [];
   const requestedSessionId = resumeSessionId;
@@ -104,6 +104,7 @@ export async function executeRole(
       signal: abortSignal,
       onUsage: persistUsage,
       onEvent: async (agentEvent) => {
+        if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
         if (agentEvent.type === "SESSION_STARTED" && typeof agentEvent.metadata?.sessionId === "string") {
           const observedSessionId = agentEvent.metadata.sessionId;
           if (requestedSessionId && observedSessionId !== requestedSessionId) {
@@ -367,13 +368,16 @@ export async function applyPullRequestLabels(
   job: RunningJob,
   pullRequestNumber: number,
   nextLabels: string[],
+  canWrite?: () => Promise<boolean>,
 ) {
   const labels = await github.getPullRequestLabels(job.repository.fullName, pullRequestNumber);
+  if (canWrite && !await canWrite()) return false;
   await github.setPullRequestLabels(
     job.repository.fullName,
     pullRequestNumber,
     replacePullRequestLabels(labels, config, nextLabels),
   );
+  return true;
 }
 
 export function terminalEvent(

@@ -110,12 +110,21 @@ export class CodexProvider implements AgentProvider {
     let latestUsage: AgentTokenUsage | undefined;
     const output: string[] = [];
     const environment = providerEnvironment({ ...globalThis.process.env, ...request.environment });
+    const resumeMismatch = new AbortController();
+    const signal = request.signal
+      ? AbortSignal.any([request.signal, resumeMismatch.signal])
+      : resumeMismatch.signal;
     const onJson = async (raw: unknown) => {
+      if (isResumeMismatch(sessionError)) return;
       const normalized = normalizeCodexEvent(raw);
       if (normalized.sessionId) {
         if (request.resumeSessionId && normalized.sessionId !== request.resumeSessionId) {
           sessionError = `Codex resumed session mismatch: requested ${request.resumeSessionId}, received ${normalized.sessionId}`;
-          await request.onEvent?.(event("SESSION_FAILED", { message: sessionError }));
+          try {
+            await request.onEvent?.(event("SESSION_FAILED", { message: sessionError }));
+          } finally {
+            resumeMismatch.abort(new Error(sessionError));
+          }
           return;
         }
         sessionId = normalized.sessionId;
@@ -158,7 +167,7 @@ export class CodexProvider implements AgentProvider {
       result = await runJsonlProcess(
         buildCodexCommand(request),
         buildAgentPrompt(request),
-        request.signal,
+        signal,
         onJson,
         environment,
         request.workingDirectory,

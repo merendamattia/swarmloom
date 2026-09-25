@@ -59,6 +59,13 @@ export function createJobQueue(config: { APP_ENV: string; REDIS_URL: Config["RED
     }
   }
 
+  async function enqueueMissing(jobIds: string[]) {
+    if (jobIds.length === 0) return;
+    const pending = await queue.getJobs(["waiting", "active", "delayed", "prioritized"]);
+    const pendingJobIds = new Set(pending.map((job) => job.data.jobId));
+    await Promise.all(jobIds.filter((jobId) => !pendingJobIds.has(jobId)).map((jobId) => enqueue(jobId)));
+  }
+
   async function remove(jobId: string) {
     const candidates = new Map((await deliveriesFor(jobId)).map((job) => [job.id, job]));
     let removed = false;
@@ -88,6 +95,7 @@ export function createJobQueue(config: { APP_ENV: string; REDIS_URL: Config["RED
 
   return {
     enqueue,
+    enqueueMissing,
     remove,
     createWorker,
     health: () => connection.ping(),

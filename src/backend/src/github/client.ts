@@ -100,6 +100,10 @@ export type GitHubIssue = {
   labels: string[];
 };
 
+export function isOpenPullRequest(pullRequest: { state: string; merged: boolean }) {
+  return pullRequest.state.toLowerCase() === "open" && !pullRequest.merged;
+}
+
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 type GitHubClientOptions = {

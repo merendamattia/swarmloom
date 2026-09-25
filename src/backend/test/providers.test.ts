@@ -84,17 +84,21 @@ describe("Codex provider", () => {
     ]);
   });
 
-  test("resumes the requested session in its working directory without falling back", async () => {
+  test("stops when a requested resume starts a different session", async () => {
     const original = Bun.spawn;
     const events: AgentEvent[] = [];
     const stdout = new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ type: "thread.started", thread_id: "other-thread" })}\n`));
+        controller.enqueue(new TextEncoder().encode([
+          { type: "thread.started", thread_id: "other-thread" },
+          { type: "item.completed", item: { type: "agent_message", text: "must not run" } },
+        ].map((value) => JSON.stringify(value)).join("\n") + "\n"));
         controller.close();
       },
     });
     const stderr = new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
     let spawned: { args: unknown; options: unknown } | undefined;
+    let killed = false;
     const fake = mock((args: unknown, options: unknown) => {
       spawned = { args, options };
       return {
@@ -102,7 +106,7 @@ describe("Codex provider", () => {
         stdout,
         stderr,
         exited: Promise.resolve(0),
-        kill() {},
+        kill() { killed = true; },
       };
     });
     // @ts-expect-error test-only substitution of the spawn implementation
@@ -113,6 +117,7 @@ describe("Codex provider", () => {
         resumeSessionId: "thread-1",
         onEvent: (event) => { events.push(event); },
       });
+      expect(killed).toBe(true);
       expect(spawned).toMatchObject({
         args: ["codex", "exec", "resume", "thread-1", "--json", "--ignore-user-config", "--model", "test-model", "--dangerously-bypass-approvals-and-sandbox", "--config", 'model_reasoning_effort="max"', "-"],
         options: { cwd: "/work/repository" },

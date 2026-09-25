@@ -26,3 +26,11 @@ test("reports a current resumed attempt only when its own resume event exists", 
     ],
   })).toBe("Session resumed");
 });
+
+test("does not claim a session resumed when retry evidence is missing", () => {
+  expect(recoveryLabel({
+    attempts: 2,
+    sessionId: "session-2",
+    events: [],
+  })).toBe("Recovery not confirmed");
+});

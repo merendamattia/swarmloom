@@ -1,4 +1,5 @@
 import { githubGitEnvironment } from "../github/git-auth.ts";
+import { isOpenPullRequest } from "../github/client.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import { managedPullRequestRepository } from "../repositories/managed-prs.ts";
 import { safeWorktreePath } from "./paths.ts";
@@ -20,6 +21,32 @@ export const runFix: JobFlow = async (context) => {
     throw new Error("FIX job has no managed pull request association");
   }
   const pullRequest = job.pullRequest;
+  const discard = async (message: string) => {
+    const finished = await jobRepository.finishRunning(job.id, job.claimToken!, "COMPLETED", { result: message });
+    if (!finished) return;
+    await events.record({
+      type: "STALE_RESULT_DISCARDED",
+      message,
+      jobId: job.id,
+      repositoryId: job.repositoryId,
+      scanRunId: job.scanRunId ?? undefined,
+      metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl ?? undefined, headSha: job.headSha ?? undefined },
+    });
+  };
+  const closed = () => discard(`Skipped fix: pull request #${pullRequest.prNumber} is no longer open.`);
+  const stale = (currentHead: string, phase = "before execution") => discard(
+    `Skipped fix: pull request #${pullRequest.prNumber} advanced from ${job.headSha} to ${currentHead} ${phase}.`,
+  );
+  const initial = await github.getPullRequest(fullName, pullRequest.prNumber);
+  context.state.activePullRequest = { number: initial.number, url: initial.url };
+  if (!isOpenPullRequest(initial)) {
+    await closed();
+    return;
+  }
+  if (initial.headSha !== job.headSha) {
+    await stale(initial.headSha);
+    return;
+  }
   context.state.liveContext = await github.getIssueContext(fullName, job.issueNumber, job.issueUrl, pullRequest.prNumber);
   const liveContext = context.state.liveContext;
 
@@ -41,6 +68,17 @@ export const runFix: JobFlow = async (context) => {
   if (worktree.created) {
     if (!await jobRepository.setWorktree(job.id, job.claimToken, worktreePath)) return;
     context.state.worktreePersisted = true;
+  }
+
+  const beforeExecution = await github.getPullRequest(fullName, pullRequest.prNumber);
+  context.state.activePullRequest = { number: beforeExecution.number, url: beforeExecution.url };
+  if (!isOpenPullRequest(beforeExecution)) {
+    await closed();
+    return;
+  }
+  if (beforeExecution.headSha !== job.headSha) {
+    await stale(beforeExecution.headSha);
+    return;
   }
 
   await events.record({
@@ -71,16 +109,35 @@ export const runFix: JobFlow = async (context) => {
       signal,
       job,
     );
+    if (!await jobRepository.setExecutionResult(job.id, job.claimToken!, result.sessionId, result.exitCode)) return;
     if (result.exitCode !== 0) {
       throw new Error(result.stderr || `${provider.name} exited with ${result.exitCode}`);
     }
-    await jobRepository.setExecutionResult(job.id, job.claimToken, result.sessionId, result.exitCode);
 
     const blockedOutcome = parseJobOutcome(result.response) === "blocked";
     resultTldr = parseTldr(result.response);
     if (blockedOutcome) {
+      const current = await github.getPullRequest(fullName, pullRequest.prNumber);
+      context.state.activePullRequest = { number: current.number, url: current.url };
+      if (!isOpenPullRequest(current)) {
+        await closed();
+        return;
+      }
+      if (current.headSha !== job.headSha) {
+        await stale(current.headSha, "while the provider was executing");
+        return;
+      }
+      if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
       await managedPullRequestRepository.block(job.repositoryId, pullRequest.prNumber);
-      await applyPullRequestLabels(github, config, job, pullRequest.prNumber, [config.ISSUE_HUMAN_REVIEW_LABEL]);
+      if (!await applyPullRequestLabels(
+        github,
+        config,
+        job,
+        pullRequest.prNumber,
+        [config.ISSUE_HUMAN_REVIEW_LABEL],
+        () => jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken),
+      )) return;
+      if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
       const finished = await jobRepository.finishRunning(job.id, job.claimToken, "BLOCKED", {
         result: result.response,
         exitCode: result.exitCode,
@@ -101,10 +158,30 @@ export const runFix: JobFlow = async (context) => {
 
     const current = await github.getPullRequest(fullName, pullRequest.prNumber);
     context.state.activePullRequest = { number: current.number, url: current.url };
+    if (!isOpenPullRequest(current)) {
+      await closed();
+      return;
+    }
     if (current.headSha === job.headSha) {
       throw new Error(`FIX completed but PR #${current.number} still points at ${current.headSha}; the branch push was not detected`);
     }
+    const worktreeHead = await context.readWorktreeHead(worktreePath);
+    if (worktreeHead !== current.headSha) {
+      await discard(
+        `Skipped fix: pull request #${current.number} advanced from ${job.headSha} to ${current.headSha}, `
+        + `but that head was not produced by the provider worktree (local worktree is ${worktreeHead}).`,
+      );
+      return;
+    }
+    if (!await hasCurrentHead(current.headSha)) {
+      await discard(
+        `Skipped fix: pull request #${current.number} changed again before the provider result could be applied.`,
+      );
+      return;
+    }
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await managedPullRequestRepository.updateHead(job.repositoryId, pullRequest.prNumber, current.head, current.headSha);
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     const fixCycleCount = await managedPullRequestRepository.incrementFixCycle(job.repositoryId, pullRequest.prNumber);
     const loopExceeded = fixCycleCount !== null && fixCycleCount >= config.MAX_AUTOMATIC_FIX_CYCLES;
 
@@ -113,12 +190,21 @@ export const runFix: JobFlow = async (context) => {
       return;
     }
 
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await managedPullRequestRepository.setWorkflow(job.repositoryId, pullRequest.prNumber, "REVIEW_REQUESTED", {
       fixReason: null,
       fixDetails: null,
     });
     try {
-      await applyPullRequestLabels(github, config, job, pullRequest.prNumber, [config.PR_REVIEW_REQUESTED_LABEL]);
+      if (!await applyPullRequestLabels(
+        github,
+        config,
+        job,
+        pullRequest.prNumber,
+        [config.PR_REVIEW_REQUESTED_LABEL],
+        () => jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken),
+      )) return;
+      if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
       await events.record({
         type: "PR_REVIEW_REQUESTED",
         message: `PR #${pullRequest.prNumber} returned to review-requested after a fix`,
@@ -170,11 +256,22 @@ export const runFix: JobFlow = async (context) => {
   }
 
   async function guardFailure(error: unknown) {
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
+    if (!await hasCurrentHead(job.headSha)) return;
     const fixCycleCount = await managedPullRequestRepository.incrementFixCycle(job.repositoryId, pullRequest.prNumber);
     if (fixCycleCount === null || fixCycleCount < config.MAX_AUTOMATIC_FIX_CYCLES) return;
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await managedPullRequestRepository.block(job.repositoryId, pullRequest.prNumber);
     try {
-      await applyPullRequestLabels(github, config, job, pullRequest.prNumber, [config.ISSUE_HUMAN_REVIEW_LABEL]);
+      if (!await applyPullRequestLabels(
+        github,
+        config,
+        job,
+        pullRequest.prNumber,
+        [config.ISSUE_HUMAN_REVIEW_LABEL],
+        () => jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken),
+      )) return;
+      if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     } catch (labelError) {
       await events.record({
         type: "GITHUB_RECONCILIATION_REQUIRED",
@@ -186,6 +283,7 @@ export const runFix: JobFlow = async (context) => {
         metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl },
       });
     }
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await events.record({
       type: "LOOP_GUARD_TRIPPED",
       level: "ERROR",
@@ -195,6 +293,7 @@ export const runFix: JobFlow = async (context) => {
       scanRunId: job.scanRunId ?? undefined,
       metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl, fixCycleCount, tldr: resultTldr },
     });
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     await context.finalizeIssue(
       job,
       [config.ISSUE_BLOCKED_LABEL, config.ISSUE_HUMAN_REVIEW_LABEL],
@@ -215,9 +314,22 @@ export const runFix: JobFlow = async (context) => {
     headSha: string | undefined,
     fixCycleCount: number,
   ) {
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
+    if (!await hasCurrentHead(headSha)) {
+      await discard(`Skipped fix: pull request #${pullRequest.prNumber} changed before the loop guard could apply.`);
+      return;
+    }
     await managedPullRequestRepository.block(job.repositoryId, pullRequest.prNumber);
     try {
-      await applyPullRequestLabels(github, config, job, pullRequest.prNumber, [config.ISSUE_HUMAN_REVIEW_LABEL]);
+      if (!await applyPullRequestLabels(
+        github,
+        config,
+        job,
+        pullRequest.prNumber,
+        [config.ISSUE_HUMAN_REVIEW_LABEL],
+        () => jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken),
+      )) return;
+      if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     } catch (error) {
       await events.record({
         type: "GITHUB_RECONCILIATION_REQUIRED",
@@ -229,6 +341,7 @@ export const runFix: JobFlow = async (context) => {
         metadata: { issueUrl: job.issueUrl, pullRequestUrl: job.pullRequestUrl },
       });
     }
+    if (!await jobRepository.isActiveClaim(job.id, job.workerId, job.claimToken)) return;
     const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
       result: response,
       pullRequestNumber: prNumber,
@@ -255,5 +368,16 @@ export const runFix: JobFlow = async (context) => {
       pullRequest.prNumber,
       `${response}\n\n## Swarmloom loop guard\n\nThis pull request reached the automatic fix limit of ${config.MAX_AUTOMATIC_FIX_CYCLES} cycles. Automation is stopped until a human reviews it.`,
     );
+  }
+
+  async function hasCurrentHead(expectedHead: string | null | undefined) {
+    if (!expectedHead) return false;
+    try {
+      const current = await github.getPullRequest(fullName, pullRequest.prNumber);
+      context.state.activePullRequest = { number: current.number, url: current.url };
+      return isOpenPullRequest(current) && current.headSha === expectedHead;
+    } catch {
+      return false;
+    }
   }
 };

@@ -80,6 +80,7 @@ integration("worker quota admission", () => {
         processor = candidate;
         return worker;
       },
+      enqueueMissing: async () => {},
     };
     const recorded: Array<{ type: string }> = [];
     const { startWorkerLoops } = await import("../src/worker/service.ts");
