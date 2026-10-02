@@ -37,7 +37,12 @@ without hiding them behind an opaque conversation:
 The lifecycle is driven by GitHub state. Each scanner observes the current issue or PR labels,
 records a durable job, and lets a worker perform the work asynchronously.
 
-![Swarmloom issue-to-merge lifecycle](docs/assets/swarmloom-lifecycle.svg)
+The previews link to self-contained Archify diagrams. Open the linked HTML files locally to use the
+interactive viewer; GitHub displays static images in README pages and does not run embedded HTML.
+
+[![Swarmloom issue-to-merge lifecycle](docs/assets/swarmloom-lifecycle-preview.png)](docs/diagrams/issue-to-merge.html)
+
+[Open the interactive lifecycle diagram](docs/diagrams/issue-to-merge.html).
 
 1. A repository issue receives `agent:ready`.
 2. The issue scanner queues an `IMPLEMENTATION` job. The worker creates a branch and worktree,
@@ -60,7 +65,9 @@ guarded PostgreSQL transitions; provider adapters keep Codex and OpenCode behind
 Coding models handle implementation and fixes; review models are configured
 independently for pull request reviews.
 
-![Swarmloom runtime architecture](docs/assets/swarmloom-architecture.svg)
+[![Swarmloom runtime architecture](docs/assets/swarmloom-architecture-preview.png)](docs/diagrams/swarmloom-architecture.html)
+
+[Open the interactive architecture diagram](docs/diagrams/swarmloom-architecture.html).
 
 PostgreSQL is the durable business-state and history authority. Redis/Valkey is the BullMQ delivery
 authority. Local Compose provisions Redis; production deployments use externally managed PostgreSQL

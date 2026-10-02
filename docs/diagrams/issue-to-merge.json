@@ -1,0 +1,284 @@
+{
+  "schema_version": 2,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Issue to Merge Lifecycle",
+    "locale": "en",
+    "output": "docs/diagrams/issue-to-merge.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:merendamattia/swarmloom.git",
+      "provider": "github",
+      "link_mode": "local-only",
+      "revision": "5d9bdb5c0a703b579681e4420605624e9b60c397"
+    },
+    "visual_preset": "signal-flow"
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "Issue and review flow"
+    },
+    {
+      "id": "revision",
+      "label": "Automated revision"
+    },
+    {
+      "id": "human",
+      "label": "Human intervention"
+    },
+    {
+      "id": "terminal",
+      "label": "Completion"
+    }
+  ],
+  "states": [
+    {
+      "id": "issue-ready",
+      "type": "start",
+      "label": "Ready issue",
+      "sublabel": "agent:ready",
+      "lane": "main",
+      "col": 0,
+      "sources": [
+        {
+          "path": "src/backend/src/scans/issue-scanner.ts",
+          "line": 12,
+          "end_line": 33
+        }
+      ]
+    },
+    {
+      "id": "implementation",
+      "type": "active",
+      "label": "IMPLEMENTATION",
+      "sublabel": "issue: agent:working",
+      "lane": "main",
+      "col": 1,
+      "sources": [
+        {
+          "path": "src/backend/src/scans/issue-scanner.ts",
+          "line": 18,
+          "end_line": 33
+        },
+        {
+          "path": "src/backend/src/scans/common.ts",
+          "line": 25,
+          "end_line": 48
+        },
+        {
+          "path": "src/backend/src/worker/service.ts",
+          "line": 37,
+          "end_line": 74
+        }
+      ]
+    },
+    {
+      "id": "review-requested",
+      "type": "waiting",
+      "label": "Review requested",
+      "sublabel": "PR: agent:review-requested",
+      "lane": "main",
+      "col": 2,
+      "sources": [
+        {
+          "path": "src/backend/src/runner/implementation.ts",
+          "line": 126,
+          "end_line": 136
+        },
+        {
+          "path": "src/backend/src/scans/pr-scanner.ts",
+          "line": 173,
+          "end_line": 198
+        }
+      ]
+    },
+    {
+      "id": "review",
+      "type": "active",
+      "label": "REVIEW",
+      "sublabel": "exact PR head SHA",
+      "lane": "main",
+      "col": 3,
+      "sources": [
+        {
+          "path": "src/backend/src/scans/pr-scanner.ts",
+          "line": 234,
+          "end_line": 264
+        },
+        {
+          "path": "src/backend/src/runner/review.ts",
+          "line": 56,
+          "end_line": 69
+        }
+      ]
+    },
+    {
+      "id": "ready-to-merge",
+      "type": "waiting",
+      "label": "Ready to merge",
+      "sublabel": "issue: agent:ready-to-merge",
+      "lane": "main",
+      "col": 4,
+      "sources": [
+        {
+          "path": "src/backend/src/runner/review.ts",
+          "line": 184,
+          "end_line": 232
+        }
+      ]
+    },
+    {
+      "id": "fix-requested",
+      "type": "decision",
+      "label": "Changes requested",
+      "sublabel": "PR: agent:fix-requested",
+      "lane": "revision",
+      "col": 3,
+      "sources": [
+        {
+          "path": "src/backend/src/runner/review.ts",
+          "line": 258,
+          "end_line": 273
+        },
+        {
+          "path": "src/backend/src/scans/pr-scanner.ts",
+          "line": 173,
+          "end_line": 188
+        }
+      ]
+    },
+    {
+      "id": "fix",
+      "type": "active",
+      "label": "FIX",
+      "sublabel": "same PR branch",
+      "lane": "revision",
+      "col": 2,
+      "sources": [
+        {
+          "path": "src/backend/src/scans/pr-scanner.ts",
+          "line": 234,
+          "end_line": 264
+        },
+        {
+          "path": "src/backend/src/runner/fix.ts",
+          "line": 40,
+          "end_line": 60
+        }
+      ]
+    },
+    {
+      "id": "human-review",
+      "type": "waiting",
+      "label": "Human review",
+      "sublabel": "fix limit \u00b7 agent:human-review",
+      "lane": "human",
+      "col": 3,
+      "sources": [
+        {
+          "path": "src/backend/src/runner/fix.ts",
+          "line": 185,
+          "end_line": 205
+        },
+        {
+          "path": "src/backend/src/runner/fix.ts",
+          "line": 309,
+          "end_line": 331
+        },
+        {
+          "path": "src/backend/src/scans/pr-scanner.ts",
+          "line": 177,
+          "end_line": 188
+        }
+      ]
+    },
+    {
+      "id": "done",
+      "type": "success",
+      "label": "Issue done",
+      "sublabel": "agent:done after merge",
+      "lane": "terminal",
+      "col": 4,
+      "sources": [
+        {
+          "path": "src/backend/src/scans/pr-scanner.ts",
+          "line": 112,
+          "end_line": 149
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "from": "issue-ready",
+      "to": "implementation"
+    },
+    {
+      "from": "implementation",
+      "to": "review-requested",
+      "label": "PR opened"
+    },
+    {
+      "from": "review-requested",
+      "to": "review",
+      "label": "scan queues REVIEW"
+    },
+    {
+      "from": "review",
+      "to": "ready-to-merge",
+      "label": "passes"
+    },
+    {
+      "from": "review",
+      "to": "fix-requested",
+      "label": "changes requested",
+      "variant": "security"
+    },
+    {
+      "from": "fix-requested",
+      "to": "fix"
+    },
+    {
+      "from": "fix",
+      "to": "review-requested",
+      "label": "new head \u00b7 re-review",
+      "variant": "emphasis"
+    },
+    {
+      "from": "fix",
+      "to": "human-review",
+      "label": "automatic fix limit"
+    },
+    {
+      "from": "human-review",
+      "to": "fix-requested",
+      "label": "human re-enables FIX",
+      "variant": "dashed"
+    },
+    {
+      "from": "ready-to-merge",
+      "to": "done",
+      "label": "human merges PR",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Head-safe loop",
+      "items": [
+        "REVIEW targets the exact PR head SHA.",
+        "FIX updates the same branch and sends its new head back to review."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Human gate",
+      "items": [
+        "A passing review waits for a human merge.",
+        "The configured FIX limit parks automation for human review."
+      ]
+    }
+  ]
+}

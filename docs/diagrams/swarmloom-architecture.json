@@ -1,0 +1,343 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Swarmloom Architecture",
+    "locale": "en",
+    "output": "docs/diagrams/swarmloom-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:merendamattia/swarmloom.git",
+      "provider": "github",
+      "link_mode": "local-only",
+      "revision": "5d9bdb5c0a703b579681e4420605624e9b60c397"
+    },
+    "visual_preset": "signal-flow"
+  },
+  "components": [
+    {
+      "id": "dashboard",
+      "type": "frontend",
+      "label": "Dashboard",
+      "sublabel": "Next.js operator UI",
+      "pos": [
+        40,
+        70
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/frontend/src/lib/api-client.ts",
+          "line": 4,
+          "end_line": 5
+        },
+        {
+          "path": "docker-compose.yaml",
+          "line": 128,
+          "end_line": 137
+        }
+      ]
+    },
+    {
+      "id": "control-plane",
+      "type": "backend",
+      "label": "API + Scheduler",
+      "sublabel": "Hono API \u00b7 Cron issue/PR scans",
+      "pos": [
+        320,
+        70
+      ],
+      "size": [
+        220,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/backend/src/index.ts",
+          "line": 16,
+          "end_line": 30
+        },
+        {
+          "path": "src/backend/src/scheduler/service.ts",
+          "line": 10,
+          "end_line": 21
+        },
+        {
+          "path": "src/backend/src/scans/service.ts",
+          "line": 62,
+          "end_line": 78
+        }
+      ]
+    },
+    {
+      "id": "github",
+      "type": "external",
+      "label": "GitHub",
+      "sublabel": "Issues, PRs + labels",
+      "pos": [
+        980,
+        70
+      ],
+      "size": [
+        190,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/backend/src/scans/issue-scanner.ts",
+          "line": 13,
+          "end_line": 33
+        },
+        {
+          "path": "src/backend/src/runner/implementation.ts",
+          "line": 74,
+          "end_line": 94
+        },
+        {
+          "path": "agent-runtime/instructions/global.md",
+          "line": 19,
+          "end_line": 24
+        }
+      ]
+    },
+    {
+      "id": "queue",
+      "type": "messagebus",
+      "label": "BullMQ + Redis",
+      "sublabel": "Durable job delivery",
+      "pos": [
+        320,
+        330
+      ],
+      "size": [
+        190,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/backend/src/queue/service.ts",
+          "line": 16,
+          "end_line": 20
+        },
+        {
+          "path": "src/backend/src/queue/service.ts",
+          "line": 83,
+          "end_line": 90
+        },
+        {
+          "path": "docker-compose.yaml",
+          "line": 71,
+          "end_line": 78
+        }
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "Workers + Runner",
+      "sublabel": "Only durable-job executor",
+      "pos": [
+        640,
+        330
+      ],
+      "size": [
+        200,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/backend/src/worker.ts",
+          "line": 21,
+          "end_line": 37
+        },
+        {
+          "path": "src/backend/src/worker/service.ts",
+          "line": 33,
+          "end_line": 74
+        },
+        {
+          "path": "src/backend/src/runner/service.ts",
+          "line": 112,
+          "end_line": 119
+        }
+      ]
+    },
+    {
+      "id": "postgres",
+      "type": "database",
+      "label": "PostgreSQL",
+      "sublabel": "Jobs, managed PRs + history",
+      "pos": [
+        980,
+        330
+      ],
+      "size": [
+        190,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/backend/src/core/db.ts",
+          "line": 6,
+          "end_line": 10
+        },
+        {
+          "path": "src/backend/src/repositories/jobs.ts",
+          "line": 46,
+          "end_line": 90
+        },
+        {
+          "path": "src/backend/src/repositories/events.ts",
+          "line": 15,
+          "end_line": 17
+        }
+      ]
+    },
+    {
+      "id": "worktrees",
+      "type": "cloud",
+      "label": "Repository worktrees",
+      "sublabel": "Isolated worker storage",
+      "pos": [
+        320,
+        590
+      ],
+      "size": [
+        190,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/backend/src/git/repositories.ts",
+          "line": 56,
+          "end_line": 99
+        },
+        {
+          "path": "src/backend/src/runner/implementation.ts",
+          "line": 22,
+          "end_line": 39
+        }
+      ]
+    },
+    {
+      "id": "providers",
+      "type": "backend",
+      "label": "Provider adapters",
+      "sublabel": "Codex / OpenCode \u00b7 shared contract",
+      "pos": [
+        640,
+        590
+      ],
+      "size": [
+        200,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/backend/src/providers/index.ts",
+          "line": 7,
+          "end_line": 9
+        },
+        {
+          "path": "src/backend/src/providers/types.ts",
+          "line": 96,
+          "end_line": 100
+        },
+        {
+          "path": "src/backend/src/runner/helpers.ts",
+          "line": 93,
+          "end_line": 98
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "dashboard-api",
+      "from": "dashboard",
+      "to": "control-plane",
+      "label": "API requests"
+    },
+    {
+      "id": "control-github",
+      "from": "control-plane",
+      "to": "github",
+      "label": "read issues + PR state"
+    },
+    {
+      "id": "control-db",
+      "from": "control-plane",
+      "to": "postgres",
+      "label": "read dashboard \u00b7 persist Jobs + PRs"
+    },
+    {
+      "id": "control-queue",
+      "from": "control-plane",
+      "to": "queue",
+      "label": "enqueue Job IDs"
+    },
+    {
+      "id": "queue-worker",
+      "from": "queue",
+      "to": "worker",
+      "label": "deliver Job ID",
+      "variant": "emphasis"
+    },
+    {
+      "id": "worker-db",
+      "from": "worker",
+      "to": "postgres",
+      "label": "guarded claims"
+    },
+    {
+      "id": "worker-github",
+      "from": "worker",
+      "to": "github",
+      "label": "verify PR head \u00b7 update labels/comments"
+    },
+    {
+      "id": "worker-provider",
+      "from": "worker",
+      "to": "providers",
+      "label": "execute job role"
+    },
+    {
+      "id": "worker-worktrees",
+      "from": "worker",
+      "to": "worktrees",
+      "label": "create isolated worktree"
+    },
+    {
+      "id": "provider-worktrees",
+      "from": "providers",
+      "to": "worktrees",
+      "label": "edit + test"
+    },
+    {
+      "id": "provider-github",
+      "from": "providers",
+      "to": "github",
+      "label": "push branch + open PR",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Delivery",
+      "items": [
+        "BullMQ on Redis delivers Job IDs; workers alone claim and execute them."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "State",
+      "items": [
+        "PostgreSQL stores durable Jobs, managed pull requests, and event history."
+      ]
+    }
+  ]
+}
