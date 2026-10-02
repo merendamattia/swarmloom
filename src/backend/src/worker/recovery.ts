@@ -7,6 +7,7 @@ import { removeJobWorktree, repositoryPath } from "../git/repositories.ts";
 import { jobRepository, WORKTREE_CLEANUP_LEASE_MS } from "../repositories/jobs.ts";
 import { reviewRepository } from "../repositories/reviews.ts";
 import { recoverCancelledWorktrees } from "../worktrees/recovery.ts";
+import { reconcileLegacyDecompositionJobs } from "./legacy-decomposition.ts";
 
 type RemoveWorktree = typeof removeJobWorktree;
 type TerminalRecoveryConfig = Pick<Config, "APP_ENV" | "DATA_DIR" | "STALE_JOB_THRESHOLD_MS">;
@@ -93,6 +94,7 @@ export async function recoverStaleJobs(
   events: EventService,
   removeWorktree: RemoveWorktree = removeJobWorktree,
 ) {
+  await reconcileLegacyDecompositionJobs(config, github);
   await recoverTerminalJobs(config, events, removeWorktree);
   await recoverCancelledWorktrees(config, events, removeWorktree);
   await reviewRepository.reconcileCancelledJobs(config.APP_ENV);

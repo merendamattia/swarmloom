@@ -2,11 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome, parseTldr } from "../src/runner/response.ts";
 
 describe("agent responses", () => {
-  test("parses the four explicit job outcomes from the first marker line", () => {
-    expect(parseJobOutcome("Outcome: requires_decomposition\nTL;DR: Requires decomposition.\nReason: Two releases")).toBe("requires_decomposition");
+  test("parses implementation and blocked outcomes from the first marker line", () => {
     expect(parseJobOutcome("Outcome: blocked\nTL;DR: Blocked pending an API key.\nMissing an API key.")).toBe("blocked");
-    expect(parseJobOutcome("Outcome: decomposed\nTL;DR: Split the work into two children.\nSplit into two children.")).toBe("decomposed");
     expect(parseJobOutcome("Outcome: implemented\nPR: https://github.com/a/b/pull/4\nTL;DR: Implemented and opened the pull request.\nDone.")).toBe("implemented");
+  });
+
+  test("rejects decomposition outcomes", () => {
+    for (const outcome of ["requires_decomposition", "decomposed"]) {
+      expect(() => parseJobOutcome(`Outcome: ${outcome}\nTL;DR: Cannot split the issue.`)).toThrow("Outcome:");
+    }
   });
 
   test("is case- and whitespace-insensitive for the marker", () => {

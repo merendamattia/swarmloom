@@ -58,8 +58,8 @@ function configuredAgentProfiles(config: Config) {
 }
 
 const jobQuery = z.object({
-  status: z.enum(["QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"]).optional(),
-  jobType: z.enum(["IMPLEMENTATION", "FIX", "REVIEW", "DECOMPOSITION"]).optional(),
+  status: z.enum(["QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "COMPLETED", "FAILED", "BLOCKED", "CANCELLED", "STALE"]).optional(),
+  jobType: z.enum(["IMPLEMENTATION", "FIX", "REVIEW"]).optional(),
   subjectType: z.enum(["ISSUE", "PULL_REQUEST"]).optional(),
   provider: z.enum(["CODEX", "OPENCODE"]).optional(),
   repositoryId: z.string().optional(),
@@ -263,7 +263,7 @@ export function createApp({
           }
         : {};
       const [statusCounts, repositories, activeJobs, recentJobs, exceptionJobs, scans, heartbeats] = await Promise.all([
-        prisma.job.groupBy({ where: { environment: config.APP_ENV }, by: ["status"], _count: true }),
+        prisma.job.groupBy({ where: { environment: config.APP_ENV, status: { not: "DECOMPOSED" } }, by: ["status"], _count: true }),
         prisma.repository.findMany({ orderBy: { fullName: "asc" } }),
         prisma.job.findMany({
           where: { environment: config.APP_ENV, status: { in: ["RUNNING", "WAITING_FOR_QUOTA"] } },

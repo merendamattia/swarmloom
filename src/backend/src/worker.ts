@@ -26,7 +26,7 @@ const providers = {
   codex: createAgentProvider("codex", providerUsage),
   opencode: createAgentProvider("opencode"),
 };
-const runner = createJobRunner({ config, providers, github, events, queue });
+const runner = createJobRunner({ config, providers, github, events });
 const worker = startWorkerLoops(
   config,
   queue,

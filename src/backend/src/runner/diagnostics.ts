@@ -3,7 +3,6 @@ import type { AgentProvider, AgentResult, AgentRole, ProviderFailure } from "../
 
 export type DiagnosticStage =
   | "implementation"
-  | "decomposition"
   | "review"
   | "provider_process"
   | "parser"

@@ -76,7 +76,7 @@ against known credential values before persistence.
 | Component | Responsibility | Durable storage |
 |---|---|---|
 | `backend` | Hono API, cron scheduler, issue/PR discovery and reconciliation, migrations, queue producer | PostgreSQL and repository volume |
-| `worker` | BullMQ consumer, guarded claims, heartbeats, worktrees, provider sessions for implementation, fix, review, and decomposition jobs | PostgreSQL and repository volume |
+| `worker` | BullMQ consumer, guarded claims, heartbeats, worktrees, provider sessions for implementation, fix, and review jobs | PostgreSQL and repository volume |
 | `frontend` | Operational Next.js dashboard | None |
 | External PostgreSQL | Jobs, managed Pull Requests, reviews, scans, events, repository state, heartbeats, runtime settings | Provider-managed |
 | External Redis/Valkey | BullMQ delivery, retries, locks, worker coordination | Provider-managed |
@@ -124,7 +124,7 @@ Create a fine-grained personal access token scoped only to the monitored reposit
 general workflow needs repository permissions:
 
 - **Contents: read and write** — clone/fetch and push the assigned branch;
-- **Issues: read and write** — discovery, labels, comments, issue creation, and native sub-issues;
+- **Issues: read and write** — discovery, labels, comments, and diagnostic issue creation;
 - **Pull requests: read and write** — create/read PRs and post review-related content;
 - **Actions: read** — lets reviewers inspect workflow runs and failed jobs; review still proceeds
   with local CI reproduction if remote Actions data is unavailable;
@@ -133,9 +133,6 @@ general workflow needs repository permissions:
 
 GitHub documents endpoint-to-permission mappings in its [fine-grained token permission
 reference](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens).
-The native add-sub-issue endpoint specifically requires Issues write permission and accepts a
-numeric child issue ID; see the [sub-issues REST API](https://docs.github.com/en/rest/issues/sub-issues).
-
 On every API/worker startup, the application checks each configured repository and creates the
 configured worker labels when they are missing. Existing worker labels are updated with the
 canonical color and description. No manual label setup is required; the token needs Issues write
@@ -146,8 +143,7 @@ Label flow:
 - **Issues** carry the workflow state of the originating issue:
   `ready` → `working` when discovery atomically acquires the issue; `working` →
   `ready-to-merge` when an automated review passes; `ready-to-merge` → `done` after a human merge;
-  `working` → `blocked` when essential information is missing; `working` → `decomposed` after child
-  issues are created;
+  `working` → `blocked` when essential information is missing;
 - **Pull Requests** carry their own workflow state: `review-requested` after implementation and
   after every fix; `fix-requested` after requested review changes; `review-passed`
   after a passing review, while the merge remains human;
@@ -173,9 +169,7 @@ Only these labels create work during a scan:
 | `agent:review-requested` | Managed Pull Request | `REVIEW` for the current PR head SHA |
 | `agent:fix-requested` | Managed Pull Request | `FIX` on the existing PR branch and current head SHA |
 
-`DECOMPOSITION` has no trigger label: an `IMPLEMENTATION` result of
-`Outcome: requires_decomposition` creates it directly as a separate durable job. The labels
-`agent:working`, `agent:blocked`, `agent:decomposed`, `agent:ready-to-merge`, `agent:done`,
+The labels `agent:working`, `agent:blocked`, `agent:ready-to-merge`, `agent:done`,
 `agent:review-passed`, and `agent:human-review` are waiting, terminal, or intervention states and do
 not create jobs. Worker transitions replace only worker-owned labels and preserve unrelated labels.
 
@@ -201,7 +195,6 @@ validation.
 | `ISSUE_WORKING_LABEL` | `agent:working` | Acquired/running issue label |
 | `ISSUE_BLOCKED_LABEL` | `agent:blocked` | Missing-information label |
 | `ISSUE_COMPLETED_LABEL` | `agent:done` | Issue finalized after a human merge |
-| `ISSUE_DECOMPOSED_LABEL` | `agent:decomposed` | Parent decomposed label |
 | `ISSUE_READY_TO_MERGE_LABEL` | `agent:ready-to-merge` | Automation passed; human merge still required |
 | `ISSUE_HUMAN_REVIEW_LABEL` | `agent:human-review` | Human intervention required label |
 | `PR_REVIEW_REQUESTED_LABEL` | `agent:review-requested` | PR requires automated review |
@@ -220,7 +213,7 @@ validation.
 | `AGENT_RUNTIME_DIR` | `/app/agent-runtime` | Canonical runtime path inside the container |
 | `AGENT_RUNTIME_HOST_PATH` | `./agent-runtime`, local Compose only | Host directory mounted read-only at `AGENT_RUNTIME_DIR` during development |
 | `AGENT_PROVIDER` | required; `codex` example | Exactly `codex` or `opencode` |
-| `CODEX_CODING_MODEL` | `gpt-6-luna` | Enabled catalog model stored on coding jobs (`IMPLEMENTATION`, `FIX`, and `DECOMPOSITION`) |
+| `CODEX_CODING_MODEL` | `gpt-6-luna` | Enabled catalog model stored on coding jobs (`IMPLEMENTATION` and `FIX`) |
 | `CODEX_REVIEW_MODEL` | `gpt-6-luna` | Enabled catalog model stored on `REVIEW` jobs |
 | `CODEX_CODING_REASONING_EFFORT` | `max` | Catalog-supported Codex effort stored on coding jobs |
 | `CODEX_REVIEW_REASONING_EFFORT` | `max` | Catalog-supported Codex effort stored on review jobs |
@@ -407,7 +400,7 @@ model/provider arguments out of canonical behavioral material.
 Each session writes its response to a temporary plain text file outside the worktree. The runner
 reads that file verbatim, posts it as the GitHub comment, stores it in the platform, and deletes
 the temporary file. The worker drives the flow from one minimal outcome line and the optional PR
-line at the top of the response (`Outcome: implemented|blocked|decomposed|requires_decomposition`
+line at the top of the response (`Outcome: implemented|blocked`
 and `PR: <url>`, or `Review: pass|changes_requested` for review sessions).
 
 ## Updating agent runtime
@@ -581,16 +574,17 @@ The dashboard/API reports only configured/operational booleans. Delivery failure
 event row as `notificationError` and do not undo job transitions. Telegram messages are HTML
 escaped and capped at the platform's message length.
 
-## Decomposition and automated review
+## Legacy job history
 
-If the implementation session says a parent cannot fit one coherent PR, the runner finishes the
-implementation job and queues a separate `DECOMPOSITION` job. It starts a fresh provider session
-with the same global instructions.
-Children must include objective, current technical context, acceptance criteria, tests, and
-dependencies. The agent creates GitHub issues, attaches native parent/sub-issue relationships when
-the endpoint is available, and labels only dependency-free children ready. If native sub-issues are
-unavailable, it links both directions and states the limitation. Artificial file-by-file splitting
-is forbidden.
+Upgrades retain historical `DECOMPOSITION` jobs, `DECOMPOSED` statuses, scan counts, and events for
+audit. The migration marks unfinished decomposition jobs blocked, releases their active issue keys,
+and prevents new decomposition job inserts. On startup, workers reconcile the affected issues by
+replacing their working label with blocked and human-review labels and posting an explanation.
+Failed GitHub updates are retried without repeating a posted explanation. Existing issues remain
+one implementation unit; an agent that cannot complete one should report `Outcome: blocked` for
+human intervention.
+
+## Automated review
 
 Review is a fully independent durable job. The PullRequestScanner creates a `REVIEW` job for a
 specific PR and head SHA whenever it carries `agent:review-requested`; the review runner then retrieves the PR
@@ -788,8 +782,7 @@ directories.
 ### Provider mismatch after switching
 
 Each job stores the provider/model/reasoning snapshot captured at discovery. Coding jobs use the
-coding profile; independent review jobs use the review profile; decomposition jobs inherit the
-coding snapshot from the implementation job that created them. New scans use the current Settings,
+coding profile; independent review jobs use the review profile. New scans use the current Settings,
 while the worker keeps both provider adapters available so switching does not strand queued work.
 
 ## External verification gate

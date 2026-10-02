@@ -240,7 +240,6 @@ h3 { font-size: 1rem; line-height: 1.35; font-weight: 650; }
 .kind-pill[data-kind="implementation"] { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in oklch, var(--accent), var(--border) 55%); }
 .kind-pill[data-kind="fix"] { background: var(--warning-soft); color: var(--warning); border-color: color-mix(in oklch, var(--warning), var(--border) 55%); }
 .kind-pill[data-kind="review"] { background: var(--success-soft); color: var(--success); border-color: color-mix(in oklch, var(--success), var(--border) 55%); }
-.kind-pill[data-kind="decomposition"] { background: var(--danger-soft); color: var(--danger); border-color: color-mix(in oklch, var(--danger), var(--border) 55%); }
 
 .table-wrap { width: 100%; min-width: 0; overflow-x: auto; border-top: 1px solid var(--border); }
 .data-table { width: 100%; border-collapse: collapse; color: var(--ink); font-size: .8125rem; font-variant-numeric: tabular-nums; }

@@ -12,8 +12,6 @@ import { githubGitEnvironment } from "../github/git-auth.ts";
 import type { AgentProvider } from "../providers/index.ts";
 import { eventRepository } from "../repositories/events.ts";
 import { jobRepository } from "../repositories/jobs.ts";
-import type { JobQueue } from "../queue/service.ts";
-import { runDecomposition } from "./decomposition.ts";
 import { runFix } from "./fix.ts";
 import {
   createCommentOnPullRequest,
@@ -37,7 +35,6 @@ type RunnerDependencies = {
   providers?: Partial<Record<AgentProvider["name"], AgentProvider>>;
   github: RunnerGitHub;
   events?: EventService;
-  queue?: Pick<JobQueue, "enqueue">;
   createWorktree?: typeof createTargetWorktree;
   createReviewWorktree?: typeof createTargetReviewWorktree;
   readWorktreeHead?: ReadWorktreeHead;
@@ -52,7 +49,6 @@ export function createJobRunner({
   providers,
   github,
   events = { record: eventRepository.create, notifyQueuedSummary: async () => {} },
-  queue = { enqueue: async () => {} },
   createWorktree = createTargetWorktree,
   createReviewWorktree = createTargetReviewWorktree,
   readWorktreeHead = (worktreePath) => runGit(["rev-parse", "HEAD"], worktreePath),
@@ -100,7 +96,6 @@ export function createJobRunner({
         config,
         github,
         events,
-        queue,
         createWorktree,
         createReviewWorktree,
         readWorktreeHead,
@@ -114,12 +109,13 @@ export function createJobRunner({
         finalizeIssue: createFinalizeIssue(github, config, events),
         commentOnPullRequest: createCommentOnPullRequest(github, events),
       };
-      const flow = {
+      const flows = {
         IMPLEMENTATION: runImplementation,
         FIX: runFix,
         REVIEW: runReview,
-        DECOMPOSITION: runDecomposition,
-      }[job.jobType];
+      };
+      const flow = flows[job.jobType as keyof typeof flows];
+      if (!flow) throw new Error(`Unsupported job type: ${job.jobType}`);
       await flow(context);
       reachedTerminalState = true;
     } catch (error) {
@@ -293,5 +289,5 @@ function createExecuteRoleWithRetry(events: EventService, config: Config, provid
   };
 }
 function roleStage(role: RoleExecution["role"]): JobDiagnostics["stage"] {
-  return role === "issue-worker" ? "implementation" : role === "decomposer" ? "decomposition" : "review";
+  return role === "issue-worker" ? "implementation" : "review";
 }

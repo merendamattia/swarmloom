@@ -14,7 +14,7 @@ import {
 import type { JobFlow } from "./types.ts";
 
 export const runImplementation: JobFlow = async (context) => {
-  const { config, github, events, queue, job, provider, signal } = context;
+  const { config, github, events, job, provider, signal } = context;
   const fullName = job.repository.fullName;
   context.state.liveContext = await github.getIssueContext(fullName, job.issueNumber, job.issueUrl);
   const liveContext = context.state.liveContext;
@@ -159,52 +159,6 @@ export const runImplementation: JobFlow = async (context) => {
         model: job.model,
         tldr,
       },
-    });
-    await context.finalizeIssue(job, [config.ISSUE_WORKING_LABEL], implementation.response);
-    return;
-  }
-
-  if (outcome === "requires_decomposition") {
-    const finished = await jobRepository.finishRunning(job.id, job.claimToken, "COMPLETED", {
-      result: implementation.response,
-      exitCode: implementation.exitCode,
-    });
-    if (!finished) return;
-    // DECOMPOSITION deliberately inherits the coding profile snapshot from its implementation job.
-    const decomposition = await jobRepository.tryCreateQueued({
-      repositoryId: job.repositoryId,
-      scanRunId: job.scanRunId ?? undefined,
-      environment: job.environment,
-      jobType: "DECOMPOSITION",
-      subjectType: "ISSUE",
-      issueNumber: job.issueNumber,
-      issueTitle: job.issueTitle,
-      issueUrl: job.issueUrl,
-      issueBody: job.issueBody,
-      branchName: `agent/decompose-${job.issueNumber}-${crypto.randomUUID().slice(0, 8)}`,
-      baselineCommit: job.baselineCommit,
-      provider: job.provider,
-      model: job.model,
-      reasoningEffort: job.reasoningEffort ?? undefined,
-    });
-    if (decomposition) {
-      await queue.enqueue(decomposition.id);
-      await events.record({
-        type: "JOB_QUEUED",
-        message: `Queued decomposition for ${fullName}#${job.issueNumber}`,
-        jobId: decomposition.id,
-        repositoryId: job.repositoryId,
-        scanRunId: decomposition.scanRunId ?? undefined,
-        metadata: { issueUrl: job.issueUrl, issueNumber: job.issueNumber },
-      });
-    }
-    await events.record({
-      type: "JOB_COMPLETED",
-      message: `Completed ${fullName}#${job.issueNumber} with a decomposition request using ${provider.name}/${job.model}`,
-      jobId: job.id,
-      repositoryId: job.repositoryId,
-      scanRunId: job.scanRunId ?? undefined,
-      metadata: { issueUrl: job.issueUrl, tldr },
     });
     await context.finalizeIssue(job, [config.ISSUE_WORKING_LABEL], implementation.response);
     return;

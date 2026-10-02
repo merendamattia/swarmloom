@@ -6,7 +6,7 @@ export type QueuedJobInput = {
   repositoryId: string;
   scanRunId?: string;
   environment: string;
-  jobType: JobType;
+  jobType: Exclude<JobType, "DECOMPOSITION">;
   subjectType: JobSubject;
   issueNumber: number;
   issueTitle: string;
@@ -44,6 +44,7 @@ function activePrKey(input: QueuedJobInput) {
 }
 
 async function tryCreateQueued(input: QueuedJobInput) {
+  if ((input.jobType as JobType) === "DECOMPOSITION") throw new Error("Decomposition jobs are no longer supported");
   const id = crypto.randomUUID();
   const [job] = await prisma.$queryRaw<Job[]>`
     INSERT INTO "job" (
@@ -83,6 +84,7 @@ async function claim(id: string, environment: string, workerId: string) {
     WHERE "id" = ${id}
       AND "environment" = ${environment}
       AND "status" = 'QUEUED'
+      AND "jobType" <> 'DECOMPOSITION'
     RETURNING *
   `;
   return job ?? null;
@@ -90,14 +92,14 @@ async function claim(id: string, environment: string, workerId: string) {
 
 async function findQueued(id: string, environment: string) {
   return prisma.job.findFirst({
-    where: { id, environment, status: "QUEUED" },
+    where: { id, environment, status: "QUEUED", jobType: { not: "DECOMPOSITION" } },
     select: { id: true, provider: true },
   });
 }
 
 async function findQueuedJobs(environment: string) {
   return prisma.job.findMany({
-    where: { environment, status: "QUEUED" },
+    where: { environment, status: "QUEUED", jobType: { not: "DECOMPOSITION" } },
     select: {
       id: true,
       repositoryId: true,
@@ -176,7 +178,7 @@ async function waitForQuotaRunning(id: string, environment: string, workerId: st
 
 async function findWaitingForQuota(environment: string, provider: AgentProvider = "CODEX") {
   return prisma.job.findMany({
-    where: { environment, provider, status: "WAITING_FOR_QUOTA" },
+    where: { environment, provider, status: "WAITING_FOR_QUOTA", jobType: { not: "DECOMPOSITION" } },
     include: { repository: true },
     orderBy: { quotaWaitStartedAt: "asc" },
   });
@@ -373,7 +375,7 @@ async function finalizeTerminalCleanup(id: string, claimToken: string | null, cl
 
 async function requeueWaitingForQuota(id: string, environment: string) {
   const job = await prisma.job.findFirst({
-    where: { id, environment, status: "WAITING_FOR_QUOTA" },
+    where: { id, environment, status: "WAITING_FOR_QUOTA", jobType: { not: "DECOMPOSITION" } },
     select: { quotaWaitStartedAt: true, quotaWaitDurationMs: true },
   });
   if (!job) return null;
@@ -382,7 +384,7 @@ async function requeueWaitingForQuota(id: string, environment: string) {
     ? Math.max(0, now.getTime() - job.quotaWaitStartedAt.getTime())
     : 0);
   const updated = await prisma.job.updateMany({
-    where: { id, environment, status: "WAITING_FOR_QUOTA" },
+    where: { id, environment, status: "WAITING_FOR_QUOTA", jobType: { not: "DECOMPOSITION" } },
     data: {
       status: "QUEUED",
       completedAt: null,
@@ -406,6 +408,7 @@ async function requeueForRetry(id: string, environment: string) {
   const job = await prisma.job.findFirst({ where: { id, environment } });
   if (
     !job
+    || job.jobType === "DECOMPOSITION"
     || !retryableStatuses.includes(job.status as typeof retryableStatuses[number])
     || job.workerId
     || job.cleanupToken
@@ -418,6 +421,7 @@ async function requeueForRetry(id: string, environment: string) {
       id,
       environment,
       status: job.status,
+      jobType: { not: "DECOMPOSITION" },
       workerId: null,
       claimToken: job.claimToken,
       cleanupToken: null,
@@ -462,7 +466,7 @@ type FinishInput = {
 async function finishRunning(
   id: string,
   claimToken: string,
-  status: Extract<JobStatus, "COMPLETED" | "FAILED" | "BLOCKED" | "DECOMPOSED">,
+  status: Extract<JobStatus, "COMPLETED" | "FAILED" | "BLOCKED">,
   input: FinishInput,
 ) {
   const job = await prisma.job.findUnique({
@@ -643,7 +647,7 @@ async function markSupportIssueForReconciliation(id: string, environment: string
 
 async function findRunning(id: string, workerId: string, claimToken: string) {
   return prisma.job.findFirst({
-    where: { id, status: "RUNNING", workerId, claimToken },
+    where: { id, status: "RUNNING", workerId, claimToken, jobType: { not: "DECOMPOSITION" } },
     include: { repository: true, pullRequest: true },
   });
 }

@@ -22,16 +22,13 @@ The workflow modes are mutually exclusive and driven by GitHub state:
   already-open pull request branch, address the given failure reason and details, verify locally, and
   push to that same remote branch so the open Pull Request updates. Never start a fix on a new branch
   or open a second Pull Request for the same issue.
-- **Decomposition** (the coordinator asks for a decomposition session): split the issue into coherent
-  native sub-issues and create them as GitHub sub-issues of the parent. Do not edit repository files
-  or open Pull Requests.
 - **Review**: review sessions run as separate jobs; an implementation or fix session must never
   perform the review itself. Do not submit GitHub reviews, comments, or labels from a review job;
   the coordinator publishes the response and workflow labels after validating the verdict.
 
 Starting a job is explicit authorization for the repository and GitHub changes required by its
-mode, including commits, an assigned-branch push, Pull Request creation or update, review feedback,
-and native sub-issues. Do not ask for separate approval. The branch, worktree, verification,
+mode, including commits, an assigned-branch push, Pull Request creation or update, and review
+feedback. Do not ask for separate approval. The branch, worktree, verification,
 credential, no-merge, and no-force-push restrictions below remain mandatory.
 
 Only redo work from scratch when the context proves it is incomplete or invalid.
@@ -191,17 +188,9 @@ gh pr create --repo <owner>/<repo> --base develop --head <current-branch> \
 gh pr comment <pr-number> --repo <owner>/<repo> --body '<concise factual comment>'
 ```
 
-Use `gh api` for endpoints without a dedicated command. For a native child issue relationship, use
-the GitHub sub-issues endpoint only with the numeric child issue ID returned by GitHub:
-
-```bash
-gh api --method POST repos/<owner>/<repo>/issues/<parent-number>/sub_issues \
-  -f sub_issue_id=<child-issue-id>
-```
-
-Re-read issue state immediately before mutations so cancellation or human changes win. Preserve
-unrelated labels and comments. Never post secrets, raw environment values, speculative claims, or
-repeated progress chatter.
+Use `gh api` for endpoints without a dedicated command. Re-read issue state immediately before
+mutations so cancellation or human changes win. Preserve unrelated labels and comments. Never post
+secrets, raw environment values, speculative claims, or repeated progress chatter.
 
 ## Work and GitHub rules
 
@@ -250,8 +239,7 @@ Every response must keep its machine-readable result marker unchanged and includ
 mandatory `PR:` line when one is present. Put all detailed analysis, verification, findings, and
 remaining content after the TL;DR. For implementation, use `Outcome: implemented` with the linked
 `PR:` line. For fix sessions, use `Outcome: implemented` or `Outcome: blocked` as appropriate. For
-other job sessions, use `Outcome: blocked`, `Outcome: decomposed`, or
-`Outcome: requires_decomposition`. For reviews, begin with `Review: pass` or
+other job sessions, use `Outcome: blocked`. For reviews, begin with `Review: pass` or
 `Review: changes_requested` instead of `Outcome:`. If one coherent Pull Request cannot safely contain
-the work, write `Outcome: requires_decomposition`; the coordinator handles any additional execution
-phase.
+the work, write `Outcome: blocked` and explain what human intervention is needed. Do not create
+child issues or split the originating issue automatically.
