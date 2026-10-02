@@ -1,3 +1,15 @@
+# [1.18.0](https://github.com/merendamattia/swarmloom/compare/v1.17.0...v1.18.0) (2026-10-02)
+
+
+### Bug Fixes
+
+* **upgrade:** reconcile legacy decomposition issues ([ea0d641](https://github.com/merendamattia/swarmloom/commit/ea0d641fe2abb90e1c0582dd7b64fd9b11bcc286))
+
+
+### Features
+
+* **workflow:** remove issue decomposition ([ecf125b](https://github.com/merendamattia/swarmloom/commit/ecf125b6d96842a96bab499414586c28afdd2de4))
+
 # [1.17.0](https://github.com/merendamattia/swarmloom/compare/v1.16.0...v1.17.0) (2026-09-25)
 
 
