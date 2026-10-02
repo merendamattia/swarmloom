@@ -578,8 +578,11 @@ escaped and capped at the platform's message length.
 
 Upgrades retain historical `DECOMPOSITION` jobs, `DECOMPOSED` statuses, scan counts, and events for
 audit. The migration marks unfinished decomposition jobs blocked, releases their active issue keys,
-and prevents new decomposition job inserts. Existing issues remain one implementation unit; an
-agent that cannot complete one should report `Outcome: blocked` for human intervention.
+and prevents new decomposition job inserts. On startup, workers reconcile the affected issues by
+replacing their working label with blocked and human-review labels and posting an explanation.
+Failed GitHub updates are retried without repeating a posted explanation. Existing issues remain
+one implementation unit; an agent that cannot complete one should report `Outcome: blocked` for
+human intervention.
 
 ## Automated review
 

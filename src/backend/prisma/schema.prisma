@@ -154,6 +154,9 @@ model Job {
   exitCode                Int?
   result                   Json?         @db.JsonB
   errorMessage             String?       @db.Text
+  legacyDecompositionReconciledAt DateTime?
+  legacyDecompositionClaimToken  String?
+  legacyDecompositionClaimedAt   DateTime?
   diagnostics              Json?         @db.JsonB
   supportIssueNumber      Int?
   supportIssueUrl         String?
