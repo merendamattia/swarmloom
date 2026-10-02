@@ -54,6 +54,7 @@ describe("runtime settings", () => {
   test("rejects an invalid runtime patch at the API boundary", () => {
     expect(() => parseRuntimeSettingsPatch({ MAX_PARALLEL_JOBS: 0 })).toThrow();
     expect(() => parseRuntimeSettingsPatch({ SCHEDULE_CRON: "not cron" })).toThrow();
+    expect(() => parseRuntimeSettingsPatch({ issueDecomposedLabel: "agent:decomposed" })).toThrow();
   });
 
   test("encrypts and decrypts Telegram settings without storing plaintext", () => {

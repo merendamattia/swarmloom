@@ -286,24 +286,6 @@ export function reviewContext(
   ].filter((line): line is string => Boolean(line)).join("\n");
 }
 
-export function decompositionContext(
-  job: RunningJob,
-  liveContext?: GitHubIssueContext,
-  readyLabel?: string,
-) {
-  return [
-    `Issue: #${job.issueNumber} ${job.issueTitle}`,
-    `URL: ${job.issueUrl}`,
-    `Baseline: origin/develop at ${job.baselineCommit}`,
-    "Mode: decomposition. Split the issue into coherent native sub-issues and create each child as a GitHub sub-issue of the parent. Do not open pull requests or edit repository files.",
-    recoveryContext(job),
-    readyLabel && `Queue-ready label for actionable children: ${readyLabel}`,
-    `Body:\n${job.issueBody}`,
-    liveContext && `Issue labels: ${liveContext.issue.labels.join(", ") || "none"}`,
-    liveContext && `Live GitHub context fetched before execution:\n${redactSecrets(JSON.stringify(liveContext, null, 2))}`,
-  ].filter((line): line is string => Boolean(line)).join("\n");
-}
-
 function recoveryContext(job: Pick<RunningJob, "sessionId" | "worktreePath">) {
   if (!job.sessionId && !job.worktreePath) return undefined;
   return [
@@ -396,7 +378,7 @@ export function terminalEvent(
 }
 
 function roleStage(role: AgentRole): JobDiagnostics["stage"] {
-  return role === "issue-worker" ? "implementation" : role === "decomposer" ? "decomposition" : "review";
+  return role === "issue-worker" ? "implementation" : "review";
 }
 
 export function safeError(error: unknown) {

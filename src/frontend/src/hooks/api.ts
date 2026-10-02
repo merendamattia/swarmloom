@@ -20,7 +20,6 @@ export type SettingsPatch = {
   issueWorkingLabel?: string;
   issueBlockedLabel?: string;
   issueCompletedLabel?: string;
-  issueDecomposedLabel?: string;
   issueReadyToMergeLabel?: string;
   issueHumanReviewLabel?: string;
   prReviewRequestedLabel?: string;

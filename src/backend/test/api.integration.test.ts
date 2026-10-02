@@ -207,6 +207,8 @@ integration("operations API", () => {
 
     const jobs = await app.request(`/api/jobs?q=${unique}&provider=CODEX`);
     expect(await jobs.json()).toMatchObject({ total: 1, items: [{ id: jobId, reasoningEffort: "high" }] });
+    expect((await app.request("/api/jobs?jobType=DECOMPOSITION")).status).toBe(400);
+    expect((await app.request("/api/jobs?status=DECOMPOSED")).status).toBe(400);
 
     const repositories = await app.request("/api/repositories");
     expect(await repositories.json()).toMatchObject([{ jobs: [{ id: jobId, reasoningEffort: "high" }] }]);

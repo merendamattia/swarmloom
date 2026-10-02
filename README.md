@@ -49,7 +49,7 @@ records a durable job, and lets a worker perform the work asynchronously.
    human intervention.
 5. A human merges the reviewed PR. The scanner then marks the originating issue `agent:done`.
 
-Implementation, fix, review, and decomposition are independent jobs. No agent starts another agent
+Implementation, fix, and review are independent jobs. No agent starts another agent
 directly, and a failed or stale job remains visible in the dashboard and event history.
 
 ## Architecture
@@ -57,7 +57,7 @@ directly, and a failed or stale job remains visible in the dashboard and event h
 Swarmloom has one TypeScript application split into API/scheduler, worker, and dashboard roles.
 The scheduler reconciles GitHub; BullMQ provides delivery and locking; workers claim jobs with
 guarded PostgreSQL transitions; provider adapters keep Codex and OpenCode behind the same contract.
-Coding models handle implementation, fixes, and decomposition; review models are configured
+Coding models handle implementation and fixes; review models are configured
 independently for pull request reviews.
 
 ![Swarmloom runtime architecture](docs/assets/swarmloom-architecture.svg)
@@ -72,7 +72,7 @@ optional Telegram notifications expose operational state without changing the wo
 | Concept | Meaning |
 |---|---|
 | **Labels** | The human-visible coordination protocol for issue and PR state. |
-| **Jobs** | Durable units of `IMPLEMENTATION`, `FIX`, `REVIEW`, or `DECOMPOSITION` work. |
+| **Jobs** | Durable units of `IMPLEMENTATION`, `FIX`, or `REVIEW` work. |
 | **Workers** | The only process that claims and executes durable jobs. |
 | **Providers** | Codex and OpenCode adapters with independent coding and review models behind one provider-independent contract. |
 | **Evidence** | PRs, comments, reviews, events, logs, and PostgreSQL history used to understand a run. |

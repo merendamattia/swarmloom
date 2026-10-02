@@ -232,7 +232,7 @@ describe("GitHub client", () => {
 
     const creates = requests.filter((request) => request.method === "POST");
     const updates = requests.filter((request) => request.method === "PATCH");
-    expect(creates).toHaveLength(9);
+    expect(creates).toHaveLength(8);
     expect(updates).toHaveLength(1);
     expect(await Promise.all(creates.map((request) => request.clone().json())))
       .toContainEqual(expect.objectContaining({ name: config.ISSUE_HUMAN_REVIEW_LABEL }));

@@ -1,7 +1,7 @@
-export type JobOutcome = "implemented" | "blocked" | "decomposed" | "requires_decomposition";
+export type JobOutcome = "implemented" | "blocked";
 export type ReviewOutcome = "pass" | "changes_requested";
 
-const JOB_OUTCOMES = new Set<JobOutcome>(["implemented", "blocked", "decomposed", "requires_decomposition"]);
+const JOB_OUTCOMES = new Set<JobOutcome>(["implemented", "blocked"]);
 
 function markerIndex(lines: string[], field: "Outcome" | "Review" | "PR"): number {
   return lines.findIndex((line) => line.trim().toLowerCase().startsWith(`${field.toLowerCase()}:`));
@@ -74,7 +74,7 @@ function evidence(text: string) {
 export function parseJobOutcome(text: string): JobOutcome {
   const outcome = markerLine(text, "Outcome");
   if (!outcome || !JOB_OUTCOMES.has(outcome as JobOutcome)) {
-    throw new Error('Agent response must start with "Outcome: implemented" | "blocked" | "decomposed" | "requires_decomposition"', {
+    throw new Error('Agent response must start with "Outcome: implemented" | "blocked"', {
       cause: evidence(text),
     });
   }

@@ -8,7 +8,6 @@ import {
   CircleX,
   Clock3,
   LoaderCircle,
-  Split,
   TriangleAlert,
 } from "lucide-react";
 import { statusLabel } from "@/lib/format";
@@ -29,8 +28,6 @@ const states: Record<string, { tone: Tone; icon: LucideIcon }> = {
   STALE: { tone: "danger", icon: CircleAlert },
   BLOCKED: { tone: "warning", icon: TriangleAlert },
   CHANGES_REQUESTED: { tone: "warning", icon: TriangleAlert },
-  DECOMPOSED: { tone: "neutral", icon: Split },
-  REQUIRES_DECOMPOSITION: { tone: "warning", icon: TriangleAlert },
   CANCELLED: { tone: "neutral", icon: Ban },
   PENDING: { tone: "neutral", icon: CircleDashed },
   SKIPPED: { tone: "neutral", icon: CircleDashed },

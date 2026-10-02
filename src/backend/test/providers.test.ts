@@ -54,8 +54,8 @@ test("resolves explicit coding and review profiles for every job type", () => {
     reasoningEffort: "high",
   });
   expect(([
-    "IMPLEMENTATION", "FIX", "REVIEW", "DECOMPOSITION",
-  ] as const).map(agentProfileForJobType)).toEqual(["coding", "coding", "review", "coding"]);
+    "IMPLEMENTATION", "FIX", "REVIEW",
+  ] as const).map(agentProfileForJobType)).toEqual(["coding", "coding", "review"]);
   expect(configuredAgent(configuredOpenCode, "coding")).toMatchObject({
     provider: "OPENCODE",
     model: "opencode-go/coding-model",

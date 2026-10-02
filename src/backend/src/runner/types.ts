@@ -3,7 +3,6 @@ import type { EventService } from "../events/service.ts";
 import { createJobWorktree, createReviewWorktree, gcRepository, removeJobWorktree } from "../git/repositories.ts";
 import type { GitHubClient, GitHubIssueContext } from "../github/client.ts";
 import type { AgentProvider, AgentRole } from "../providers/index.ts";
-import type { JobQueue } from "../queue/service.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import type { RoleExecution } from "./diagnostics.ts";
 
@@ -45,7 +44,6 @@ export type RunnerContext = {
   config: Config;
   github: RunnerGitHub;
   events: EventService;
-  queue: Pick<JobQueue, "enqueue">;
   createWorktree: CreateWorktree;
   createReviewWorktree: CreateReviewWorktree;
   readWorktreeHead: ReadWorktreeHead;
