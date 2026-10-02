@@ -28,7 +28,6 @@ integration("event notification policy", () => {
       "JOB_STARTED",
       "JOB_FAILED",
       "JOB_BLOCKED",
-      "JOB_DECOMPOSED",
       "JOB_CANCELLED",
       "JOB_RETRY_REQUESTED",
       "JOB_RESUME_REQUESTED",

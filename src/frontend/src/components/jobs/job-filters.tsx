@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/field";
 import type { JobFilters as Filters, Repositories } from "@/hooks/api";
 
-const statuses = ["QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "COMPLETED", "FAILED", "BLOCKED", "DECOMPOSED", "CANCELLED", "STALE"];
-const jobTypes = ["IMPLEMENTATION", "FIX", "REVIEW", "DECOMPOSITION"];
+const statuses = ["QUEUED", "RUNNING", "WAITING_FOR_QUOTA", "COMPLETED", "FAILED", "BLOCKED", "CANCELLED", "STALE"];
+const jobTypes = ["IMPLEMENTATION", "FIX", "REVIEW"];
 
 export function JobFilters({ filters, repositories, onUpdate, onReset }: {
   filters: Filters;

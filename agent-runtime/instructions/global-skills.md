@@ -1,7 +1,7 @@
 # Globally active skills
 
 These policies are active for every Codex and OpenCode invocation. They are provider-independent
-and apply to implementation, decomposition, review, and repository communication. Repository
+and apply to implementation, review, and repository communication. Repository
 instructions and the project invariants in `global.md` take precedence over generic examples.
 
 ## Conventional commits

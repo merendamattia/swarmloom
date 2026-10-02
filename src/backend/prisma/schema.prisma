@@ -20,6 +20,7 @@ enum JobStatus {
   COMPLETED
   FAILED
   BLOCKED
+  // Historical terminal state; new decomposition jobs are disabled.
   DECOMPOSED
   CANCELLED
   STALE
@@ -29,6 +30,7 @@ enum JobType {
   IMPLEMENTATION
   FIX
   REVIEW
+  // Historical job type; retained so existing job and event history stays readable.
   DECOMPOSITION
 }
 
@@ -250,7 +252,8 @@ model ScanRun {
   successCount       Int         @default(0)
   failureCount       Int         @default(0)
   blockedCount       Int         @default(0)
-  decomposedCount    Int         @default(0)
+  // Historical metric retained for existing scan rows.
+  decomposedCount    Int         @default(0) @ignore
   pullRequestsCount  Int         @default(0)
   reviewsCount       Int         @default(0)
   queueRemaining     Int         @default(0)

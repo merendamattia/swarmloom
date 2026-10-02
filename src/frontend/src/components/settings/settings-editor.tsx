@@ -17,7 +17,6 @@ type SettingsDraft = Omit<SettingsPatch, "githubRepositories" | "scheduleTimezon
   issueWorkingLabel: string;
   issueBlockedLabel: string;
   issueCompletedLabel: string;
-  issueDecomposedLabel: string;
   issueReadyToMergeLabel: string;
   issueHumanReviewLabel: string;
   prReviewRequestedLabel: string;
@@ -49,7 +48,6 @@ function toDraft(settings: Settings, codexOptions: CodexGenerationOptions): Sett
     issueWorkingLabel: settings.issueWorkingLabel,
     issueBlockedLabel: settings.issueBlockedLabel,
     issueCompletedLabel: settings.issueCompletedLabel,
-    issueDecomposedLabel: settings.issueDecomposedLabel,
     issueReadyToMergeLabel: settings.issueReadyToMergeLabel,
     issueHumanReviewLabel: settings.issueHumanReviewLabel,
     prReviewRequestedLabel: settings.prReviewRequestedLabel,
@@ -113,20 +111,20 @@ export function SettingsEditor({ settings, codexOptions }: { settings: Settings;
     <>
       <ActionMessage pending={save.isPending} error={save.error} success={save.isSuccess} pendingText="Saving runtime settings…" successText="Settings saved." variant="toast" />
       <form className="settings-form" onSubmit={submit}>
-        <SettingsSection title="Agent execution" description="Each queued job snapshots its role's provider, model, and reasoning. Codex model and effort choices come from the enabled catalog. Coding covers implementation, fixes, and decomposition; review covers independent pull request reviews.">
+        <SettingsSection title="Agent execution" description="Each queued job snapshots its role's provider, model, and reasoning. Codex model and effort choices come from the enabled catalog. Coding covers implementation and fixes; review covers independent pull request reviews.">
           <div className="settings-grid">
             <Field htmlFor="agent-provider" label="Agent provider"><Select id="agent-provider" value={draft.agentProvider} onChange={(event) => set("agentProvider", event.target.value as SettingsDraft["agentProvider"])}><option value="codex">Codex</option><option value="opencode">OpenCode</option></Select></Field>
             <Field htmlFor="parallel-jobs" label="Parallel jobs"><Input id="parallel-jobs" type="number" min={1} max={20} value={draft.maxParallelJobs} onChange={(event) => set("maxParallelJobs", Number(event.target.value))} /></Field>
             {draft.agentProvider === "codex" ? (
               <>
-                <Field htmlFor="codex-coding-model" label="Coding agent model" description="Used for IMPLEMENTATION, FIX, and DECOMPOSITION jobs."><Select id="codex-coding-model" value={draft.codexCodingModel} onChange={(event) => updateCodexModel("coding", event.target.value)}>{codexOptions.models.map((model) => <option key={model.slug} value={model.slug}>{model.label}</option>)}</Select></Field>
+                <Field htmlFor="codex-coding-model" label="Coding agent model" description="Used for IMPLEMENTATION and FIX jobs."><Select id="codex-coding-model" value={draft.codexCodingModel} onChange={(event) => updateCodexModel("coding", event.target.value)}>{codexOptions.models.map((model) => <option key={model.slug} value={model.slug}>{model.label}</option>)}</Select></Field>
                 <Field htmlFor="codex-coding-reasoning" label="Coding reasoning" description="Only efforts supported by the selected coding model are shown."><Select id="codex-coding-reasoning" value={draft.codexCodingReasoningEffort} onChange={(event) => set("codexCodingReasoningEffort", event.target.value)}>{(modelForSlug(codexOptions, draft.codexCodingModel)?.reasoningEfforts ?? []).map((effort) => <option key={effort.slug} value={effort.slug}>{effort.label}</option>)}</Select></Field>
                 <Field htmlFor="codex-review-model" label="Review agent model" description="Used for REVIEW jobs."><Select id="codex-review-model" value={draft.codexReviewModel} onChange={(event) => updateCodexModel("review", event.target.value)}>{codexOptions.models.map((model) => <option key={model.slug} value={model.slug}>{model.label}</option>)}</Select></Field>
                 <Field htmlFor="codex-review-reasoning" label="Review reasoning" description="Only efforts supported by the selected review model are shown."><Select id="codex-review-reasoning" value={draft.codexReviewReasoningEffort} onChange={(event) => set("codexReviewReasoningEffort", event.target.value)}>{(modelForSlug(codexOptions, draft.codexReviewModel)?.reasoningEfforts ?? []).map((effort) => <option key={effort.slug} value={effort.slug}>{effort.label}</option>)}</Select></Field>
               </>
             ) : (
               <>
-                <Field htmlFor="opencode-coding-model" label="Coding agent model" description="Used for IMPLEMENTATION, FIX, and DECOMPOSITION jobs."><Input id="opencode-coding-model" value={draft.opencodeCodingModel} onChange={(event) => set("opencodeCodingModel", event.target.value)} /></Field>
+                <Field htmlFor="opencode-coding-model" label="Coding agent model" description="Used for IMPLEMENTATION and FIX jobs."><Input id="opencode-coding-model" value={draft.opencodeCodingModel} onChange={(event) => set("opencodeCodingModel", event.target.value)} /></Field>
                 <Field htmlFor="opencode-review-model" label="Review agent model" description="Used for REVIEW jobs."><Input id="opencode-review-model" value={draft.opencodeReviewModel} onChange={(event) => set("opencodeReviewModel", event.target.value)} /></Field>
               </>
             )}
@@ -143,7 +141,7 @@ export function SettingsEditor({ settings, codexOptions }: { settings: Settings;
         <SettingsSection title="Issue labels" description="These labels are synchronized on the configured repositories during startup and scans.">
           <div className="settings-grid">{([
             ["issueReadyLabel", "Ready label"], ["issueWorkingLabel", "Working label"], ["issueBlockedLabel", "Blocked label"],
-            ["issueCompletedLabel", "Done label"], ["issueDecomposedLabel", "Decomposed label"], ["issueReadyToMergeLabel", "Ready to merge label"], ["issueHumanReviewLabel", "Human review label"],
+            ["issueCompletedLabel", "Done label"], ["issueReadyToMergeLabel", "Ready to merge label"], ["issueHumanReviewLabel", "Human review label"],
           ] as const).map(([key, label]) => <Field htmlFor={key} label={label} key={key}><Input id={key} value={draft[key]} onChange={(event) => set(key, event.target.value)} /></Field>)}</div>
         </SettingsSection>
 

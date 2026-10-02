@@ -105,52 +105,48 @@ integration("job runner", () => {
     });
   });
 
-  test("implementation with requires_decomposition queues a DECOMPOSITION job and never opens a PR", async () => {
-    const job = await claimed(issueBase + 1, "IMPLEMENTATION", "ISSUE");
-    const provider = new FakeProvider([success("Outcome: requires_decomposition\nTL;DR: The issue is too broad for one pull request.\nToo broad to fit one PR.", "triage")]);
-    const enqueued: string[] = [];
-    const state = fakeGitHub(job.issueNumber, job.branchName, "c".repeat(40));
-    const runner = createJobRunner({
-      config,
-      provider,
-      github: state,
-      queue: { enqueue: async (id) => { enqueued.push(id); } },
-      createWorktree: async (input) => input.worktreePath,
-    });
+  test("decomposition responses fail implementation without scheduling another job", async () => {
+    for (const [offset, outcome] of ["requires_decomposition", "decomposed"].entries()) {
+      const job = await claimed(issueBase + 1 + offset, "IMPLEMENTATION", "ISSUE");
+      const response = `Outcome: ${outcome}\nTL;DR: The issue needs human intervention.`;
+      const provider = new FakeProvider([success(response, `invalid-${offset}-1`), success(response, `invalid-${offset}-2`)]);
+      const runner = createJobRunner({
+        config,
+        provider,
+        github: fakeGitHub(job.issueNumber, job.branchName, "c".repeat(40)),
+        createWorktree: async (input) => input.worktreePath,
+      });
 
-    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
-    expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("COMPLETED");
-    expect(enqueued).toHaveLength(1);
-    const decomposition = await prisma.job.findUniqueOrThrow({ where: { id: enqueued[0] } });
-    expect(decomposition).toMatchObject({
-      jobType: "DECOMPOSITION",
-      subjectType: "ISSUE",
-      issueNumber: job.issueNumber,
-      status: "QUEUED",
-      provider: job.provider,
-      model: job.model,
-      reasoningEffort: job.reasoningEffort,
-    });
-    expect(state.labels).toEqual(["bug", config.ISSUE_WORKING_LABEL]);
-    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "JOB_COMPLETED" } })).toMatchObject({
-      metadata: expect.objectContaining({ tldr: "The issue is too broad for one pull request." }),
-    });
+      expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
+      expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("FAILED");
+      expect(await prisma.job.count({ where: { repositoryId, issueNumber: job.issueNumber } })).toBe(1);
+    }
   });
 
-  test("decomposition runs a fresh decomposer session and records native child references", async () => {
-    const job = await claimed(issueBase + 2, "DECOMPOSITION", "ISSUE");
-    const provider = new FakeProvider([success("Outcome: decomposed\nTL;DR: Split the issue into two children.\nSplit into two children.", "decomposer")]);
-    const github = fakeGitHub(job.issueNumber, job.branchName, "d".repeat(40));
-    const runner = createJobRunner({ config, provider, github, createWorktree: async (input) => input.worktreePath });
-
-    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
-    expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("DECOMPOSED");
-    expect(provider.calls.map((call) => call.role)).toEqual(["decomposer"]);
-    expect(provider.calls[0]?.context).toContain(`Queue-ready label for actionable children: ${config.ISSUE_READY_LABEL}`);
-    expect(github.labels).toContain(config.ISSUE_DECOMPOSED_LABEL);
-    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "JOB_DECOMPOSED" } })).toMatchObject({
-      metadata: expect.objectContaining({ tldr: "Split the issue into two children." }),
-    });
+  test("decomposition jobs cannot be created through the repository or database", async () => {
+    const input: Parameters<typeof jobs.tryCreateQueued>[0] = {
+      repositoryId,
+      environment,
+      jobType: "IMPLEMENTATION",
+      subjectType: "ISSUE",
+      issueNumber: issueBase + 2000,
+      issueTitle: "Legacy issue",
+      issueUrl: `https://github.com/acme/runner/issues/${issueBase + 2000}`,
+      issueBody: "Acceptance criteria",
+      branchName: `agent/issue-${issueBase + 2000}`,
+      baselineCommit: "a".repeat(40),
+      provider: "CODEX",
+      model: "gpt-5.6-luna",
+    };
+    await expect(jobs.tryCreateQueued({ ...input, jobType: "DECOMPOSITION" as typeof input.jobType })).rejects.toThrow("no longer supported");
+    let rejectedByDatabase = false;
+    try {
+      await prisma.job.create({ data: { ...input, jobType: "DECOMPOSITION" } });
+    } catch {
+      rejectedByDatabase = true;
+    }
+    expect(rejectedByDatabase).toBe(true);
+    expect(await prisma.job.count({ where: { repositoryId, issueNumber: input.issueNumber } })).toBe(0);
   });
 
   test("records blocked outcomes and retains failed issue ownership for recovery", async () => {
@@ -1625,7 +1621,7 @@ integration("job runner", () => {
 
   async function claimed(
     issueNumber: number,
-    jobType: "IMPLEMENTATION" | "FIX" | "REVIEW" | "DECOMPOSITION",
+    jobType: "IMPLEMENTATION" | "FIX" | "REVIEW",
     subjectType: "ISSUE" | "PULL_REQUEST",
     extra: Partial<Parameters<typeof jobs.tryCreateQueued>[0]> = {},
   ) {

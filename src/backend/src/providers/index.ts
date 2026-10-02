@@ -9,13 +9,12 @@ export function createAgentProvider(name: "codex" | "opencode", usage?: Provider
 }
 
 export type AgentProfile = "coding" | "review";
-export type AgentJobType = "IMPLEMENTATION" | "FIX" | "REVIEW" | "DECOMPOSITION";
+export type AgentJobType = "IMPLEMENTATION" | "FIX" | "REVIEW";
 
 const profileByJobType: Record<AgentJobType, AgentProfile> = {
   IMPLEMENTATION: "coding",
   FIX: "coding",
   REVIEW: "review",
-  DECOMPOSITION: "coding",
 };
 
 export function agentProfileForJobType(jobType: AgentJobType) {

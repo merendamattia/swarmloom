@@ -44,7 +44,6 @@ const environmentSchema = z.object({
   ISSUE_WORKING_LABEL: z.string().min(1).default("agent:working"),
   ISSUE_BLOCKED_LABEL: z.string().min(1).default("agent:blocked"),
   ISSUE_COMPLETED_LABEL: z.string().min(1).default("agent:done"),
-  ISSUE_DECOMPOSED_LABEL: z.string().min(1).default("agent:decomposed"),
   ISSUE_READY_TO_MERGE_LABEL: z.string().min(1).default("agent:ready-to-merge"),
   ISSUE_HUMAN_REVIEW_LABEL: z.string().min(1).default("agent:human-review"),
   PR_REVIEW_REQUESTED_LABEL: z.string().min(1).default("agent:review-requested"),
