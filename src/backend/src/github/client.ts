@@ -314,7 +314,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
       const query = new URLSearchParams({ state: "closed", base, sort: "updated", direction: "desc", per_page: "100", page: String(page) });
       const batch = z.array(pullRequestListSchema).parse(await request(`/repos/${fullName}/pulls?${query}`));
       for (const pullRequest of batch) {
-        if (pullRequest.merged_at && pullRequest.merged_at > since) {
+        if (pullRequest.merged_at && pullRequest.merged_at >= since) {
           merged.push({ number: pullRequest.number, body: pullRequest.body ?? "", mergedAt: pullRequest.merged_at });
         }
       }

@@ -48,7 +48,8 @@ export async function promoteDevelop(fullName: string, { github, managedIssue, w
 
   const lastPromotion = await github.lastMergedPromotionDate(fullName);
   const since = lastPromotion && lastPromotion > mergeBaseDate ? lastPromotion : mergeBaseDate;
-  const merged = await github.listMergedPullRequests(fullName, "develop", since);
+  const merged = (await github.listMergedPullRequests(fullName, "develop", since))
+    .filter((pullRequest) => lastPromotion === null || pullRequest.mergedAt > lastPromotion);
   if (merged.length === 0) return;
   const issues = new Set<number>();
   for (const pullRequest of merged) {

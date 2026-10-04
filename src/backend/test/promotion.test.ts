@@ -12,9 +12,9 @@ describe("develop promotion", () => {
       listMergedPullRequests: async (_repo: string, _base: string, since: string) => {
         cutoffs.push(since);
         return [
-          { number: 11, body: "Closes #11", mergedAt: "2026-10-02T00:00:00Z" },
+          { number: 11, body: "Closes #11", mergedAt: "2026-10-03T00:00:00Z" },
           { number: 12, body: "Closes #12", mergedAt: "2026-10-04T00:00:00Z" },
-        ].filter((pullRequest) => pullRequest.mergedAt > since);
+        ].filter((pullRequest) => pullRequest.mergedAt >= since);
       },
       findPromotionPullRequest: async () => null,
       createPromotionPullRequest: async (_repo: string, body: string) => { createdBodies.push(body); },
