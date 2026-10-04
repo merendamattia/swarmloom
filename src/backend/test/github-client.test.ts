@@ -4,6 +4,30 @@ import { createGitHubClient } from "../src/github/client.ts";
 import { agentLabelDefinitions } from "../src/github/labels.ts";
 
 describe("GitHub client", () => {
+  test("compares branches and finds only an open in-repository develop promotion", async () => {
+    const requests: Request[] = [];
+    const client = createGitHubClient({ token: "secret-token", fetch: async (input, init) => {
+      const request = new Request(input, init);
+      requests.push(request);
+      if (request.url.includes("/compare/")) return Response.json({ ahead_by: 1, merge_base_commit: { commit: { committer: { date: "2026-10-01T00:00:00Z" } } } });
+      if (request.url.includes("state=closed")) return Response.json([{
+        ...pullRequest(8), merged_at: "2026-10-02T00:00:00Z", updated_at: "2026-10-02T00:00:00Z",
+      }]);
+      return Response.json([
+        { ...pullRequest(9), head: { ref: "develop", repo: { full_name: "other/app" } } },
+        { ...pullRequest(10), head: { ref: "develop", repo: { full_name: "acme/app" } } },
+      ]);
+    } });
+
+    expect(await client.compareBranches("acme/app", "main", "develop"))
+      .toEqual({ aheadBy: 1, mergeBaseDate: "2026-10-01T00:00:00Z" });
+    expect(await client.listMergedPullRequests("acme/app", "develop", "2026-10-01T00:00:00Z"))
+      .toEqual([{ number: 8, body: "Closes #7", mergedAt: "2026-10-02T00:00:00Z" }]);
+    expect(await client.findPromotionPullRequest("acme/app")).toEqual({ number: 10, body: "Closes #7" });
+    expect(requests[1].url).toContain("base=develop");
+    expect(requests[2].url).toContain("base=main");
+  });
+
   test("lists open pull requests by workflow label", async () => {
     const requests: Request[] = [];
     const client = createGitHubClient({

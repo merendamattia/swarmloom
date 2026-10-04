@@ -16,8 +16,11 @@ const pullRequestListSchema = z.object({
   html_url: z.url(),
   title: z.string(),
   base: z.object({ ref: z.string() }),
-  head: z.object({ ref: z.string() }),
   body: z.string().nullable(),
+  merged_at: z.string().nullable().optional(),
+  updated_at: z.string().optional(),
+  state: z.string().optional(),
+  head: z.object({ ref: z.string(), repo: z.object({ full_name: z.string() }).nullable().optional() }),
 });
 const pullRequestSchema = pullRequestListSchema.extend({
   additions: z.number().int().nonnegative(),
@@ -25,7 +28,11 @@ const pullRequestSchema = pullRequestListSchema.extend({
   changed_files: z.number().int().nonnegative(),
   state: z.string(),
   merged: z.boolean().nullable().optional(),
-  head: z.object({ ref: z.string(), sha: z.string() }),
+  head: z.object({ ref: z.string(), sha: z.string(), repo: z.object({ full_name: z.string() }).nullable().optional() }),
+});
+const comparisonSchema = z.object({
+  ahead_by: z.number().int().nonnegative(),
+  merge_base_commit: z.object({ commit: z.object({ committer: z.object({ date: z.string() }) }) }),
 });
 const labelListSchema = z.array(z.union([z.string(), z.object({ name: z.string().nullable() })]));
 const issueCommentSchema = z.object({
@@ -272,6 +279,47 @@ export function createGitHubClient(options: GitHubClientOptions) {
     };
   }
 
+  async function compareBranches(fullName: string, base: string, head: string) {
+    const comparison = comparisonSchema.parse(await request(`/repos/${fullName}/compare/${base}...${head}`));
+    return { aheadBy: comparison.ahead_by, mergeBaseDate: comparison.merge_base_commit.commit.committer.date };
+  }
+
+  async function listMergedPullRequests(fullName: string, base: string, since: string) {
+    const merged: Array<{ number: number; body: string; mergedAt: string }> = [];
+    for (let page = 1; ; page += 1) {
+      const query = new URLSearchParams({ state: "closed", base, sort: "updated", direction: "desc", per_page: "100", page: String(page) });
+      const batch = z.array(pullRequestListSchema).parse(await request(`/repos/${fullName}/pulls?${query}`));
+      for (const pullRequest of batch) {
+        if (pullRequest.merged_at && pullRequest.merged_at >= since) {
+          merged.push({ number: pullRequest.number, body: pullRequest.body ?? "", mergedAt: pullRequest.merged_at });
+        }
+      }
+      const oldestUpdate = batch.at(-1)?.updated_at;
+      if (batch.length < 100 || (oldestUpdate !== undefined && oldestUpdate < since)) return merged;
+    }
+  }
+
+  async function findPromotionPullRequest(fullName: string) {
+    for (let page = 1; ; page += 1) {
+      const query = new URLSearchParams({ state: "open", base: "main", per_page: "100", page: String(page) });
+      const batch = z.array(pullRequestListSchema).parse(await request(`/repos/${fullName}/pulls?${query}`));
+      const promotion = batch.find((pullRequest) => pullRequest.head.ref === "develop" && pullRequest.head.repo?.full_name === fullName);
+      if (promotion) return { number: promotion.number, body: promotion.body ?? "" };
+      if (batch.length < 100) return null;
+    }
+  }
+
+  async function createPromotionPullRequest(fullName: string, body: string) {
+    await request(`/repos/${fullName}/pulls`, {
+      method: "POST",
+      body: JSON.stringify({ title: "chore: promote develop to main", head: "develop", base: "main", body }),
+    });
+  }
+
+  async function updatePullRequestBody(fullName: string, number: number, body: string) {
+    await request(`/repos/${fullName}/pulls/${number}`, { method: "PATCH", body: JSON.stringify({ body }) });
+  }
+
   async function getPullRequestDiff(fullName: string, pullRequestNumber: number) {
     return await request(`/repos/${fullName}/pulls/${pullRequestNumber}`, {
       headers: { Accept: "application/vnd.github.v3.diff" },
@@ -398,6 +446,11 @@ export function createGitHubClient(options: GitHubClientOptions) {
     getIssue,
     findIssueByMarker,
     getPullRequest,
+    compareBranches,
+    listMergedPullRequests,
+    findPromotionPullRequest,
+    createPromotionPullRequest,
+    updatePullRequestBody,
     getPullRequestDiff,
     getPullRequestLabels,
     setPullRequestLabels,
