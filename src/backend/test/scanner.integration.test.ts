@@ -27,7 +27,7 @@ integration("issue scanner", () => {
     GITHUB_TOKEN: "test-token",
     GITHUB_REPOSITORIES: "acme/app,acme/main-only",
     AGENT_PROVIDER: "codex",
-    CODEX_CODING_MODEL: "gpt-5.6-sol",
+    CODEX_CODING_MODEL: "gpt-6.1-sol",
     CODEX_REVIEW_MODEL: "gpt-6-astra",
     CODEX_CODING_REASONING_EFFORT: "low",
     CODEX_REVIEW_REASONING_EFFORT: "high",
@@ -141,7 +141,7 @@ integration("issue scanner", () => {
       issueBody: "Use PostgreSQL",
       baselineCommit: "b".repeat(40),
       provider: "CODEX",
-      model: "gpt-5.6-sol",
+      model: "gpt-6.1-sol",
       reasoningEffort: "low",
       scanRunId: scan.id,
     });
@@ -310,7 +310,7 @@ integration("pull request scanner", () => {
     GITHUB_TOKEN: "test-token",
     GITHUB_REPOSITORIES: "acme/app",
     AGENT_PROVIDER: "codex",
-    CODEX_CODING_MODEL: "gpt-5.6-sol",
+    CODEX_CODING_MODEL: "gpt-6.1-sol",
     CODEX_REVIEW_MODEL: "gpt-6-astra",
     CODEX_CODING_REASONING_EFFORT: "low",
     CODEX_REVIEW_REASONING_EFFORT: "high",
@@ -471,12 +471,12 @@ integration("pull request scanner", () => {
       select: { jobType: true, provider: true, model: true, reasoningEffort: true },
     });
     expect(beforeSettingsChange).toEqual(expect.arrayContaining([
-      expect.objectContaining({ jobType: "FIX", provider: "CODEX", model: "gpt-5.6-sol", reasoningEffort: "low" }),
+      expect.objectContaining({ jobType: "FIX", provider: "CODEX", model: "gpt-6.1-sol", reasoningEffort: "low" }),
       expect.objectContaining({ jobType: "REVIEW", provider: "CODEX", model: "gpt-6-astra", reasoningEffort: "high" }),
     ]));
 
-    config.CODEX_CODING_MODEL = "gpt-5.6-terra";
-    config.CODEX_REVIEW_MODEL = "gpt-5.6-luna";
+    config.CODEX_CODING_MODEL = "gpt-6-luna";
+    config.CODEX_REVIEW_MODEL = "gpt-6.1-sol";
     config.CODEX_CODING_REASONING_EFFORT = "none";
     config.CODEX_REVIEW_REASONING_EFFORT = "max";
     const afterSettingsChange = await prisma.job.findMany({
@@ -486,7 +486,7 @@ integration("pull request scanner", () => {
     });
     expect(afterSettingsChange).toEqual(beforeSettingsChange);
 
-    config.CODEX_CODING_MODEL = "gpt-5.6-sol";
+    config.CODEX_CODING_MODEL = "gpt-6.1-sol";
     config.CODEX_REVIEW_MODEL = "gpt-6-astra";
     config.CODEX_CODING_REASONING_EFFORT = "low";
     config.CODEX_REVIEW_REASONING_EFFORT = "high";

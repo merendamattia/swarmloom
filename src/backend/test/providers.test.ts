@@ -26,7 +26,7 @@ const configured = parseConfig({
   GITHUB_TOKEN: "test-token",
   GITHUB_REPOSITORIES: "acme/api",
   AGENT_PROVIDER: "codex",
-  CODEX_CODING_MODEL: "gpt-5.6-sol",
+  CODEX_CODING_MODEL: "gpt-6.1-sol",
   CODEX_REVIEW_MODEL: "gpt-6-astra",
   CODEX_CODING_REASONING_EFFORT: "low",
   CODEX_REVIEW_REASONING_EFFORT: "high",
@@ -45,7 +45,7 @@ const configuredOpenCode = parseConfig({
 test("resolves explicit coding and review profiles for every job type", () => {
   expect(configuredAgent(configured, "coding")).toMatchObject({
     provider: "CODEX",
-    model: "gpt-5.6-sol",
+    model: "gpt-6.1-sol",
     reasoningEffort: "low",
   });
   expect(configuredAgent(configured, "review")).toMatchObject({

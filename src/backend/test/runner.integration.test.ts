@@ -136,7 +136,7 @@ integration("job runner", () => {
       branchName: `agent/issue-${issueBase + 2000}`,
       baselineCommit: "a".repeat(40),
       provider: "CODEX",
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
     };
     await expect(jobs.tryCreateQueued({ ...input, jobType: "DECOMPOSITION" as typeof input.jobType })).rejects.toThrow("no longer supported");
     let rejectedByDatabase = false;
@@ -183,7 +183,7 @@ integration("job runner", () => {
       stage: "implementation",
       role: "issue-worker",
       provider: "codex",
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       sessionId: "failed",
       exitCode: 2,
       stderr: "provider failed",
@@ -377,7 +377,7 @@ integration("job runner", () => {
         stage: "parser",
         role: "issue-worker",
         provider: "codex",
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         sessionId: "parser-second",
         exitCode: 0,
         finalOutput: "Still no outcome marker: [REDACTED] present.",
@@ -1637,7 +1637,7 @@ integration("job runner", () => {
       branchName: `agent/issue-${issueNumber}`,
       baselineCommit: "a".repeat(40),
       provider: "CODEX",
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       reasoningEffort: "max",
       ...extra,
     });
