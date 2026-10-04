@@ -1,3 +1,18 @@
+# [1.19.0](https://github.com/merendamattia/swarmloom/compare/v1.18.1...v1.19.0) (2026-10-04)
+
+
+### Bug Fixes
+
+* **promotion:** include same-second develop merges ([c95cd8e](https://github.com/merendamattia/swarmloom/commit/c95cd8e6b7786f6714b4aabee7faa610371759e8))
+* **promotion:** retain merge-base second source PRs ([820afb2](https://github.com/merendamattia/swarmloom/commit/820afb2061a43b852ff57f941ff7e3ef7997ee4b))
+* **promotion:** skip already promoted develop changes ([5ab7cd6](https://github.com/merendamattia/swarmloom/commit/5ab7cd6c54d67f5f8223ec6bd9b3feb8808cb40e))
+
+
+### Features
+
+* **codex:** replace legacy models with GPT-6.1 Sol ([1a8cdf4](https://github.com/merendamattia/swarmloom/commit/1a8cdf431dca09bc53da30f20ae79d5ef90b5c4e))
+* **promotion:** maintain develop to main pull request ([af9c685](https://github.com/merendamattia/swarmloom/commit/af9c685c581380850d6cd2762de230d48775dd9b))
+
 ## [1.18.1](https://github.com/merendamattia/swarmloom/compare/v1.18.0...v1.18.1) (2026-10-04)
 
 
