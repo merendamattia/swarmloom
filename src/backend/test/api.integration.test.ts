@@ -70,7 +70,7 @@ integration("operations API", () => {
         branchName: "agent/issue-99",
         baselineCommit: "a".repeat(40),
         provider: "CODEX",
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         reasoningEffort: "high",
       },
     });
@@ -234,7 +234,7 @@ integration("operations API", () => {
         pullRequestNumber: 199,
         worktreePath,
         provider: "CODEX",
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         quotaWaitStartedAt: new Date(),
         quotaResetAt: new Date(Date.now() + 60_000),
         quotaWindow: "codex:primary",
@@ -246,7 +246,7 @@ integration("operations API", () => {
       data: {
         jobId: waiting.id,
         provider: "CODEX",
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         status: "RUNNING",
         startedAt: new Date(Date.now() - 5_000),
       },
@@ -289,7 +289,7 @@ integration("operations API", () => {
         branchName: `agent/issue-${200 + index}`,
         baselineCommit: "d".repeat(40),
         provider: "CODEX" as const,
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         createdAt: new Date(Date.UTC(2100, 0, index + 1)),
       })),
     });
@@ -312,7 +312,7 @@ integration("operations API", () => {
         branchName: "agent/issue-100",
         baselineCommit: "b".repeat(40),
         provider: "CODEX",
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         completedAt: new Date(Date.now() - 1_000),
         errorMessage: "The old failure was handled",
       },
@@ -349,7 +349,7 @@ integration("operations API", () => {
         branchName: "agent/issue-101",
         baselineCommit: "c".repeat(40),
         provider: "CODEX",
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         completedAt: new Date(Date.now() + 1_000),
       },
     });
@@ -375,7 +375,7 @@ integration("operations API", () => {
       data: {
         jobId,
         provider: "CODEX",
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         status: "RUNNING",
         claimToken: "internal-review-claim-token",
       },
@@ -403,7 +403,7 @@ integration("operations API", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.models.map((model: { slug: string }) => model.slug)).toEqual([
-      "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+      "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra",
     ]);
     expect(body.models.find((model: { slug: string }) => model.slug === "gpt-6-astra")).toMatchObject({
       defaultReasoningEffort: "max",
@@ -411,10 +411,12 @@ integration("operations API", () => {
         { slug: "low" }, { slug: "medium" }, { slug: "high" }, { slug: "xhigh" }, { slug: "max", isDefault: true },
       ],
     });
-    expect(body.models.find((model: { slug: string }) => model.slug === "gpt-6-sol")).toMatchObject({
-      defaultReasoningEffort: "max",
+    expect(body.models.find((model: { slug: string }) => model.slug === "gpt-6.1-sol")).toMatchObject({
+      label: "GPT-6.1 Sol",
+      defaultReasoningEffort: "medium",
       reasoningEfforts: [
-        { slug: "none" }, { slug: "low" }, { slug: "medium" }, { slug: "high" }, { slug: "xhigh" }, { slug: "max", isDefault: true },
+        { slug: "none" }, { slug: "low" }, { slug: "medium", isDefault: true },
+        { slug: "high" }, { slug: "xhigh" }, { slug: "max" },
       ],
     });
     expect(body.models.find((model: { slug: string }) => model.slug === "gpt-6-luna")).toMatchObject({
@@ -423,11 +425,6 @@ integration("operations API", () => {
         { slug: "none" }, { slug: "low" }, { slug: "medium" }, { slug: "high" }, { slug: "xhigh" }, { slug: "max", isDefault: true },
       ],
     });
-    const sol = body.models.find((model: { slug: string }) => model.slug === "gpt-5.6-sol");
-    expect(sol.reasoningEfforts.map((effort: { slug: string }) => effort.slug)).toEqual([
-      "none", "low", "medium", "high", "xhigh", "max",
-    ]);
-    expect(sol.reasoningEfforts.find((effort: { slug: string }) => effort.slug === "max")).toMatchObject({ isDefault: true });
   });
 
   test("rejects invalid Codex model and effort combinations", async () => {
@@ -445,7 +442,7 @@ integration("operations API", () => {
     const unknownModel = await app.request("/api/settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ codexCodingModel: "gpt-5.6-unknown", codexCodingReasoningEffort: "max" }),
+      body: JSON.stringify({ codexCodingModel: "gpt-6-sol", codexCodingReasoningEffort: "max" }),
     });
     expect(unknownModel.status).toBe(400);
   });
@@ -458,7 +455,7 @@ integration("operations API", () => {
         scheduleCron: "*/30 * * * *",
         maxParallelJobs: 2,
         createDiagnosticIssues: true,
-        codexCodingModel: "gpt-5.6-sol",
+        codexCodingModel: "gpt-6.1-sol",
         codexReviewModel: "gpt-6-astra",
         codexCodingReasoningEffort: "low",
         codexReviewReasoningEffort: "high",
@@ -473,14 +470,14 @@ integration("operations API", () => {
     expect(body).not.toContain("telegram-chat-id");
     expect(JSON.parse(body)).toMatchObject({
       createDiagnosticIssues: true,
-      codexCodingModel: "gpt-5.6-sol",
+      codexCodingModel: "gpt-6.1-sol",
       codexReviewModel: "gpt-6-astra",
       codexCodingReasoningEffort: "low",
       codexReviewReasoningEffort: "high",
     });
     expect(await prisma.runtimeSetting.findMany({ where: { environment: "test" } }))
       .toEqual(expect.arrayContaining([
-        expect.objectContaining({ key: "CODEX_CODING_MODEL", value: "gpt-5.6-sol" }),
+        expect.objectContaining({ key: "CODEX_CODING_MODEL", value: "gpt-6.1-sol" }),
         expect.objectContaining({ key: "CODEX_REVIEW_MODEL", value: "gpt-6-astra" }),
         expect.objectContaining({ key: "CODEX_CODING_REASONING_EFFORT", value: "low" }),
         expect.objectContaining({ key: "CODEX_REVIEW_REASONING_EFFORT", value: "high" }),
@@ -568,7 +565,7 @@ integration("operations API", () => {
         pullRequestUrl: "https://github.com/acme/api-test/pull/456",
         headSha: "a".repeat(40),
         provider: "CODEX",
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         claimToken: "stale-claim",
         worktreePath: staleWorktreePath,
         activePrKey: `${repositoryId}:${managed.id}:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:REVIEW`,
@@ -617,7 +614,7 @@ integration("operations API", () => {
           headSha: "a".repeat(40),
           activePrKey: `${repositoryId}:changed-head-${index}`,
           provider: "CODEX",
-          model: "gpt-5.6-luna",
+          model: "gpt-6-luna",
         },
       });
       pullRequestLabels.splice(0, pullRequestLabels.length, "bug");
@@ -657,7 +654,7 @@ integration("operations API", () => {
         pullRequestUrl: "https://github.com/acme/api-test/pull/456",
         headSha: "d".repeat(40),
         provider: "CODEX",
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
       },
     });
     pullRequestHead = "d".repeat(40);
@@ -698,7 +695,7 @@ integration("operations API", () => {
           pullRequestUrl: "https://github.com/acme/api-test/pull/456",
           headSha: "a".repeat(40),
           provider: "CODEX",
-          model: "gpt-5.6-luna",
+          model: "gpt-6-luna",
           worktreePath: retainedWorktree,
           activePrKey: `${repositoryId}:closed-pr-${current.issueNumber}`,
         },
@@ -750,7 +747,7 @@ integration("operations API", () => {
         worktreePath: missingPath,
         sessionId: "retained-session",
         provider: "CODEX",
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
       },
     });
 
@@ -782,7 +779,7 @@ integration("operations API", () => {
         baselineCommit: "b".repeat(40),
         sessionId: "migrated-session",
         provider: "CODEX",
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
       },
     });
 
@@ -824,7 +821,7 @@ integration("operations API", () => {
           sessionId: `missing-worktree-session-${current.issueNumber}`,
           activePrKey: `${repositoryId}:missing-worktree-${current.issueNumber}`,
           provider: "CODEX",
-          model: "gpt-5.6-luna",
+          model: "gpt-6-luna",
         },
       });
       pullRequestHead = current.headSha;
@@ -1119,7 +1116,7 @@ integration("operations API", () => {
         branchName: "agent/issue-55",
         baselineCommit: "c".repeat(40),
         provider: "CODEX",
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         worktreePath: retainedWorktree,
       },
     });
@@ -1130,7 +1127,7 @@ integration("operations API", () => {
       data: {
         jobId: obsoleteJob.id,
         provider: "CODEX",
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         status: "PASSED",
         response: "ok",
       },
@@ -1183,7 +1180,7 @@ integration("operations API", () => {
         branchName: "agent/issue-56",
         baselineCommit: "c".repeat(40),
         provider: "CODEX",
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
       },
     });
     const claim = await jobs.claim(job.id, "test", "delete-race-worker");
@@ -1224,7 +1221,7 @@ integration("operations API", () => {
         branchName: "agent/issue-77",
         baselineCommit: "d".repeat(40),
         provider: "CODEX",
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
       },
     });
 

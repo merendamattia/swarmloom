@@ -4,6 +4,7 @@ import { decryptSetting, encryptSetting } from "../src/core/settings-crypto.ts";
 import {
   applyRuntimeSettings,
   configEnvironment,
+  migrateLegacyCodexConfig,
   parseRuntimeSettingsPatch,
   telegramBootstrapValues,
 } from "../src/core/runtime-settings.ts";
@@ -19,13 +20,40 @@ const base = parseConfig({
 });
 
 describe("runtime settings", () => {
+  test("moves removed bootstrap models to Sol 6.1 and medium without changing valid selections", () => {
+    for (const legacyModel of ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-sol"]) {
+      const migrated = migrateLegacyCodexConfig(parseConfig({
+        ...configEnvironment(base),
+        CODEX_CODING_MODEL: legacyModel,
+        CODEX_CODING_REASONING_EFFORT: "max",
+        CODEX_REVIEW_MODEL: "gpt-6-astra",
+        CODEX_REVIEW_REASONING_EFFORT: "high",
+      }));
+      expect(migrated.CODEX_CODING_MODEL).toBe("gpt-6.1-sol");
+      expect(migrated.CODEX_CODING_REASONING_EFFORT).toBe("medium");
+      expect(migrated.CODEX_REVIEW_MODEL).toBe("gpt-6-astra");
+      expect(migrated.CODEX_REVIEW_REASONING_EFFORT).toBe("high");
+    }
+    const reviewMigrated = migrateLegacyCodexConfig(parseConfig({
+      ...configEnvironment(base),
+      CODEX_CODING_MODEL: "gpt-6-luna",
+      CODEX_CODING_REASONING_EFFORT: "low",
+      CODEX_REVIEW_MODEL: "gpt-6-sol",
+      CODEX_REVIEW_REASONING_EFFORT: "max",
+    }));
+    expect(reviewMigrated.CODEX_CODING_MODEL).toBe("gpt-6-luna");
+    expect(reviewMigrated.CODEX_CODING_REASONING_EFFORT).toBe("low");
+    expect(reviewMigrated.CODEX_REVIEW_MODEL).toBe("gpt-6.1-sol");
+    expect(reviewMigrated.CODEX_REVIEW_REASONING_EFFORT).toBe("medium");
+  });
+
   test("applies validated settings without changing technical configuration", () => {
     const config = applyRuntimeSettings(base, {
       SCHEDULE_CRON: "*/5 * * * *",
       MAX_PARALLEL_JOBS: "3",
       AGENT_PROVIDER: "opencode",
       OPENCODE_REVIEW_MODEL: "opencode-go/review-model",
-      CODEX_CODING_MODEL: "gpt-5.6-sol",
+      CODEX_CODING_MODEL: "gpt-6.1-sol",
       CODEX_REVIEW_MODEL: "gpt-6-astra",
       CODEX_CODING_REASONING_EFFORT: "low",
       CODEX_REVIEW_REASONING_EFFORT: "high",
@@ -39,7 +67,7 @@ describe("runtime settings", () => {
     expect(config.MAX_PARALLEL_JOBS).toBe(3);
     expect(config.AGENT_PROVIDER).toBe("opencode");
     expect(config.OPENCODE_REVIEW_MODEL).toBe("opencode-go/review-model");
-    expect(config.CODEX_CODING_MODEL).toBe("gpt-5.6-sol");
+    expect(config.CODEX_CODING_MODEL).toBe("gpt-6.1-sol");
     expect(config.CODEX_REVIEW_MODEL).toBe("gpt-6-astra");
     expect(config.CODEX_CODING_REASONING_EFFORT).toBe("low");
     expect(config.CODEX_REVIEW_REASONING_EFFORT).toBe("high");

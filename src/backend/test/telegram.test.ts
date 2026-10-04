@@ -42,7 +42,7 @@ describe("Telegram notifier", () => {
   test("appends compact pull request details to opened events", async () => {
     const request = await telegramRequest({
       type: "PR_OPENED",
-      message: "Completed acme/api#7 with PR #8 using codex/gpt-5.6-luna in 120s",
+      message: "Completed acme/api#7 with PR #8 using codex/gpt-6-luna in 120s",
       id: "event-3",
       jobId: "job-3",
       metadata: {

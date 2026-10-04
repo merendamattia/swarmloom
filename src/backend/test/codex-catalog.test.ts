@@ -8,14 +8,14 @@ import {
 const catalog: CodexGenerationOptions = {
   models: [
     {
-      slug: "gpt-5.6-luna",
-      label: "GPT-5.6 Luna",
-      description: "GPT-5.6 Luna Codex model.",
-      defaultReasoningEffort: "max",
+      slug: "gpt-6.1-sol",
+      label: "GPT-6.1 Sol",
+      description: "GPT-6.1 Sol Codex model.",
+      defaultReasoningEffort: "medium",
       reasoningEfforts: [
         { slug: "none", label: "None", isDefault: false },
         { slug: "high", label: "High", isDefault: false },
-        { slug: "max", label: "Max", isDefault: true },
+        { slug: "medium", label: "Medium", isDefault: true },
       ],
     },
     {
@@ -43,9 +43,9 @@ describe("Codex catalog validation", () => {
   });
 
   test("accepts a supported model and effort pair", () => {
-    expect(validateCodexSelection(catalog, "gpt-5.6-luna", "high", "coding")).toEqual({
-      model: "gpt-5.6-luna",
-      reasoningEffort: "high",
+    expect(validateCodexSelection(catalog, "gpt-6.1-sol", "medium", "coding")).toEqual({
+      model: "gpt-6.1-sol",
+      reasoningEffort: "medium",
     });
   });
 
@@ -55,7 +55,9 @@ describe("Codex catalog validation", () => {
   });
 
   test("rejects models outside the enabled catalog", () => {
-    expect(() => validateCodexSelection(catalog, "gpt-5.6-unknown", "max", "coding"))
-      .toThrow('Codex coding model "gpt-5.6-unknown" is not enabled');
+    for (const model of ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-sol"]) {
+      expect(() => validateCodexSelection(catalog, model, "medium", "coding"))
+        .toThrow(`Codex coding model "${model}" is not enabled`);
+    }
   });
 });

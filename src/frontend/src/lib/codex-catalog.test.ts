@@ -4,14 +4,14 @@ import { reasoningEffortForModel, type CodexCatalog } from "./codex-catalog";
 const catalog: CodexCatalog = {
   models: [
     {
-      slug: "gpt-5.6-luna",
-      label: "GPT-5.6 Luna",
-      description: "GPT-5.6 Luna Codex model.",
-      defaultReasoningEffort: "max",
+      slug: "gpt-6.1-sol",
+      label: "GPT-6.1 Sol",
+      description: "GPT-6.1 Sol Codex model.",
+      defaultReasoningEffort: "medium",
       reasoningEfforts: [
         { slug: "none", label: "None", isDefault: false },
         { slug: "high", label: "High", isDefault: false },
-        { slug: "max", label: "Max", isDefault: true },
+        { slug: "medium", label: "Medium", isDefault: true },
       ],
     },
     {
@@ -29,10 +29,11 @@ const catalog: CodexCatalog = {
 
 describe("Codex Settings selectors", () => {
   test("preserves a reasoning effort supported by the new model", () => {
-    expect(reasoningEffortForModel(catalog, "gpt-5.6-luna", "high")).toBe("high");
+    expect(reasoningEffortForModel(catalog, "gpt-6.1-sol", "high")).toBe("high");
   });
 
   test("switches to the selected model default when the effort is unsupported", () => {
     expect(reasoningEffortForModel(catalog, "gpt-6-astra", "none")).toBe("max");
+    expect(reasoningEffortForModel(catalog, "gpt-6.1-sol", "invalid")).toBe("medium");
   });
 });

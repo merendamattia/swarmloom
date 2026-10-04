@@ -126,7 +126,7 @@ integration("worker quota admission", () => {
       branchName: `agent/issue-${issueNumber}`,
       baselineCommit: "a".repeat(40),
       provider: "CODEX" as const,
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       reasoningEffort: "max",
     };
   }

@@ -4,6 +4,7 @@ import { decryptSetting, encryptSetting } from "./settings-crypto.ts";
 import {
   applyRuntimeSettings,
   configEnvironment,
+  migrateLegacyCodexConfig,
   parseRuntimeSettingsPatch,
   patchToEnvironment,
   runtimeSettingDefinitions,
@@ -30,6 +31,9 @@ export function createSettingsService(config: Config) {
   }
 
   async function initialize() {
+    const migrated = migrateLegacyCodexConfig(config);
+    Object.assign(config, migrated);
+    Object.assign(environmentBase, configEnvironment(migrated));
     const rows = await settingsRepository.list(config.APP_ENV);
     const existing = new Set(rows.map((row) => row.key));
     const values = runtimeSettingValues(config);
