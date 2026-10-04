@@ -114,6 +114,13 @@ async function markState(repositoryId: string, prNumber: number, state: ManagedP
   });
 }
 
+async function withPromotionLock(repositoryId: string, action: () => Promise<void>) {
+  await prisma.$transaction(async (transaction) => {
+    await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('swarmloom-promotion'), hashtext(${repositoryId}))`;
+    await action();
+  }, { timeout: 120_000 });
+}
+
 export const managedPullRequestRepository = {
   upsertFromImplementation,
   findOpen,
@@ -125,4 +132,5 @@ export const managedPullRequestRepository = {
   block,
   unblock,
   markState,
+  withPromotionLock,
 };

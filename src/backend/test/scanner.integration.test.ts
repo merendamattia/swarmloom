@@ -7,6 +7,16 @@ import { MissingDevelopBranchError } from "../src/git/repositories.ts";
 import { createJobQueue, queueName, queuePayload } from "../src/queue/service.ts";
 import type { ProviderUsageSnapshot } from "../src/providers/types.ts";
 
+const alignedPromotion = {
+  compareBranches: async () => ({ aheadBy: 0, hasChanges: false, mergeBaseDate: "2026-01-01T00:00:00Z" }),
+  isCommitAfter: async () => false,
+  lastMergedPromotion: async () => null,
+  listMergedPullRequests: async () => [],
+  findPromotionPullRequest: async () => null,
+  createPromotionPullRequest: async () => {},
+  updatePullRequestBody: async () => {},
+};
+
 const integration = process.env.RUN_INTEGRATION === "1" ? describe : describe.skip;
 
 integration("issue scanner", () => {
@@ -35,6 +45,7 @@ integration("issue scanner", () => {
     AGENT_RUNTIME_DIR: resolve(import.meta.dir, "../../../agent-runtime"),
   });
   const github = {
+    ...alignedPromotion,
     getRepository: async (fullName: string) => ({ cloneUrl: `https://github.com/${fullName}.git` }),
     ensureLabels: async () => {},
     listReadyIssues: async (fullName: string, label: string) => {
@@ -328,6 +339,8 @@ integration("pull request scanner", () => {
   let prLabels: string[] = [];
   let discoveredPullRequests: Array<{ number: number; title: string; body: string; url: string; labels: string[] }> = [];
   let issueLabels: string[] = ["agent:working"];
+  let promotionAhead = 0;
+  let promotionCreatedBody = "";
   const scanOrder: string[] = [];
   const prLabelWrites: string[][] = [];
   const scanServiceConfig = () => createScanService({
@@ -337,6 +350,11 @@ integration("pull request scanner", () => {
     syncRepository: async ({ fullName }) => ({ localPath: `/data/repositories/${fullName}`, baselineCommit: firstSha }),
   });
   const github = {
+    ...alignedPromotion,
+    compareBranches: async () => ({ aheadBy: promotionAhead, hasChanges: promotionAhead > 0, mergeBaseDate: "2026-01-01T00:00:00Z" }),
+    listMergedPullRequests: async () => prState.merged
+      ? [{ number: prNumber, body: `Closes #${issueNumber}`, mergedAt: "2026-10-01T00:00:00Z", mergeCommitSha: "merged-commit" }] : [],
+    createPromotionPullRequest: async (_fullName: string, body: string) => { promotionCreatedBody = body; },
     getRepository: async (fullName: string) => ({ cloneUrl: `https://github.com/${fullName}.git` }),
     ensureLabels: async () => {},
     listReadyIssues: async () => { scanOrder.push("issues"); return []; },
@@ -616,14 +634,17 @@ integration("pull request scanner", () => {
 
   test("a human merge finalizes the originating issue with the done label", async () => {
     await releaseScans();
+    promotionAhead = 1;
     prState = { state: "closed", merged: true, headSha: secondSha, head: "agent/issue-55" };
     const scan = await scanServiceConfig().run("MANUAL");
+    promotionAhead = 0;
 
     expect(scan.queuedCount).toBe(0);
     expect(issueLabels).toEqual([config.ISSUE_COMPLETED_LABEL]);
     expect(await prisma.managedPullRequest.findUniqueOrThrow({ where: { id: managedPrId } }))
       .toMatchObject({ state: "MERGED" });
     expect(await prisma.jobEvent.findFirst({ where: { repositoryId, type: "ISSUE_DONE" } })).not.toBeNull();
+    expect(promotionCreatedBody).toContain(`Closes #${issueNumber}`);
   });
 
   test("a blocked PR is unblocked with a fresh cycle budget when a human re-adds fix-requested", async () => {
@@ -674,6 +695,7 @@ integration("aggregated queue notifications", () => {
     AGENT_RUNTIME_DIR: resolve(import.meta.dir, "../../../agent-runtime"),
   });
   const github = {
+    ...alignedPromotion,
     getRepository: async (fullName: string) => ({ cloneUrl: `https://github.com/${fullName}.git` }),
     ensureLabels: async () => {},
     listReadyIssues: async (fullName: string, label: string) =>
