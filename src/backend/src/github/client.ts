@@ -32,8 +32,10 @@ const pullRequestSchema = pullRequestListSchema.extend({
 });
 const comparisonSchema = z.object({
   ahead_by: z.number().int().nonnegative(),
+  base_commit: z.object({ commit: z.object({ tree: z.object({ sha: z.string() }) }) }),
   merge_base_commit: z.object({ commit: z.object({ committer: z.object({ date: z.string() }) }) }),
 });
+const branchSchema = z.object({ commit: z.object({ commit: z.object({ tree: z.object({ sha: z.string() }) }) }) });
 const labelListSchema = z.array(z.union([z.string(), z.object({ name: z.string().nullable() })]));
 const issueCommentSchema = z.object({
   body: z.string().nullable(),
@@ -281,7 +283,29 @@ export function createGitHubClient(options: GitHubClientOptions) {
 
   async function compareBranches(fullName: string, base: string, head: string) {
     const comparison = comparisonSchema.parse(await request(`/repos/${fullName}/compare/${base}...${head}`));
-    return { aheadBy: comparison.ahead_by, mergeBaseDate: comparison.merge_base_commit.commit.committer.date };
+    if (comparison.ahead_by === 0) return { aheadBy: 0, hasChanges: false, mergeBaseDate: comparison.merge_base_commit.commit.committer.date };
+    const headBranch = branchSchema.parse(await request(`/repos/${fullName}/branches/${head}`));
+    return {
+      aheadBy: comparison.ahead_by,
+      hasChanges: comparison.base_commit.commit.tree.sha !== headBranch.commit.commit.tree.sha,
+      mergeBaseDate: comparison.merge_base_commit.commit.committer.date,
+    };
+  }
+
+  async function lastMergedPromotionDate(fullName: string) {
+    let latest: string | null = null;
+    for (let page = 1; ; page += 1) {
+      const owner = fullName.split("/")[0];
+      const query = new URLSearchParams({ state: "closed", base: "main", head: `${owner}:develop`, sort: "updated", direction: "desc", per_page: "100", page: String(page) });
+      const batch = z.array(pullRequestListSchema).parse(await request(`/repos/${fullName}/pulls?${query}`));
+      for (const pullRequest of batch) {
+        if (pullRequest.head.repo?.full_name === fullName && pullRequest.merged_at && (latest === null || pullRequest.merged_at > latest)) {
+          latest = pullRequest.merged_at;
+        }
+      }
+      const oldestUpdate = batch.at(-1)?.updated_at;
+      if (batch.length < 100 || (latest !== null && oldestUpdate !== undefined && oldestUpdate < latest)) return latest;
+    }
   }
 
   async function listMergedPullRequests(fullName: string, base: string, since: string) {
@@ -290,7 +314,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
       const query = new URLSearchParams({ state: "closed", base, sort: "updated", direction: "desc", per_page: "100", page: String(page) });
       const batch = z.array(pullRequestListSchema).parse(await request(`/repos/${fullName}/pulls?${query}`));
       for (const pullRequest of batch) {
-        if (pullRequest.merged_at && pullRequest.merged_at >= since) {
+        if (pullRequest.merged_at && pullRequest.merged_at > since) {
           merged.push({ number: pullRequest.number, body: pullRequest.body ?? "", mergedAt: pullRequest.merged_at });
         }
       }
@@ -447,6 +471,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
     findIssueByMarker,
     getPullRequest,
     compareBranches,
+    lastMergedPromotionDate,
     listMergedPullRequests,
     findPromotionPullRequest,
     createPromotionPullRequest,

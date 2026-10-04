@@ -8,7 +8,8 @@ import { createJobQueue, queueName, queuePayload } from "../src/queue/service.ts
 import type { ProviderUsageSnapshot } from "../src/providers/types.ts";
 
 const alignedPromotion = {
-  compareBranches: async () => ({ aheadBy: 0, mergeBaseDate: "2026-01-01T00:00:00Z" }),
+  compareBranches: async () => ({ aheadBy: 0, hasChanges: false, mergeBaseDate: "2026-01-01T00:00:00Z" }),
+  lastMergedPromotionDate: async () => null,
   listMergedPullRequests: async () => [],
   findPromotionPullRequest: async () => null,
   createPromotionPullRequest: async () => {},
@@ -349,7 +350,7 @@ integration("pull request scanner", () => {
   });
   const github = {
     ...alignedPromotion,
-    compareBranches: async () => ({ aheadBy: promotionAhead, mergeBaseDate: "2026-01-01T00:00:00Z" }),
+    compareBranches: async () => ({ aheadBy: promotionAhead, hasChanges: promotionAhead > 0, mergeBaseDate: "2026-01-01T00:00:00Z" }),
     listMergedPullRequests: async () => prState.merged
       ? [{ number: prNumber, body: `Closes #${issueNumber}`, mergedAt: "2026-10-01T00:00:00Z" }] : [],
     createPromotionPullRequest: async (_fullName: string, body: string) => { promotionCreatedBody = body; },

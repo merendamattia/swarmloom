@@ -12,7 +12,7 @@ export type ScannerShared = {
   github: Pick<GitHubClient,
     "getRepository" | "ensureLabels" | "listReadyIssues" | "getIssue" | "setIssueLabels" | "addIssueComment" |
     "getPullRequest" | "getPullRequestLabels" | "setPullRequestLabels" | "listPullRequests" |
-    "compareBranches" | "listMergedPullRequests" | "findPromotionPullRequest" |
+    "compareBranches" | "lastMergedPromotionDate" | "listMergedPullRequests" | "findPromotionPullRequest" |
     "createPromotionPullRequest" | "updatePullRequestBody">;
   events: EventService;
   queue: Pick<JobQueue, "enqueue">;

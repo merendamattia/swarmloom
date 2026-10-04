@@ -1,7 +1,7 @@
 import type { GitHubClient } from "../github/client.ts";
 
 type PromotionGitHub = Pick<GitHubClient,
-  "compareBranches" | "listMergedPullRequests" | "findPromotionPullRequest" |
+  "compareBranches" | "lastMergedPromotionDate" | "listMergedPullRequests" | "findPromotionPullRequest" |
   "createPromotionPullRequest" | "updatePullRequestBody">;
 
 type PromotionDependencies = {
@@ -43,10 +43,12 @@ export function promotionBody(body: string, issues: number[]) {
 }
 
 export async function promoteDevelop(fullName: string, { github, managedIssue, withLock, warn }: PromotionDependencies) {
-  const { aheadBy, mergeBaseDate } = await github.compareBranches(fullName, "main", "develop");
-  if (aheadBy === 0) return;
+  const { hasChanges, mergeBaseDate } = await github.compareBranches(fullName, "main", "develop");
+  if (!hasChanges) return;
 
-  const merged = await github.listMergedPullRequests(fullName, "develop", mergeBaseDate);
+  const lastPromotion = await github.lastMergedPromotionDate(fullName);
+  const since = lastPromotion && lastPromotion > mergeBaseDate ? lastPromotion : mergeBaseDate;
+  const merged = await github.listMergedPullRequests(fullName, "develop", since);
   if (merged.length === 0) return;
   const issues = new Set<number>();
   for (const pullRequest of merged) {
