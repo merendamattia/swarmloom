@@ -91,6 +91,19 @@ export function applyRuntimeSettings(
   return parseConfig(environment);
 }
 
+const removedCodexModels = new Set(["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-sol"]);
+
+export function migrateLegacyCodexConfig(config: Config): Config {
+  const overrides: Record<string, string> = {};
+  for (const profile of ["CODING", "REVIEW"] as const) {
+    const modelKey = `CODEX_${profile}_MODEL` as const;
+    if (!removedCodexModels.has(config[modelKey])) continue;
+    overrides[modelKey] = "gpt-6.1-sol";
+    overrides[`CODEX_${profile}_REASONING_EFFORT`] = "medium";
+  }
+  return Object.keys(overrides).length ? applyRuntimeSettings(config, overrides) : config;
+}
+
 export function patchToEnvironment(patch: RuntimeSettingsPatch) {
   const environment: Record<string, string | undefined> = {};
   for (const [patchKey, environmentKey] of Object.entries(runtimeToEnvironment) as Array<[RuntimeSettingKey, string]>) {

@@ -3,6 +3,7 @@ import { managedPullRequestRepository } from "../repositories/managed-prs.ts";
 import { replaceWorkerLabels } from "../github/labels.ts";
 import { agentProfileForJobType, configuredAgent } from "../providers/index.ts";
 import { queueJob, safeError, transitionPullRequestLabels, type ScannerShared } from "./common.ts";
+import { promoteDevelop } from "./promotion.ts";
 
 export type PullRequestScannerDependencies = ScannerShared;
 
@@ -26,6 +27,25 @@ export function createPullRequestScanner(shared: ScannerShared) {
           metadata: { issueUrl: managed.issueUrl, pullRequestNumber: managed.prNumber },
         });
       }
+    }
+    try {
+      await promoteDevelop(fullName, {
+        github,
+        managedIssue: async (prNumber) =>
+          (await managedPullRequestRepository.findByRepositoryAndNumber(repository.id, prNumber))?.issueNumber ?? null,
+        withLock: (action) => managedPullRequestRepository.withPromotionLock(repository.id, action),
+        warn: async (message) => {
+          await events.record({ type: "GITHUB_RECONCILIATION_REQUIRED", level: "WARNING", message, repositoryId: repository.id, scanRunId });
+        },
+      });
+    } catch (error) {
+      await events.record({
+        type: "GITHUB_RECONCILIATION_REQUIRED",
+        level: "ERROR",
+        message: `Could not reconcile develop promotion for ${fullName}: ${safeError(error)}`,
+        repositoryId: repository.id,
+        scanRunId,
+      });
     }
     return queued;
   }

@@ -67,7 +67,7 @@ integration("PostgreSQL job lifecycle", () => {
     expect(claimed?.status).toBe("RUNNING");
     expect(claimed?.attempts).toBe(1);
     expect(claimed?.provider).toBe("CODEX");
-    expect(claimed?.model).toBe("gpt-5.6-luna");
+    expect(claimed?.model).toBe("gpt-6-luna");
 
     expect(await jobs.complete(claimed!.id, claimed!.claimToken!, { outcome: "implemented" }, 0)).toBe(true);
     expect(await jobs.complete(claimed!.id, claimed!.claimToken!, { outcome: "duplicate" }, 0)).toBe(false);
@@ -877,7 +877,7 @@ integration("PostgreSQL job lifecycle", () => {
       branchName: `agent/issue-${issueNumber}`,
       baselineCommit: "a".repeat(40),
       provider: "CODEX" as const,
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       reasoningEffort: "max",
     };
   }
@@ -899,7 +899,7 @@ integration("PostgreSQL job lifecycle", () => {
       pullRequestUrl: "https://github.com/test/lifecycle/pull/500",
       headSha,
       provider: "CODEX" as const,
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       reasoningEffort: "max",
     };
   }

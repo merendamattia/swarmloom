@@ -16,7 +16,7 @@ const job = {
   review: null,
   repository: { fullName: "acme/control-plane" },
   provider: "CODEX",
-  model: "gpt-5.6-luna",
+  model: "gpt-6-luna",
   reasoningEffort: "high",
   durationMs: 91_000,
   createdAt: "2026-08-28T08:00:00.000Z",

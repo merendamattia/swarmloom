@@ -11,7 +11,9 @@ export type ScannerShared = {
   config: Config;
   github: Pick<GitHubClient,
     "getRepository" | "ensureLabels" | "listReadyIssues" | "getIssue" | "setIssueLabels" | "addIssueComment" |
-    "getPullRequest" | "getPullRequestLabels" | "setPullRequestLabels" | "listPullRequests">;
+    "getPullRequest" | "getPullRequestLabels" | "setPullRequestLabels" | "listPullRequests" |
+    "compareBranches" | "isCommitAfter" | "lastMergedPromotion" | "listMergedPullRequests" | "findPromotionPullRequest" |
+    "createPromotionPullRequest" | "updatePullRequestBody">;
   events: EventService;
   queue: Pick<JobQueue, "enqueue">;
   providerUsage?: ProviderUsageCapability;
