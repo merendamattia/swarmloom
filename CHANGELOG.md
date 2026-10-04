@@ -1,3 +1,10 @@
+## [1.18.1](https://github.com/merendamattia/swarmloom/compare/v1.18.0...v1.18.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* **frontend:** give Apple icon a white background ([b49f125](https://github.com/merendamattia/swarmloom/commit/b49f12523a7882ce3437d36070e1ce5aa5cf2eee))
+
 # [1.18.0](https://github.com/merendamattia/swarmloom/compare/v1.17.0...v1.18.0) (2026-10-02)
 
 
