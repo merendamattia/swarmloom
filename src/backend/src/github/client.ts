@@ -18,9 +18,10 @@ const pullRequestListSchema = z.object({
   base: z.object({ ref: z.string() }),
   body: z.string().nullable(),
   merged_at: z.string().nullable().optional(),
+  merge_commit_sha: z.string().nullable().optional(),
   updated_at: z.string().optional(),
   state: z.string().optional(),
-  head: z.object({ ref: z.string(), repo: z.object({ full_name: z.string() }).nullable().optional() }),
+  head: z.object({ ref: z.string(), sha: z.string(), repo: z.object({ full_name: z.string() }).nullable().optional() }),
 });
 const pullRequestSchema = pullRequestListSchema.extend({
   additions: z.number().int().nonnegative(),
@@ -292,30 +293,35 @@ export function createGitHubClient(options: GitHubClientOptions) {
     };
   }
 
-  async function lastMergedPromotionDate(fullName: string) {
-    let latest: string | null = null;
+  async function isCommitAfter(fullName: string, baseSha: string, headSha: string) {
+    const comparison = z.object({ status: z.string() }).parse(await request(`/repos/${fullName}/compare/${baseSha}...${headSha}`));
+    return comparison.status === "ahead";
+  }
+
+  async function lastMergedPromotion(fullName: string) {
+    let latest: { mergedAt: string; headSha: string } | null = null;
     for (let page = 1; ; page += 1) {
       const owner = fullName.split("/")[0];
       const query = new URLSearchParams({ state: "closed", base: "main", head: `${owner}:develop`, sort: "updated", direction: "desc", per_page: "100", page: String(page) });
       const batch = z.array(pullRequestListSchema).parse(await request(`/repos/${fullName}/pulls?${query}`));
       for (const pullRequest of batch) {
-        if (pullRequest.head.repo?.full_name === fullName && pullRequest.merged_at && (latest === null || pullRequest.merged_at > latest)) {
-          latest = pullRequest.merged_at;
+        if (pullRequest.head.repo?.full_name === fullName && pullRequest.merged_at && (latest === null || pullRequest.merged_at > latest.mergedAt)) {
+          latest = { mergedAt: pullRequest.merged_at, headSha: pullRequest.head.sha };
         }
       }
       const oldestUpdate = batch.at(-1)?.updated_at;
-      if (batch.length < 100 || (latest !== null && oldestUpdate !== undefined && oldestUpdate < latest)) return latest;
+      if (batch.length < 100 || (latest !== null && oldestUpdate !== undefined && oldestUpdate < latest.mergedAt)) return latest;
     }
   }
 
   async function listMergedPullRequests(fullName: string, base: string, since: string) {
-    const merged: Array<{ number: number; body: string; mergedAt: string }> = [];
+    const merged: Array<{ number: number; body: string; mergedAt: string; mergeCommitSha: string | null }> = [];
     for (let page = 1; ; page += 1) {
       const query = new URLSearchParams({ state: "closed", base, sort: "updated", direction: "desc", per_page: "100", page: String(page) });
       const batch = z.array(pullRequestListSchema).parse(await request(`/repos/${fullName}/pulls?${query}`));
       for (const pullRequest of batch) {
         if (pullRequest.merged_at && pullRequest.merged_at >= since) {
-          merged.push({ number: pullRequest.number, body: pullRequest.body ?? "", mergedAt: pullRequest.merged_at });
+          merged.push({ number: pullRequest.number, body: pullRequest.body ?? "", mergedAt: pullRequest.merged_at, mergeCommitSha: pullRequest.merge_commit_sha ?? null });
         }
       }
       const oldestUpdate = batch.at(-1)?.updated_at;
@@ -471,7 +477,8 @@ export function createGitHubClient(options: GitHubClientOptions) {
     findIssueByMarker,
     getPullRequest,
     compareBranches,
-    lastMergedPromotionDate,
+    isCommitAfter,
+    lastMergedPromotion,
     listMergedPullRequests,
     findPromotionPullRequest,
     createPromotionPullRequest,

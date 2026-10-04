@@ -1,7 +1,7 @@
 import type { GitHubClient } from "../github/client.ts";
 
 type PromotionGitHub = Pick<GitHubClient,
-  "compareBranches" | "lastMergedPromotionDate" | "listMergedPullRequests" | "findPromotionPullRequest" |
+  "compareBranches" | "isCommitAfter" | "lastMergedPromotion" | "listMergedPullRequests" | "findPromotionPullRequest" |
   "createPromotionPullRequest" | "updatePullRequestBody">;
 
 type PromotionDependencies = {
@@ -46,10 +46,18 @@ export async function promoteDevelop(fullName: string, { github, managedIssue, w
   const { hasChanges, mergeBaseDate } = await github.compareBranches(fullName, "main", "develop");
   if (!hasChanges) return;
 
-  const lastPromotion = await github.lastMergedPromotionDate(fullName);
-  const since = lastPromotion && lastPromotion > mergeBaseDate ? lastPromotion : mergeBaseDate;
-  const merged = (await github.listMergedPullRequests(fullName, "develop", since))
-    .filter((pullRequest) => lastPromotion === null || pullRequest.mergedAt > lastPromotion);
+  const lastPromotion = await github.lastMergedPromotion(fullName);
+  const since = lastPromotion && lastPromotion.mergedAt > mergeBaseDate ? lastPromotion.mergedAt : mergeBaseDate;
+  const candidates = await github.listMergedPullRequests(fullName, "develop", since);
+  const merged = [];
+  for (const pullRequest of candidates) {
+    if (lastPromotion === null || pullRequest.mergedAt > lastPromotion.mergedAt) {
+      merged.push(pullRequest);
+    } else if (pullRequest.mergedAt === lastPromotion.mergedAt) {
+      if (!pullRequest.mergeCommitSha) throw new Error(`Missing merge commit for ${fullName}#${pullRequest.number}`);
+      if (await github.isCommitAfter(fullName, lastPromotion.headSha, pullRequest.mergeCommitSha)) merged.push(pullRequest);
+    }
+  }
   if (merged.length === 0) return;
   const issues = new Set<number>();
   for (const pullRequest of merged) {

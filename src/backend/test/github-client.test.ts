@@ -12,18 +12,18 @@ describe("GitHub client", () => {
       if (request.url.includes("/compare/")) return Response.json({ ahead_by: 1, base_commit: { commit: { tree: { sha: "main-tree" } } }, merge_base_commit: { commit: { committer: { date: "2026-10-01T00:00:00Z" } } } });
       if (request.url.includes("/branches/develop")) return Response.json({ commit: { commit: { tree: { sha: "develop-tree" } } } });
       if (request.url.includes("state=closed")) return Response.json([{
-        ...pullRequest(8), merged_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-02T00:00:00Z",
+        ...pullRequest(8), merged_at: "2026-10-01T00:00:00Z", merge_commit_sha: "source-merge", updated_at: "2026-10-02T00:00:00Z",
       }]);
       return Response.json([
-        { ...pullRequest(9), head: { ref: "develop", repo: { full_name: "other/app" } } },
-        { ...pullRequest(10), head: { ref: "develop", repo: { full_name: "acme/app" } } },
+        { ...pullRequest(9), head: { ref: "develop", sha: "other-head", repo: { full_name: "other/app" } } },
+        { ...pullRequest(10), head: { ref: "develop", sha: "promotion-head", repo: { full_name: "acme/app" } } },
       ]);
     } });
 
     expect(await client.compareBranches("acme/app", "main", "develop"))
       .toEqual({ aheadBy: 1, hasChanges: true, mergeBaseDate: "2026-10-01T00:00:00Z" });
     expect(await client.listMergedPullRequests("acme/app", "develop", "2026-10-01T00:00:00Z"))
-      .toEqual([{ number: 8, body: "Closes #7", mergedAt: "2026-10-01T00:00:00Z" }]);
+      .toEqual([{ number: 8, body: "Closes #7", mergedAt: "2026-10-01T00:00:00Z", mergeCommitSha: "source-merge" }]);
     expect(await client.findPromotionPullRequest("acme/app")).toEqual({ number: 10, body: "Closes #7" });
     expect(requests[2].url).toContain("base=develop");
     expect(requests[3].url).toContain("base=main");
@@ -37,15 +37,29 @@ describe("GitHub client", () => {
       if (request.url.includes("/compare/")) return Response.json({ ahead_by: 2, base_commit: { commit: { tree: { sha: "shared-tree" } } }, merge_base_commit: { commit: { committer: { date: "2026-10-01T00:00:00Z" } } } });
       if (request.url.includes("/branches/develop")) return Response.json({ commit: { commit: { tree: { sha: "shared-tree" } } } });
       return Response.json([
-        { ...pullRequest(20), head: { ref: "develop", repo: { full_name: "other/app" } }, merged_at: "2026-10-04T00:00:00Z" },
-        { ...pullRequest(21), head: { ref: "develop", repo: { full_name: "acme/app" } }, merged_at: "2026-10-03T00:00:00Z" },
+        { ...pullRequest(20), head: { ref: "develop", sha: "other-head", repo: { full_name: "other/app" } }, merged_at: "2026-10-04T00:00:00Z" },
+        { ...pullRequest(21), head: { ref: "develop", sha: "promoted-head", repo: { full_name: "acme/app" } }, merged_at: "2026-10-03T00:00:00Z" },
       ]);
     } });
 
     expect(await client.compareBranches("acme/app", "main", "develop"))
       .toEqual({ aheadBy: 2, hasChanges: false, mergeBaseDate: "2026-10-01T00:00:00Z" });
-    expect(await client.lastMergedPromotionDate("acme/app")).toBe("2026-10-03T00:00:00Z");
+    expect(await client.lastMergedPromotion("acme/app"))
+      .toEqual({ mergedAt: "2026-10-03T00:00:00Z", headSha: "promoted-head" });
     expect(requests[2].url).toContain("head=acme%3Adevelop");
+  });
+
+  test("compares merge commits against the last promoted develop head", async () => {
+    const requests: Request[] = [];
+    const client = createGitHubClient({ token: "secret-token", fetch: async (input, init) => {
+      const request = new Request(input, init);
+      requests.push(request);
+      return Response.json({ status: request.url.endsWith("/compare/promoted-head...new-merge") ? "ahead" : "identical" });
+    } });
+
+    expect(await client.isCommitAfter("acme/app", "promoted-head", "new-merge")).toBe(true);
+    expect(await client.isCommitAfter("acme/app", "promoted-head", "old-merge")).toBe(false);
+    expect(requests[0]?.url).toContain("/compare/promoted-head...new-merge");
   });
 
   test("lists open pull requests by workflow label", async () => {

@@ -9,7 +9,8 @@ import type { ProviderUsageSnapshot } from "../src/providers/types.ts";
 
 const alignedPromotion = {
   compareBranches: async () => ({ aheadBy: 0, hasChanges: false, mergeBaseDate: "2026-01-01T00:00:00Z" }),
-  lastMergedPromotionDate: async () => null,
+  isCommitAfter: async () => false,
+  lastMergedPromotion: async () => null,
   listMergedPullRequests: async () => [],
   findPromotionPullRequest: async () => null,
   createPromotionPullRequest: async () => {},
@@ -352,7 +353,7 @@ integration("pull request scanner", () => {
     ...alignedPromotion,
     compareBranches: async () => ({ aheadBy: promotionAhead, hasChanges: promotionAhead > 0, mergeBaseDate: "2026-01-01T00:00:00Z" }),
     listMergedPullRequests: async () => prState.merged
-      ? [{ number: prNumber, body: `Closes #${issueNumber}`, mergedAt: "2026-10-01T00:00:00Z" }] : [],
+      ? [{ number: prNumber, body: `Closes #${issueNumber}`, mergedAt: "2026-10-01T00:00:00Z", mergeCommitSha: "merged-commit" }] : [],
     createPromotionPullRequest: async (_fullName: string, body: string) => { promotionCreatedBody = body; },
     getRepository: async (fullName: string) => ({ cloneUrl: `https://github.com/${fullName}.git` }),
     ensureLabels: async () => {},
