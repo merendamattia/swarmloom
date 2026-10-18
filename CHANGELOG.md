@@ -1,3 +1,10 @@
+# [1.20.0](https://github.com/merendamattia/swarmloom/compare/v1.19.0...v1.20.0) (2026-10-18)
+
+
+### Features
+
+* **worker:** add browser checks and screenshots ([5fd8966](https://github.com/merendamattia/swarmloom/commit/5fd8966f326be117f2d1516c95370e5d8524c5be))
+
 # [1.19.0](https://github.com/merendamattia/swarmloom/compare/v1.18.1...v1.19.0) (2026-10-04)
 
 
