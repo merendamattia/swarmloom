@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { commentWithScreenshots } from "./screenshots.ts";
 
 const issueSchema = z.object({
   number: z.number().int().positive(),
@@ -461,7 +462,8 @@ export function createGitHubClient(options: GitHubClientOptions) {
     });
   }
 
-  async function addIssueComment(fullName: string, issueNumber: number, body: string) {
+  async function addIssueComment(fullName: string, issueNumber: number, body: string, worktreePath?: string) {
+    if (await commentWithScreenshots({ token: options.token, apiUrl, repository: fullName, issueNumber, body, worktreePath })) return;
     await request(`/repos/${fullName}/issues/${issueNumber}/comments`, {
       method: "POST",
       body: JSON.stringify({ body }),

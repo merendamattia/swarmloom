@@ -4,8 +4,14 @@ USER root
 RUN --mount=type=cache,target=/var/cache/apt \
   apt-get update \
   && apt-get install -y --no-install-recommends \
-      build-essential ca-certificates curl gh git nodejs npm pkg-config \
+      build-essential ca-certificates curl git nodejs npm pkg-config \
       netcat-openbsd postgresql python3 python3-dev python3-venv redis-server \
+  && mkdir -p -m 755 /etc/apt/keyrings \
+  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+  && printf 'deb [arch=%s signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\n' \
+      "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/github-cli.list \
+  && apt-get update && apt-get install -y --no-install-recommends gh=2.102.0 \
   && ln -s /usr/lib/postgresql/*/bin/* /usr/local/bin/ \
   && rm -rf /var/lib/apt/lists/*
 ENV BUN_INSTALL_IGNORE_SCRIPTS=1
@@ -47,6 +53,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
   && chmod +x /usr/local/bin/python /usr/local/bin/python3 \
   && chown -R bun:bun /opt/pre-commit
 ENV PATH="/opt/pre-commit/bin:$PATH"
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
+RUN python3 -m playwright install --with-deps --only-shell chromium firefox webkit \
+  && chmod -R a+rX /opt/playwright \
+  && rm -rf /var/lib/apt/lists/*
 
 FROM runtime-tools AS dev
 # Local development target: node_modules, toolchain (codex/opencode/pre-commit),

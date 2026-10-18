@@ -84,6 +84,8 @@ services:
 
   worker:
     image: swarmloom:production
+    init: true
+    shm_size: 1gb
     pull_policy: never
     restart: unless-stopped
     environment: *app-environment

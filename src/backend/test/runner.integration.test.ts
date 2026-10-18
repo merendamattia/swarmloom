@@ -1066,7 +1066,7 @@ integration("job runner", () => {
       pullRequestUrl: "https://github.com/acme/runner/pull/902",
       headSha: "4".repeat(40),
     });
-    const reviewResponse = "Review: pass\nTL;DR: The review passed.\nLooks good.";
+    const reviewResponse = "Review: pass\nTL;DR: The review passed.\nLooks good.\n\n![Desktop](.agent-work/screenshots/desktop.png)";
     const provider = new FakeProvider([success(reviewResponse, "review-pass")]);
     const runner = createJobRunner({
       config,
@@ -1089,6 +1089,10 @@ integration("job runner", () => {
     const pullRequestCommentBody = state.comments.find((comment) => comment.issue === managed.prNumber)?.body ?? "";
     const issueCommentBody = state.comments.find((comment) => comment.issue === job.issueNumber)?.body ?? "";
     expect(pullRequestCommentBody).toBe(reviewResponse);
+    expect(state.comments.find((comment) => comment.issue === managed.prNumber)?.worktreePath)
+      .toBe(provider.calls[0]?.workingDirectory);
+    expect(state.comments.find((comment) => comment.issue === job.issueNumber)?.worktreePath)
+      .toBe(provider.calls[0]?.workingDirectory);
     expect(issueCommentBody.startsWith(`${reviewResponse}\n\n`)).toBe(true);
     expect(issueCommentBody.indexOf("## Automated review passed")).toBeGreaterThan(issueCommentBody.indexOf("TL;DR:"));
     expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "READY_TO_MERGE" } })).toMatchObject({
@@ -1694,7 +1698,7 @@ function fakeGitHub(issueNumber: number, branchName: string, headSha: string) {
     labels: ["bug", "agent:working"],
     prLabels: [] as string[],
     prLabelWrites: [] as string[][],
-    comments: [] as Array<{ issue: number; body: string }>,
+    comments: [] as Array<{ issue: number; body: string; worktreePath?: string }>,
     createdIssues: [] as Array<{ title: string; body: string; labels: string[] }>,
     async getIssue() {
       return { number: issueNumber, title: "Issue", body: "Body", url: "https://github.com/acme/runner/issues/1", labels: [...state.labels] };
@@ -1721,7 +1725,7 @@ function fakeGitHub(issueNumber: number, branchName: string, headSha: string) {
     },
     async findIssueByMarker() { return undefined; },
     async setIssueLabels(_fullName: string, _number: number, labels: string[]) { state.labels.splice(0, state.labels.length, ...labels); },
-    async addIssueComment(_fullName: string, issue: number, body: string) { state.comments.push({ issue, body }); },
+    async addIssueComment(_fullName: string, issue: number, body: string, worktreePath?: string) { state.comments.push({ issue, body, worktreePath }); },
   };
   return state;
 }

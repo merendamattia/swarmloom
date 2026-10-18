@@ -120,6 +120,29 @@ GH_TOKEN=your-token git ls-remote --exit-code https://github.com/OWNER/REPO.git 
 
 ## GitHub token and labels
 
+The worker image includes Python Playwright 1.63.0, Chromium headless shell, Firefox, and WebKit
+with their system libraries in `/opt/playwright`. Both local and production workers use an init
+process and 1 GiB of shared memory. Agents can use `python3` and `playwright.sync_api` from any
+assigned worktree without installing browser tooling in the target repository. Run
+`python3 /app/scripts/check-worker-browsers.py` inside the image to verify all three engines,
+desktop/mobile screenshots, and interactions without network access.
+
+For visible UI changes, agents capture and inspect relevant desktop/mobile states. They can place
+PNG images in `.agent-work/screenshots/` and include standalone Markdown references such as
+`![Settings on mobile](.agent-work/screenshots/settings-mobile.png)` in their response. Only the
+coordinator uploads the referenced files when posting the normal issue/PR comment, before removing
+the worktree; review agents never post comments directly. Screenshot files are not committed.
+Files must resolve inside that screenshot directory, contain PNG bytes, and fit GitHub's limit
+of 10 MiB per image and 50 attachments per comment. Agents must use synthetic data and inspect
+screenshots for sensitive content before sharing them.
+
+The image installs GitHub CLI 2.102.0 from its official signed Debian repository. Native
+`--attach` uploads require a supported user token (including a fine-grained PAT) and write access
+to the target repository. GitHub App installation tokens, Actions installation tokens, and GitHub
+Enterprise Server cannot use this upload feature. Text-only comments continue to use the REST
+API. Upload failures are recorded as GitHub reconciliation events and do not change a job verdict
+or trigger a second comment. See [GitHub CLI attachments](https://docs.github.com/en/github-cli/github-cli/attaching-files-with-github-cli).
+
 Create a fine-grained personal access token scoped only to the monitored repositories. The worker's
 general workflow needs repository permissions:
 

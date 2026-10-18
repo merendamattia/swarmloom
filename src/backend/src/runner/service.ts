@@ -106,8 +106,8 @@ export function createJobRunner({
         executeRoleWithRetry: createExecuteRoleWithRetry(events, config, provider, (execution) => {
           state.lastExecution = execution;
         }),
-        finalizeIssue: createFinalizeIssue(github, config, events),
-        commentOnPullRequest: createCommentOnPullRequest(github, events),
+        finalizeIssue: createFinalizeIssue(github, config, events, state),
+        commentOnPullRequest: createCommentOnPullRequest(github, events, state),
       };
       const flows = {
         IMPLEMENTATION: runImplementation,
@@ -225,7 +225,7 @@ export function createJobRunner({
         ? diagnosticIssue ? `\nDiagnostic issue: ${diagnosticIssue.url}` : "\nThe diagnostic issue could not be created automatically."
         : undefined,
     ].filter((line): line is string => line !== undefined).join("\n");
-    await createFinalizeIssue(github, config, events)(job, [config.ISSUE_BLOCKED_LABEL], comment);
+    await createFinalizeIssue(github, config, events, state)(job, [config.ISSUE_BLOCKED_LABEL], comment);
     if (state.activePullRequest) {
       try {
         await github.addIssueComment(
