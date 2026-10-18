@@ -13,7 +13,7 @@ import { ProviderProcessError } from "../providers/process.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import { AgentExecutionError, causeChain, executionFailure, stackTrace, type DiagnosticEvent, type JobDiagnostics } from "./diagnostics.ts";
 import type { GitHubIssueContext } from "../github/client.ts";
-import type { RunningJob, RunnerContext, RunnerGitHub } from "./types.ts";
+import type { RunningJob, RunnerContext, RunnerGitHub, SessionState } from "./types.ts";
 import { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome, parseTldr } from "./response.ts";
 
 export function responseFilePathFor(dataDirectory: string, jobId: string, role: AgentRole, executionId: string) {
@@ -297,7 +297,7 @@ function recoveryContext(job: Pick<RunningJob, "sessionId" | "worktreePath">) {
   ].filter((line): line is string => Boolean(line)).join("\n");
 }
 
-export function createFinalizeIssue(github: RunnerGitHub, config: Config, events: RunnerContext["events"]) {
+export function createFinalizeIssue(github: RunnerGitHub, config: Config, events: RunnerContext["events"], state: Pick<SessionState, "worktreePath">) {
   return async function finalizeIssue(job: RunningJob, labels: string[], comment: string) {
     try {
       const issue = await github.getIssue(job.repository.fullName, job.issueNumber);
@@ -310,17 +310,17 @@ export function createFinalizeIssue(github: RunnerGitHub, config: Config, events
       await recordGithubFailure(events, job, "update issue labels", error);
     }
     try {
-      await github.addIssueComment(job.repository.fullName, job.issueNumber, comment);
+      await github.addIssueComment(job.repository.fullName, job.issueNumber, comment, state.worktreePath);
     } catch (error) {
       await recordGithubFailure(events, job, "comment on issue", error);
     }
   };
 }
 
-export function createCommentOnPullRequest(github: RunnerGitHub, events: RunnerContext["events"]) {
+export function createCommentOnPullRequest(github: RunnerGitHub, events: RunnerContext["events"], state: Pick<SessionState, "worktreePath">) {
   return async function commentOnPullRequest(job: RunningJob, pullRequestNumber: number, comment: string) {
     try {
-      await github.addIssueComment(job.repository.fullName, pullRequestNumber, comment);
+      await github.addIssueComment(job.repository.fullName, pullRequestNumber, comment, state.worktreePath);
     } catch (error) {
       await recordGithubFailure(events, job, `comment on pull request #${pullRequestNumber}`, error);
     }

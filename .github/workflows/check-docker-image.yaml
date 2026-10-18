@@ -32,3 +32,5 @@ jobs:
         run: docker compose --env-file .env.production.example -f docker-compose.production.yaml run --rm --no-deps backend sh -c 'set -eu; for command in bun python3 pip pre-commit gcc g++ make pkg-config git gh psql redis-cli; do command -v "$command" >/dev/null; done; codex exec --help | grep -q -- "--dangerously-bypass-approvals-and-sandbox"; test -z "$(find /app/node_modules -type f -path "*/msgpackr-extract/build/Release/*.node" -print -quit)"; cd /app/src/backend; bun -e "import(\"bullmq\")"'
       - name: Verify ephemeral CI services
         run: docker compose --env-file .env.production.example -f docker-compose.production.yaml run --rm --no-deps backend sh -c 'eval "$(swarm-test-services start swarmloom)" && psql "$DATABASE_URL" -c "SELECT 1" >/dev/null && redis-cli ping | grep -q PONG && swarm-test-services stop'
+      - name: Verify headless browsers and screenshot attachments
+        run: docker compose --env-file .env.production.example -f docker-compose.production.yaml run --rm --no-deps worker sh -c 'set -eu; gh issue comment --help | grep -q -- "--attach"; python3 /app/scripts/check-worker-browsers.py'
