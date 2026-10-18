@@ -71,6 +71,7 @@ EXPOSE 18420 18421
 CMD ["bun", "run", "dev"]
 
 FROM runtime-tools AS agent-skills
+COPY --from=node:24-bookworm-slim /usr/local/bin/node /usr/local/bin/node
 USER bun
 ENV npm_config_cache=/tmp/npx-cache
 # bun.sh/docs is documentation, not an installable SKILL.md endpoint. Keep the
