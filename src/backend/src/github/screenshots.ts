@@ -69,7 +69,7 @@ export function hasScreenshotReferences(body: string) {
 
 function failureCode(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  if (/EACCES|EPERM|401|403|forbidden|permission|authentication|unsupported.*token/i.test(message)) return "permission_denied";
+  if (/EACCES|EPERM|401|403|forbidden|permission|authentication|unsupported.*token|attaching files requires write access to the repository/i.test(message)) return "permission_denied";
   if (/ENOENT|no such file/i.test(message)) return "missing_file";
   if (/timeout|timed out/i.test(message)) return "timeout";
   return "upload_failed";

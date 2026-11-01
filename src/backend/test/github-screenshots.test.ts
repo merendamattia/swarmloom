@@ -182,6 +182,21 @@ test("missing, truncated, oversized, symlinked and traversing PNGs publish safe 
   expect(state.comments[0]!.body).not.toContain(".agent-work/screenshots/");
 });
 
+for (const [stage, stderr] of [
+  ["permission preflight", "attaching files requires write access to the repository"],
+  ["translated upload 404", "could not upload /private/worktree/desktop.png: attaching files requires write access to the repository"],
+] as const) {
+  test(`recognizes GitHub CLI's ${stage} denial without leaking stderr`, async () => {
+    const worktree = await fixture();
+    const state = remote();
+    const client = createGitHubClient({ token: "secret-token", fetch: state.fetch, uploadScreenshots: async () => ({ exitCode: 1, stderr }) });
+    const result = await client.addIssueComment("acme/app", 7, body, { worktreePath: worktree, publicationId: stage });
+    expect(result).toMatchObject({ publication: "not_posted", problems: ["permission_denied", "comment_not_found"] });
+    expect(state.comments).toHaveLength(0);
+    expect(JSON.stringify(result)).not.toMatch(/write access|secret-token|\/private\/worktree/);
+  });
+}
+
 for (const failure of [
   { stderr: "HTTP 403: secret-token /private/worktree forbidden", timedOut: false, reason: "permission_denied" },
   { stderr: "secret-token /private/worktree", timedOut: true, reason: "timeout" },
