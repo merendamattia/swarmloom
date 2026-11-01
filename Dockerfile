@@ -1,13 +1,25 @@
 # syntax=docker/dockerfile:1
 FROM oven/bun:1.3.14 AS dependencies
 USER root
+ARG GH_CLI_VERSION=2.102.0
 RUN --mount=type=cache,target=/var/cache/apt \
   apt-get update \
   && apt-get install -y --no-install-recommends \
-      build-essential ca-certificates curl gh git nodejs npm pkg-config \
+      build-essential ca-certificates curl git nodejs npm pkg-config \
       netcat-openbsd postgresql python3 python3-dev python3-venv redis-server \
   && ln -s /usr/lib/postgresql/*/bin/* /usr/local/bin/ \
   && rm -rf /var/lib/apt/lists/*
+# --attach requires the current GitHub CLI, rather than Debian's older package.
+RUN architecture="$(dpkg --print-architecture)" \
+  && package="gh_${GH_CLI_VERSION}_linux_${architecture}.deb" \
+  && curl --fail --silent --show-error --location --retry 3 \
+      "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/${package}" -o "/tmp/${package}" \
+  && curl --fail --silent --show-error --location --retry 3 \
+      "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_checksums.txt" -o /tmp/gh-checksums.txt \
+  && (cd /tmp && sha256sum --check --ignore-missing gh-checksums.txt) \
+  && dpkg -i "/tmp/${package}" \
+  && rm "/tmp/${package}" /tmp/gh-checksums.txt \
+  && gh issue comment --help | grep -q -- "--attach"
 ENV BUN_INSTALL_IGNORE_SCRIPTS=1
 WORKDIR /app
 COPY package.json bun.lock ./

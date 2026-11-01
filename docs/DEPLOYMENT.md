@@ -794,3 +794,34 @@ Codex/OpenCode job necessarily requires operator-owned provider credentials, Git
 disposable repository. Before trusting unattended production schedules, complete the E2E once with
 each provider, inspect its PR/review/events, revoke any test-only token, and then add production
 repositories.
+
+## Screenshot evidence publication
+
+Agent results may reference PNGs under `.agent-work/screenshots/` using image Markdown. The shared
+issue/PR publisher accepts at most 50 distinct files, each at most 10 MiB. It rejects traversal,
+symlinks, non-files and invalid PNG headers/trailers, and copies validated bytes into a private
+temporary directory outside the worktree. That snapshot remains alive until upload and
+reconciliation finish, even if a terminal-job recovery removes the original worktree.
+
+The publisher supplies GitHub CLI with text containing no local image links. CLI appends hosted
+images; Swarmloom reads the resulting comment and restores their captions and positions using only
+verified `github.com/user-attachments/assets/` URLs. A deterministic job/result marker identifies the
+comment on subsequent calls. Existing comments are repaired by ID, retaining hosted evidence;
+partial uploads are never retried as a new comment. Missing files become explicit unavailable-image
+notices, retaining the implementation or review text. Lookup failures stop publication rather than
+risking a duplicate. GitHub CLI can publish partial evidence before returning an error; see its
+[comment implementation](https://github.com/cli/cli/blob/v2.102.0/pkg/cmd/pr/shared/commentable.go).
+
+`GITHUB_RECONCILIATION_REQUIRED` distinguishes complete, partial, text-only, absent and unconfirmed
+publication, and includes the comment/target URL, missing filenames and sanitized reason codes
+(`missing_file`, `invalid_image`, `permission_denied`, `timeout`, upload/lookup/repair failures).
+Inspect that comment before any manual retry. The stored job outcome, review verdict and workflow
+labels remain independent of attachment publication. Raw CLI output and private filesystem paths
+are not included in attachment diagnostics. Uploads have a two-minute deadline; reconciliation API
+calls have a 30-second deadline. Staged files are removed afterward. The application image pins
+GitHub CLI 2.102.0, verifies its release checksum and checks that `--attach` is available.
+
+The normal runner removes worktrees after flow finalization, but terminal-job recovery can also
+claim a completed worktree. This is a possible competing lifecycle operation, not proof of the
+reported incident's cause. Snapshotting removes the upload's dependency on that lifecycle; a file
+already missing at snapshot time produces text evidence and a reconciliation event.

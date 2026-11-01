@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createScreenshotUploader, hasScreenshotReferences, publishScreenshotComment, type ScreenshotOptions, type ScreenshotPublication, type ScreenshotUpload } from "./screenshots.ts";
 
 const issueSchema = z.object({
   number: z.number().int().positive(),
@@ -120,6 +121,7 @@ type GitHubClientOptions = {
   token: string;
   apiUrl?: string;
   fetch?: Fetch;
+  uploadScreenshots?: ScreenshotUpload;
 };
 
 export function createGitHubClient(options: GitHubClientOptions) {
@@ -461,7 +463,10 @@ export function createGitHubClient(options: GitHubClientOptions) {
     });
   }
 
-  async function addIssueComment(fullName: string, issueNumber: number, body: string) {
+  async function addIssueComment(fullName: string, issueNumber: number, body: string, screenshots?: ScreenshotOptions): Promise<ScreenshotPublication | void> {
+    if (hasScreenshotReferences(body)) {
+      return publishScreenshotComment((path, init) => request(path, { ...init, signal: AbortSignal.timeout(30_000) }), options.uploadScreenshots ?? createScreenshotUploader(options.token), fullName, issueNumber, body, screenshots ?? { publicationId: body });
+    }
     await request(`/repos/${fullName}/issues/${issueNumber}/comments`, {
       method: "POST",
       body: JSON.stringify({ body }),

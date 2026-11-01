@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { resolve } from "node:path";
 import { parseConfig } from "../src/core/config-schema.ts";
 import type { AgentProvider, AgentRequest, AgentResult, ProviderUsageSnapshot } from "../src/providers/index.ts";
+import type { RunnerGitHub } from "../src/runner/types.ts";
+import type { ScreenshotOptions, ScreenshotPublication } from "../src/github/screenshots.ts";
 import { ProviderProcessError } from "../src/providers/process.ts";
 
 const integration = process.env.RUN_INTEGRATION === "1" ? describe : describe.skip;
@@ -651,6 +653,20 @@ integration("job runner", () => {
     await rm(staleWorktreePath, { recursive: true, force: true });
   });
 
+  test("implementation keeps its successful PR and labels when screenshot publication is partial", async () => {
+    const job = await claimed(issueBase + 61, "IMPLEMENTATION", "ISSUE");
+    const response = `Outcome: implemented\nPR: https://github.com/acme/runner/pull/${job.issueNumber}\nTL;DR: Implemented.\n![Desktop](.agent-work/screenshots/desktop.png)`;
+    const state = fakeGitHub(job.issueNumber, job.branchName, "b".repeat(40));
+    const runner = createJobRunner({ config, provider: new FakeProvider([success(response, "partial-evidence")]), github: partialEvidence(state), createWorktree: async (input) => input.worktreePath });
+    expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
+    expect(await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({ status: "COMPLETED", result: response });
+    expect(state.prLabels).toEqual([config.PR_REVIEW_REQUESTED_LABEL]);
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "GITHUB_RECONCILIATION_REQUIRED" } })).toMatchObject({
+      message: expect.stringContaining("Comment published with partial screenshot evidence"),
+      metadata: expect.objectContaining({ publication: "partial", commentUrl: expect.stringContaining("#issuecomment-12") }),
+    });
+  });
+
   test("fix updates the existing PR branch, restores review-requested, and rejects a push that never lands", async () => {
     const prHead = `agent/issue-${issueBase + 7}-existing`;
     const managed = await prisma.managedPullRequest.create({
@@ -861,7 +877,7 @@ integration("job runner", () => {
     const runner = createJobRunner({
       config,
       provider: new FakeProvider([success(response, "fix-blocked")]),
-      github: state,
+      github: partialEvidence(state),
       createReviewWorktree: async () => "agent/fix-local",
     });
 
@@ -870,6 +886,7 @@ integration("job runner", () => {
       .toMatchObject({ status: "BLOCKED", result: response });
     expect(await prisma.managedPullRequest.findUniqueOrThrow({ where: { id: managed.id } }))
       .toMatchObject({ blocked: true });
+    expect(await prisma.jobEvent.count({ where: { jobId: job.id, type: "GITHUB_RECONCILIATION_REQUIRED" } })).toBe(2);
     expect(state.prLabels).toEqual([config.ISSUE_HUMAN_REVIEW_LABEL]);
     expect(state.labels).toEqual(["bug", config.ISSUE_BLOCKED_LABEL, config.ISSUE_HUMAN_REVIEW_LABEL]);
     expect(state.comments.some((comment) => comment.issue === managed.prNumber && comment.body === response)).toBe(true);
@@ -1071,12 +1088,16 @@ integration("job runner", () => {
     const runner = createJobRunner({
       config,
       provider,
-      github: state,
+      github: partialEvidence(state),
       createReviewWorktree: async () => "agent/review-local",
     });
 
     expect(await runner.run(job.id, "runner-worker", job.claimToken!)).toBe(true);
     const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id }, include: { review: true } });
+    expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "GITHUB_RECONCILIATION_REQUIRED" } })).toMatchObject({
+      message: expect.stringContaining("Comment published with partial screenshot evidence"),
+      metadata: expect.objectContaining({ pullRequestUrl: expect.stringContaining(`/pull/${managed.prNumber}`), publication: "partial" }),
+    });
     expect(stored.status).toBe("COMPLETED");
     expect(stored.review?.status).toBe("PASSED");
     expect(stored.review?.headSha).toBe("4".repeat(40));
@@ -1782,6 +1803,18 @@ function reviewGitHub(
           comments: [],
         }],
       };
+    },
+  };
+}
+
+function partialEvidence(state: RunnerGitHub) {
+  return {
+    ...state,
+    async addIssueComment(repository: string, number: number, body: string, options?: ScreenshotOptions): Promise<ScreenshotPublication> {
+      expect(options?.worktreePath).toBeTruthy();
+      expect(options?.publicationId).toBeTruthy();
+      await state.addIssueComment(repository, number, body);
+      return { publication: "partial", targetUrl: `https://github.com/${repository}/issues/${number}`, commentUrl: `https://github.com/${repository}/issues/${number}#issuecomment-12`, missing: ["desktop.png"], problems: ["missing_file", "incomplete_attachments"] };
     },
   };
 }
