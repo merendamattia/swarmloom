@@ -111,6 +111,61 @@ workflow checkout). Do not rely on remote CI status and never expect GitHub CI t
 you could have found locally: your job must only produce a Pull Request whose verification suite
 already passed locally.
 
+## Visual verification and screenshots
+
+For changes to a visible interface, start the target application's local server and verify the
+affected pages, interactions, and error/empty states at desktop and mobile widths. The image
+includes Python Playwright with Chromium, Firefox, and WebKit in `PLAYWRIGHT_BROWSERS_PATH`.
+Use the preinstalled `python3` and `playwright.sync_api` for ad hoc checks; do not download browsers
+or add Playwright to the target repository just to take screenshots. Existing project browser
+tests keep their own declared dependencies and browser versions.
+
+Use Chromium for desktop/mobile checks and Firefox/WebKit for relevant cross-browser behavior.
+Wait for the actual page state, capture it, and inspect the screenshots with the provider's image
+viewer; creating a PNG alone does not prove the layout is correct. Check overflow, clipped text,
+loading/errors, keyboard interactions, and browser console errors. Report what actually ran and
+any unavailable view. Close browsers and stop local servers after verification.
+
+For example, after starting the target app, replace the URL and capture its relevant states:
+
+```python
+from pathlib import Path
+from playwright.sync_api import sync_playwright
+
+output = Path(".agent-work/screenshots")
+output.mkdir(parents=True, exist_ok=True)
+with sync_playwright() as playwright:
+    for name in ("chromium", "firefox", "webkit"):
+        browser = getattr(playwright, name).launch()
+        for label, width, height in (("desktop", 1280, 800), ("mobile", 390, 844)):
+            page = browser.new_page(viewport={"width": width, "height": height})
+            page.goto("http://127.0.0.1:<app-port>", wait_until="domcontentloaded")
+            page.locator("body").wait_for(state="visible")
+            page.evaluate("document.fonts.ready")
+            page.screenshot(path=str(output / f"{name}-{label}.png"), full_page=True)
+            page.close()
+        browser.close()
+```
+
+Keep shareable screenshots under `.agent-work/screenshots/` in the assigned worktree. Use simple
+filenames containing letters, digits, hyphens or underscores and the `.png` extension; each image
+must be at most 10 MiB, with at most 50 distinct screenshots per response. Inspect images for
+credentials and private user data before sharing; use synthetic test data and crop/mask sensitive
+areas. Do not commit screenshots or include them as PR code changes.
+
+To publish evidence, put each image on its own line in the final response file, after the result
+marker and TL;DR, with a descriptive caption:
+
+```markdown
+![Chromium desktop: settings form after saving](.agent-work/screenshots/chromium-desktop.png)
+```
+
+The coordinator validates those local PNGs and attaches them to the issue/PR comment through
+GitHub CLI after normal workflow validation, before worktree cleanup. Do not upload the same
+images separately; never upload screenshots or post comments from a review job. GitHub upload
+requires a supported user token with write access to the repository; the coordinator records an
+upload failure in job events without changing the review verdict. Do not invent attachment URLs.
+
 ## GitHub command reference
 
 The container already includes `gh`, `git`, and the provider CLI. Use GitHub CLI commands for
@@ -219,8 +274,8 @@ the task explicitly requires that exact file and it cannot be completed from saf
 
 The final response must be a plain text file written to the path in the prompt's `Response file`
 section. That file is authoritative and the worker reads it after the run; it lives outside the
-worktree, so never commit it. The worker posts its content verbatim as the GitHub comment and stores
-it in the platform, so write the complete, self-contained response exactly as it should be read.
+worktree, so never commit it. The worker stores its content and posts it as the GitHub comment,
+rewriting screenshot references to hosted attachments. Write a complete, self-contained response.
 
 For an implementation session the response file must begin with a single outcome line followed by the
 free-form response:

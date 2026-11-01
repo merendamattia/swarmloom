@@ -139,4 +139,11 @@ describe("canonical agent runtime", () => {
     expect(deploy).toBeGreaterThan(generate);
     expect(verify).toBeGreaterThan(deploy);
   });
+
+  test("requires visual verification with preinstalled browsers and coordinator-owned screenshots", async () => {
+    const instructions = await loadAgentInstructions(runtime);
+    for (const text of ["Chromium", "Firefox", "WebKit", "playwright.sync_api", ".agent-work/screenshots/", "inspect the screenshots", "never upload screenshots or post comments from a review job"]) {
+      expect(instructions).toContain(text);
+    }
+  });
 });
