@@ -106,8 +106,8 @@ export function createJobRunner({
         executeRoleWithRetry: createExecuteRoleWithRetry(events, config, provider, (execution) => {
           state.lastExecution = execution;
         }),
-        finalizeIssue: createFinalizeIssue(github, config, events),
-        commentOnPullRequest: createCommentOnPullRequest(github, events),
+        finalizeIssue: createFinalizeIssue(github, config, events, () => state.worktreePath),
+        commentOnPullRequest: createCommentOnPullRequest(github, events, () => state.worktreePath),
       };
       const flows = {
         IMPLEMENTATION: runImplementation,

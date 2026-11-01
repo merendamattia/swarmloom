@@ -12,6 +12,7 @@ import type { AgentTokenUsage } from "../providers/types.ts";
 import { ProviderProcessError } from "../providers/process.ts";
 import { jobRepository } from "../repositories/jobs.ts";
 import { AgentExecutionError, causeChain, executionFailure, stackTrace, type DiagnosticEvent, type JobDiagnostics } from "./diagnostics.ts";
+import type { ScreenshotPublication } from "../github/screenshots.ts";
 import type { GitHubIssueContext } from "../github/client.ts";
 import type { RunningJob, RunnerContext, RunnerGitHub } from "./types.ts";
 import { parseJobOutcome, parsePullRequestUrl, parseReviewOutcome, parseTldr } from "./response.ts";
@@ -297,7 +298,7 @@ function recoveryContext(job: Pick<RunningJob, "sessionId" | "worktreePath">) {
   ].filter((line): line is string => Boolean(line)).join("\n");
 }
 
-export function createFinalizeIssue(github: RunnerGitHub, config: Config, events: RunnerContext["events"]) {
+export function createFinalizeIssue(github: RunnerGitHub, config: Config, events: RunnerContext["events"], worktreePath: () => string | undefined = () => undefined) {
   return async function finalizeIssue(job: RunningJob, labels: string[], comment: string) {
     try {
       const issue = await github.getIssue(job.repository.fullName, job.issueNumber);
@@ -310,21 +311,56 @@ export function createFinalizeIssue(github: RunnerGitHub, config: Config, events
       await recordGithubFailure(events, job, "update issue labels", error);
     }
     try {
-      await github.addIssueComment(job.repository.fullName, job.issueNumber, comment);
+      const publication = await github.addIssueComment(job.repository.fullName, job.issueNumber, comment, {
+        worktreePath: worktreePath() ?? job.worktreePath ?? undefined, publicationId: job.id,
+      });
+      if (publication) await recordScreenshotPublication(events, job, publication);
     } catch (error) {
       await recordGithubFailure(events, job, "comment on issue", error);
     }
   };
 }
 
-export function createCommentOnPullRequest(github: RunnerGitHub, events: RunnerContext["events"]) {
+export function createCommentOnPullRequest(github: RunnerGitHub, events: RunnerContext["events"], worktreePath: () => string | undefined = () => undefined) {
   return async function commentOnPullRequest(job: RunningJob, pullRequestNumber: number, comment: string) {
     try {
-      await github.addIssueComment(job.repository.fullName, pullRequestNumber, comment);
+      const publication = await github.addIssueComment(job.repository.fullName, pullRequestNumber, comment, {
+        worktreePath: worktreePath() ?? job.worktreePath ?? undefined, publicationId: job.id,
+      });
+      if (publication) await recordScreenshotPublication(events, job, publication, pullRequestNumber);
     } catch (error) {
       await recordGithubFailure(events, job, `comment on pull request #${pullRequestNumber}`, error);
     }
   };
+}
+
+async function recordScreenshotPublication(
+  events: RunnerContext["events"],
+  job: RunningJob,
+  publication: ScreenshotPublication,
+  pullRequestNumber?: number,
+) {
+  if (!publication.problems.length && publication.publication === "complete") return;
+  const state = {
+    complete: "Comment published with all screenshots; evidence finalization requires attention",
+    partial: "Comment published with partial screenshot evidence",
+    text_only: "Text comment published without screenshots",
+    not_posted: "No comment published",
+    unknown: "Comment publication could not be confirmed; inspect GitHub before retrying",
+  }[publication.publication];
+  await events.record({
+    type: "GITHUB_RECONCILIATION_REQUIRED",
+    level: "ERROR",
+    message: `${state} for ${job.repository.fullName}#${pullRequestNumber ?? job.issueNumber}. ${publication.commentUrl ?? publication.targetUrl}. Missing: ${publication.missing.join(", ") || "none"}. Diagnostics: ${publication.problems.join(", ")}. CLI exit: ${publication.uploadExitCode ?? "not run"}. Inspect the existing comment before retrying; retain the job verdict.`,
+    jobId: job.id,
+    repositoryId: job.repositoryId,
+    scanRunId: job.scanRunId ?? undefined,
+    metadata: {
+      issueUrl: job.issueUrl,
+      ...(pullRequestNumber ? { pullRequestUrl: publication.targetUrl.replace(/\/issues\/\d+$/, `/pull/${pullRequestNumber}`) } : {}),
+      ...publication,
+    },
+  });
 }
 
 export async function recordGithubFailure(
