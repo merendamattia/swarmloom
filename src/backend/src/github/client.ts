@@ -126,6 +126,12 @@ type GitHubClientOptions = {
 
 export function createGitHubClient(options: GitHubClientOptions) {
   const apiUrl = (options.apiUrl ?? "https://api.github.com").replace(/\/$/, "");
+  const githubUrl = new URL(apiUrl);
+  if (githubUrl.hostname === "api.github.com" || /^api\.[a-z0-9-]+\.ghe\.com$/.test(githubUrl.hostname)) {
+    githubUrl.hostname = githubUrl.hostname.slice(4);
+  }
+  const defaultUploader = createScreenshotUploader(options.token, githubUrl);
+  const uploadScreenshots = defaultUploader && (options.uploadScreenshots ?? defaultUploader);
   const fetch = options.fetch ?? globalThis.fetch;
 
   async function request(path: string, init: RequestInit = {}, text = false) {
@@ -465,7 +471,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
 
   async function addIssueComment(fullName: string, issueNumber: number, body: string, screenshots?: ScreenshotOptions): Promise<ScreenshotPublication | void> {
     if (hasScreenshotReferences(body)) {
-      return publishScreenshotComment((path, init) => request(path, { ...init, signal: AbortSignal.timeout(30_000) }), options.uploadScreenshots ?? createScreenshotUploader(options.token), fullName, issueNumber, body, screenshots ?? { publicationId: body });
+      return publishScreenshotComment((path, init) => request(path, { ...init, signal: AbortSignal.timeout(30_000) }), uploadScreenshots, fullName, issueNumber, body, screenshots ?? { publicationId: body }, githubUrl);
     }
     await request(`/repos/${fullName}/issues/${issueNumber}/comments`, {
       method: "POST",

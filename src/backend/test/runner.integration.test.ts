@@ -1088,7 +1088,7 @@ integration("job runner", () => {
     const runner = createJobRunner({
       config,
       provider,
-      github: partialEvidence(state),
+      github: partialEvidence(state, "https://github.example.test"),
       createReviewWorktree: async () => "agent/review-local",
     });
 
@@ -1096,7 +1096,7 @@ integration("job runner", () => {
     const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id }, include: { review: true } });
     expect(await prisma.jobEvent.findFirst({ where: { jobId: job.id, type: "GITHUB_RECONCILIATION_REQUIRED" } })).toMatchObject({
       message: expect.stringContaining("Comment published with partial screenshot evidence"),
-      metadata: expect.objectContaining({ pullRequestUrl: expect.stringContaining(`/pull/${managed.prNumber}`), publication: "partial" }),
+      metadata: expect.objectContaining({ pullRequestUrl: expect.stringMatching(new RegExp(`^https://github\\.example\\.test/[^/]+/[^/]+/pull/${managed.prNumber}$`)), publication: "partial" }),
     });
     expect(stored.status).toBe("COMPLETED");
     expect(stored.review?.status).toBe("PASSED");
@@ -1807,14 +1807,14 @@ function reviewGitHub(
   };
 }
 
-function partialEvidence(state: RunnerGitHub) {
+function partialEvidence(state: RunnerGitHub, origin = "https://github.com") {
   return {
     ...state,
     async addIssueComment(repository: string, number: number, body: string, options?: ScreenshotOptions): Promise<ScreenshotPublication> {
       expect(options?.worktreePath).toBeTruthy();
       expect(options?.publicationId).toBeTruthy();
       await state.addIssueComment(repository, number, body);
-      return { publication: "partial", targetUrl: `https://github.com/${repository}/issues/${number}`, commentUrl: `https://github.com/${repository}/issues/${number}#issuecomment-12`, missing: ["desktop.png"], problems: ["missing_file", "incomplete_attachments"] };
+      return { publication: "partial", targetUrl: `${origin}/${repository}/issues/${number}`, commentUrl: `${origin}/${repository}/issues/${number}#issuecomment-12`, missing: ["desktop.png"], problems: ["missing_file", "incomplete_attachments"] };
     },
   };
 }

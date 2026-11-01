@@ -805,12 +805,18 @@ reconciliation finish, even if a terminal-job recovery removes the original work
 
 The publisher supplies GitHub CLI with text containing no local image links. CLI appends hosted
 images; Swarmloom reads the resulting comment and restores their captions and positions using only
-verified `github.com/user-attachments/assets/` URLs. A deterministic job/result marker identifies the
-comment on subsequent calls. Existing comments are repaired by ID, retaining hosted evidence;
+verified `/user-attachments/assets/` URLs on the configured GitHub host. A deterministic job/result
+marker identifies the comment on subsequent calls. Existing comments are repaired by ID, retaining hosted evidence;
 partial uploads are never retried as a new comment. Missing files become explicit unavailable-image
 notices, retaining the implementation or review text. Lookup failures stop publication rather than
 risking a duplicate. GitHub CLI can publish partial evidence before returning an error; see its
 [comment implementation](https://github.com/cli/cli/blob/v2.102.0/pkg/cmd/pr/shared/commentable.go).
+
+`GITHUB_API_URL` also determines the screenshot upload host, accepted attachment URLs and diagnostic
+links. GitHub.com and `*.ghe.com` cloud tenants support CLI attachments. GitHub Enterprise Server and
+custom REST endpoints retain safe text evidence through the configured REST API without invoking
+CLI uploads or sending credentials to public GitHub. These comments report
+`attachments_unsupported_host`; retries repair the existing comment without creating a duplicate.
 
 `GITHUB_RECONCILIATION_REQUIRED` distinguishes complete, partial, text-only, absent and unconfirmed
 publication, and includes the comment/target URL, missing filenames and sanitized reason codes

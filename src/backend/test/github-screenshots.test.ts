@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +16,7 @@ async function fixture() {
   return worktree;
 }
 
-function remote() {
+function remote(origin = "https://github.com") {
   const comments: Array<{ id: number; html_url: string; body: string }> = [];
   return { comments, fetch: async (input: string | URL | Request, init?: RequestInit) => {
     const request = new Request(input, init);
@@ -28,7 +28,8 @@ function remote() {
       comment.body = body;
       return Response.json(comment);
     }
-    const comment = { id: 12, html_url: "https://github.com/acme/app/issues/7#issuecomment-12", body };
+    const number = /\/issues\/(\d+)\/comments$/.exec(new URL(request.url).pathname)![1];
+    const comment = { id: 12, html_url: `${origin}/acme/app/issues/${number}#issuecomment-12`, body };
     comments.push(comment);
     return Response.json(comment);
   } };
@@ -265,4 +266,95 @@ test("a nonzero CLI result remains diagnosable even when all hosted images exist
   } });
   expect(await client.addIssueComment("acme/app", 7, body, { worktreePath: worktree, publicationId: "complete-with-error" }))
     .toMatchObject({ publication: "complete", missing: [], problems: ["upload_failed"] });
+});
+
+for (const [number, origin] of [[7, "https://github.example.test"], [8, "https://github.example.test:8443"]] as const) {
+  test(`Enterprise screenshot comment #${number} retains text on the configured host without invoking public GitHub`, async () => {
+    const worktree = await fixture();
+    const state = remote(origin);
+    const requests: string[] = [];
+    const spawn = spyOn(Bun, "spawn").mockImplementation(() => { throw new Error("Attachments must not invoke CLI on unsupported hosts"); });
+    try {
+      const client = createGitHubClient({ token: "enterprise-secret", apiUrl: `${origin}/api/v3/`, fetch: async (input, init) => {
+        const request = new Request(input, init);
+        requests.push(request.url);
+        expect(request.headers.get("Authorization")).toBe("Bearer enterprise-secret");
+        return state.fetch(input, init);
+      } });
+      const options = { worktreePath: worktree, publicationId: "enterprise-result" };
+      const result = await client.addIssueComment("acme/app", number, body, options);
+      expect(spawn).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        publication: "text_only", targetUrl: `${origin}/acme/app/issues/${number}`,
+        commentUrl: state.comments[0]!.html_url, missing: ["desktop.png", "mobile.png"],
+        problems: expect.arrayContaining(["attachments_unsupported_host", "incomplete_attachments"]),
+      });
+      expect(requests.every((url) => url.startsWith(`${origin}/api/v3/repos/acme/app/`))).toBe(true);
+      expect(state.comments[0]!.body).toContain("Outcome: implemented\nTL;DR: Fixed.");
+      expect(state.comments[0]!.body).toContain("[Screenshot unavailable: desktop.png]");
+      expect(state.comments[0]!.body).not.toContain(".agent-work/screenshots/");
+      const published = state.comments[0]!.body;
+      expect(await client.addIssueComment("acme/app", number, body, options)).toMatchObject({ publication: "text_only", problems: expect.arrayContaining(["attachments_unsupported_host"]) });
+      expect(state.comments).toHaveLength(1);
+      expect(state.comments[0]!.body).toBe(published);
+      expect(JSON.stringify(result)).not.toContain("enterprise-secret");
+    } finally { spawn.mockRestore(); }
+  });
+}
+
+for (const host of ["github.com", "acme.ghe.com"]) {
+  test(`default uploader and reconciliation stay on ${host}, including retries`, async () => {
+    const worktree = await fixture();
+    const state = remote(`https://${host}`);
+    const spawn = spyOn(Bun, "spawn").mockImplementation(((args: string[], options?: Parameters<typeof Bun.spawn>[1]) => {
+      expect(options?.env?.GH_HOST).toBe(host);
+      expect(options?.env?.GH_TOKEN).toBe("configured-token");
+      expect(args[args.indexOf("--repo") + 1]).toBe(`${host}/acme/app`);
+      const safeBody = new TextDecoder().decode(options?.stdin as Uint8Array);
+      expect(safeBody).not.toContain(".agent-work/screenshots/");
+      const attachments = args.filter((_, index) => args[index - 1] === "--attach");
+      expect(attachments).toHaveLength(2);
+      state.comments.push({ id: 12, html_url: `https://${host}/acme/app/issues/7#issuecomment-12`, body: safeBody + attachments.map((attachment, index) => `\n![${attachment.split("#")[1]}](https://${host}/user-attachments/assets/image-${index})`).join("") });
+      return { exited: Promise.resolve(0), stderr: new Blob([]).stream(), kill: () => {} } as unknown as ReturnType<typeof Bun.spawn>;
+    }) as typeof Bun.spawn);
+    try {
+      const client = createGitHubClient({ token: "configured-token", apiUrl: `https://api.${host}`, fetch: async (input, init) => {
+        expect(new URL(String(input)).origin).toBe(`https://api.${host}`);
+        return state.fetch(input, init);
+      } });
+      const options = { worktreePath: worktree, publicationId: "configured-host" };
+      expect(await client.addIssueComment("acme/app", 7, body, options)).toMatchObject({ publication: "complete", targetUrl: `https://${host}/acme/app/issues/7`, missing: [], problems: [] });
+      expect(state.comments[0]!.body).toContain(`![Desktop](https://${host}/user-attachments/assets/image-0)`);
+      expect(state.comments[0]!.body).not.toContain(".agent-work/screenshots/");
+      const published = state.comments[0]!.body;
+      expect(await client.addIssueComment("acme/app", 7, body, options)).toMatchObject({ publication: "complete", missing: [], problems: [] });
+      expect(state.comments).toHaveLength(1);
+      expect(state.comments[0]!.body).toBe(published);
+      expect(spawn).toHaveBeenCalledTimes(1);
+    } finally { spawn.mockRestore(); }
+  });
+}
+
+test("cloud reconciliation rejects attachment URLs and saved identities from a different host", async () => {
+  const worktree = await fixture();
+  const origin = "https://acme.ghe.com";
+  const state = remote(origin);
+  let uploads = 0;
+  const client = createGitHubClient({ token: "cloud-secret", apiUrl: "https://api.acme.ghe.com", fetch: state.fetch, uploadScreenshots: async (input) => {
+    uploads += 1;
+    state.comments.push({ id: 12, html_url: `${origin}/acme/app/issues/7#issuecomment-12`, body: input.body
+      + `\n![${input.files[0]!.alt}](${origin}/user-attachments/assets/desktop)`
+      + `\n![${input.files[1]!.alt}](https://github.com/user-attachments/assets/mobile)`
+      + "\n<!-- swarmloom-attachment:1 https://github.com/user-attachments/assets/mobile -->" });
+    return { exitCode: 0, stderr: "" };
+  } });
+  const options = { worktreePath: worktree, publicationId: "hosted-boundary" };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    expect(await client.addIssueComment("acme/app", 7, body, options)).toMatchObject({ publication: "partial", missing: ["mobile.png"] });
+    expect(state.comments[0]!.body).toContain(`![Desktop](${origin}/user-attachments/assets/desktop)`);
+    expect(state.comments[0]!.body).toContain("[Screenshot unavailable: mobile.png]");
+    expect(state.comments[0]!.body).not.toContain("https://github.com/");
+  }
+  expect(uploads).toBe(1);
+  expect(state.comments).toHaveLength(1);
 });

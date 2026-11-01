@@ -357,7 +357,7 @@ async function recordScreenshotPublication(
     scanRunId: job.scanRunId ?? undefined,
     metadata: {
       issueUrl: job.issueUrl,
-      ...(pullRequestNumber ? { pullRequestUrl: `https://github.com/${job.repository.fullName}/pull/${pullRequestNumber}` } : {}),
+      ...(pullRequestNumber ? { pullRequestUrl: publication.targetUrl.replace(/\/issues\/\d+$/, `/pull/${pullRequestNumber}`) } : {}),
       ...publication,
     },
   });

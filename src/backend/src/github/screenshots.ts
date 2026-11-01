@@ -8,7 +8,6 @@ import { z } from "zod";
 
 const maxSize = 10 * 1024 * 1024;
 const localPath = /^(?:\.\/)?\.agent-work\/screenshots\/([a-zA-Z0-9_-]+\.png)$/;
-const hostedPath = /^https:\/\/github\.com\/user-attachments\/assets\/[a-zA-Z0-9-]+$/;
 const commentSchema = z.object({ id: z.number().int().positive(), html_url: z.url(), body: z.string().nullable() });
 type Comment = z.infer<typeof commentSchema>;
 type Request = (path: string, init?: RequestInit) => Promise<unknown>;
@@ -104,11 +103,12 @@ async function snapshot(worktree: string | undefined, path: string, destination:
 
 export async function publishScreenshotComment(
   request: Request,
-  upload: ScreenshotUpload,
+  upload: ScreenshotUpload | undefined,
   repository: string,
   number: number,
   body: string,
   options: ScreenshotOptions,
+  githubUrl: URL,
 ): Promise<ScreenshotPublication> {
   const refs = references(body);
   const normalizedPath = (path: string) => path.replace(/^\.\//, "");
@@ -116,8 +116,11 @@ export async function publishScreenshotComment(
   const names = paths.map((path, index) => localPath.exec(path)?.[1] ?? `invalid-reference-${index + 1}`);
   const hash = createHash("sha256").update(`${options.publicationId}\0${body}`).digest("hex");
   const marker = `<!-- swarmloom-evidence:${hash} -->`;
-  const targetUrl = `https://github.com/${repository}/issues/${number}`;
+  const targetUrl = `${githubUrl.origin}/${repository}/issues/${number}`;
+  const hostedPrefix = `${githubUrl.origin}/user-attachments/assets/`;
+  const isHosted = (path: string) => path.startsWith(hostedPrefix) && /^[a-zA-Z0-9-]+$/.test(path.slice(hostedPrefix.length));
   const result: ScreenshotPublication = { publication: "not_posted", targetUrl, missing: [...names], problems: [] };
+  if (!upload) result.problems.push("attachments_unsupported_host");
   const endpoint = `/repos/${repository}/issues/${number}/comments`;
   async function findComment() {
     for (let page = 1; ; page += 1) {
@@ -140,30 +143,32 @@ export async function publishScreenshotComment(
   let staging: string | undefined;
   try {
     if (!comment) {
-      try {
-        staging = await mkdtemp(join(tmpdir(), "swarmloom-evidence-"));
-        await chmod(staging, 0o700);
-      } catch (error) {
-        result.problems.push(`staging_failed:${failureCode(error)}`);
-        return result;
-      }
       const files: Array<{ path: string; alt: string }> = [];
-      for (const [index, path] of paths.entries()) {
-        if (!localPath.test(path) || index >= 50) {
-          result.problems.push(`${names[index]}:${index >= 50 ? "image_limit" : "invalid_reference"}`);
-          continue;
-        }
-        const destination = join(staging, `${index}.png`);
+      if (upload) {
         try {
-          await snapshot(options.worktreePath, path, destination);
-          files.push({ path: destination, alt: `swarmloom-${hash}-${index}` });
+          staging = await mkdtemp(join(tmpdir(), "swarmloom-evidence-"));
+          await chmod(staging, 0o700);
         } catch (error) {
-          const reason = error instanceof Error && error.message === "invalid_image" ? "invalid_image" : failureCode(error);
-          result.problems.push(`${names[index]}:${reason}`);
+          result.problems.push(`staging_failed:${failureCode(error)}`);
+          return result;
+        }
+        for (const [index, path] of paths.entries()) {
+          if (!localPath.test(path) || index >= 50) {
+            result.problems.push(`${names[index]}:${index >= 50 ? "image_limit" : "invalid_reference"}`);
+            continue;
+          }
+          const destination = join(staging, `${index}.png`);
+          try {
+            await snapshot(options.worktreePath, path, destination);
+            files.push({ path: destination, alt: `swarmloom-${hash}-${index}` });
+          } catch (error) {
+            const reason = error instanceof Error && error.message === "invalid_image" ? "invalid_image" : failureCode(error);
+            result.problems.push(`${names[index]}:${reason}`);
+          }
         }
       }
       try {
-        if (files.length) {
+        if (upload && files.length) {
           const uploaded = await upload({ repository, number, body: safeBody, files });
           result.uploadExitCode = uploaded.exitCode;
           if (uploaded.exitCode !== 0 || uploaded.timedOut) {
@@ -193,13 +198,13 @@ export async function publishScreenshotComment(
     const hosted = new Map<number, string>();
     for (const image of images(remoteBody).references) {
       const index = paths.findIndex((_, index) => image.caption === `swarmloom-${hash}-${index}`);
-      if (index >= 0 && hostedPath.test(image.path)) hosted.set(index, image.path);
+      if (index >= 0 && isHosted(image.path)) hosted.set(index, image.path);
     }
     // Persist image identities separately from captions: two screenshots can
     // legitimately have the same caption, including across repeated calls.
-    for (const entry of remoteBody.matchAll(/<!-- swarmloom-attachment:(\d+) (https:\/\/github\.com\/user-attachments\/assets\/[a-zA-Z0-9-]+) -->/g)) {
+    for (const entry of remoteBody.matchAll(/<!-- swarmloom-attachment:(\d+) (\S+) -->/g)) {
       const index = Number(entry[1]);
-      if (index < paths.length) hosted.set(index, entry[2]!);
+      if (index < paths.length && isHosted(entry[2]!)) hosted.set(index, entry[2]!);
     }
     result.missing = names.filter((_, index) => !hosted.has(index));
     result.publication = !result.missing.length ? "complete" : hosted.size ? "partial" : "text_only";
@@ -230,10 +235,14 @@ export async function publishScreenshotComment(
   }
 }
 
-export function createScreenshotUploader(token: string): ScreenshotUpload {
+export function createScreenshotUploader(token: string, githubUrl: URL): ScreenshotUpload | undefined {
+  // GitHub CLI's attachment endpoint supports public GitHub and data-residency
+  // cloud tenants, but not Enterprise Server or custom REST proxies.
+  if (githubUrl.protocol !== "https:" || githubUrl.port || githubUrl.pathname !== "/"
+    || !(githubUrl.hostname === "github.com" || /^[a-z0-9-]+\.ghe\.com$/.test(githubUrl.hostname))) return undefined;
   return async ({ repository, number, body, files }) => {
-    const process = Bun.spawn(["gh", "issue", "comment", String(number), "--repo", repository, "--body-file", "-", ...files.flatMap((file) => ["--attach", `${file.path}#${file.alt}`])], {
-      env: { ...globalThis.process.env, GH_TOKEN: token, GITHUB_TOKEN: token, GH_HOST: "github.com", GH_PROMPT_DISABLED: "1" },
+    const process = Bun.spawn(["gh", "issue", "comment", String(number), "--repo", `${githubUrl.host}/${repository}`, "--body-file", "-", ...files.flatMap((file) => ["--attach", `${file.path}#${file.alt}`])], {
+      env: { ...globalThis.process.env, GH_TOKEN: token, GITHUB_TOKEN: token, GH_HOST: githubUrl.host, GH_PROMPT_DISABLED: "1" },
       stdin: new TextEncoder().encode(body), stdout: "ignore", stderr: "pipe",
     });
     let timedOut = false;
