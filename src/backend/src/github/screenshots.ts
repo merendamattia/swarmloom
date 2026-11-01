@@ -6,7 +6,6 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 
 const maxSize = 10 * 1024 * 1024;
-const imagePattern = /!\[([^\]\r\n]*)\]\(([^)\r\n]*)\)/g;
 const localPath = /^(?:\.\/)?\.agent-work\/screenshots\/([a-zA-Z0-9_-]+\.png)$/;
 const hostedPath = /^https:\/\/github\.com\/user-attachments\/assets\/[a-zA-Z0-9-]+$/;
 const commentSchema = z.object({ id: z.number().int().positive(), html_url: z.url(), body: z.string().nullable() });
@@ -23,8 +22,30 @@ export type ScreenshotPublication = {
   problems: string[];
 };
 
+function* images(body: string) {
+  for (const start of body.matchAll(/!\[/g)) {
+    const captionStart = start.index + 2;
+    let end = captionStart;
+    let depth = 1;
+    // Markdown captions allow balanced brackets and backslash escapes.
+    for (; end < body.length; end += 1) {
+      if (body[end] === "\\") { end += 1; continue; }
+      if (body[end] === "[") depth += 1;
+      if (body[end] === "]" && --depth === 0) break;
+    }
+    if (depth !== 0) continue;
+    const destination = /^\(([^)\r\n]*)\)/.exec(body.slice(end + 1));
+    if (!destination) continue;
+    yield {
+      markdown: body.slice(start.index, end + 1 + destination[0].length),
+      caption: body.slice(captionStart, end),
+      path: destination[1]!,
+    };
+  }
+}
+
 function references(body: string) {
-  return [...body.matchAll(imagePattern)].filter((match) => !match[2]!.startsWith("https://") && match[2]!.includes(".agent-work/screenshots/"));
+  return [...images(body)].filter((image) => !image.path.startsWith("https://") && image.path.includes(".agent-work/screenshots/"));
 }
 
 export function hasScreenshotReferences(body: string) {
@@ -75,7 +96,7 @@ export async function publishScreenshotComment(
 ): Promise<ScreenshotPublication> {
   const refs = references(body);
   const normalizedPath = (path: string) => path.replace(/^\.\//, "");
-  const paths = [...new Set(refs.map((ref) => normalizedPath(ref[2]!)))];
+  const paths = [...new Set(refs.map((ref) => normalizedPath(ref.path)))];
   const names = paths.map((path, index) => localPath.exec(path)?.[1] ?? `invalid-reference-${index + 1}`);
   const hash = createHash("sha256").update(`${options.publicationId}\0${body}`).digest("hex");
   const marker = `<!-- swarmloom-evidence:${hash} -->`;
@@ -99,7 +120,7 @@ export async function publishScreenshotComment(
 
   // The CLI appends uploads to a body with no local image Markdown. Even a
   // partial post (or a crash before reconciliation) is therefore safe to read.
-  const safeBody = refs.reduce((text, ref) => text.replace(ref[0], ""), body) + `\n\n${marker}`;
+  const safeBody = refs.reduce((text, ref) => text.replace(ref.markdown, ""), body) + `\n\n${marker}`;
   let staging: string | undefined;
   try {
     if (!comment) {
@@ -154,9 +175,9 @@ export async function publishScreenshotComment(
     result.commentUrl = comment.html_url;
     const remoteBody = comment.body ?? "";
     const hosted = new Map<number, string>();
-    for (const image of remoteBody.matchAll(imagePattern)) {
-      const index = paths.findIndex((_, index) => image[1] === `swarmloom-${hash}-${index}`);
-      if (index >= 0 && hostedPath.test(image[2]!)) hosted.set(index, image[2]!);
+    for (const image of images(remoteBody)) {
+      const index = paths.findIndex((_, index) => image.caption === `swarmloom-${hash}-${index}`);
+      if (index >= 0 && hostedPath.test(image.path)) hosted.set(index, image.path);
     }
     // Persist image identities separately from captions: two screenshots can
     // legitimately have the same caption, including across repeated calls.
@@ -168,9 +189,9 @@ export async function publishScreenshotComment(
     result.publication = !result.missing.length ? "complete" : hosted.size ? "partial" : "text_only";
     if (result.missing.length) result.problems.push("incomplete_attachments");
     const repaired = refs.reduce((text, ref) => {
-      const index = paths.indexOf(normalizedPath(ref[2]!));
+      const index = paths.indexOf(normalizedPath(ref.path));
       const url = hosted.get(index);
-      return text.replace(ref[0], url ? `![${ref[1]}](${url})` : `[Screenshot unavailable: ${names[index]}]`);
+      return text.replace(ref.markdown, () => url ? `![${ref.caption}](${url})` : `[Screenshot unavailable: ${names[index]}]`);
     }, body) + `\n\n${marker}` + [...hosted].map(([index, url]) => `\n<!-- swarmloom-attachment:${index} ${url} -->`).join("");
     if (repaired !== remoteBody) {
       try {

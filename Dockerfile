@@ -1,12 +1,18 @@
 # syntax=docker/dockerfile:1
+FROM node:24.22.2-bookworm-slim AS node-runtime
+
 FROM oven/bun:1.3.14 AS dependencies
 USER root
 ARG GH_CLI_VERSION=2.102.0
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN --mount=type=cache,target=/var/cache/apt \
   apt-get update \
   && apt-get install -y --no-install-recommends \
-      build-essential ca-certificates curl git nodejs npm pkg-config \
+      build-essential ca-certificates curl git libatomic1 pkg-config \
       netcat-openbsd postgresql python3 python3-dev python3-venv redis-server \
+  && ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+  && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
   && ln -s /usr/lib/postgresql/*/bin/* /usr/local/bin/ \
   && rm -rf /var/lib/apt/lists/*
 # --attach requires the current GitHub CLI, rather than Debian's older package.

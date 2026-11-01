@@ -36,6 +36,38 @@ function remote() {
 
 const body = "Outcome: implemented\nTL;DR: Fixed.\n![Desktop](.agent-work/screenshots/desktop.png)\n![Mobile](.agent-work/screenshots/mobile.png)";
 
+for (const caption of ["Desktop [dark]", "Desktop [dark [high contrast]]", String.raw`Desktop \] dark`, "Desktop $&", "Desktop $`", "Desktop $'"]) {
+  for (const available of [true, false]) {
+    test(`preserves literal caption ${JSON.stringify(caption)} with ${available ? "hosted" : "missing"} evidence`, async () => {
+      const worktree = await fixture();
+      if (!available) await rm(join(worktree, ".agent-work/screenshots/desktop.png"));
+      const state = remote();
+      let uploads = 0;
+      const client = createGitHubClient({ token: "secret-token", fetch: state.fetch, uploadScreenshots: async (input) => {
+        uploads += 1;
+        expect(input.body).not.toContain(".agent-work/screenshots/");
+        expect(input.files).toHaveLength(1);
+        state.comments.push({ id: 12, html_url: "https://github.com/acme/app/issues/7#issuecomment-12", body: input.body + `\n![${input.files[0]!.alt}](https://github.com/user-attachments/assets/desktop)` });
+        return { exitCode: 0, stderr: "" };
+      } });
+      const response = `Outcome: implemented\n![${caption}](.agent-work/screenshots/desktop.png)\nUseful evidence.`;
+      const options = { worktreePath: worktree, publicationId: "literal-caption" };
+      expect(await client.addIssueComment("acme/app", 7, response, options)).toMatchObject({
+        publication: available ? "complete" : "text_only",
+        missing: available ? [] : ["desktop.png"],
+        problems: available ? [] : expect.arrayContaining(["desktop.png:missing_file", "incomplete_attachments"]),
+      });
+      const published = state.comments[0]!.body;
+      expect(published).toStartWith(`Outcome: implemented\n${available ? `![${caption}](https://github.com/user-attachments/assets/desktop)` : "[Screenshot unavailable: desktop.png]"}\nUseful evidence.`);
+      expect(published).not.toContain(".agent-work/screenshots/");
+      await client.addIssueComment("acme/app", 7, response, options);
+      expect(state.comments).toHaveLength(1);
+      expect(state.comments[0]!.body).toBe(published);
+      expect(uploads).toBe(available ? 1 : 0);
+    });
+  }
+}
+
 test("snapshots survive source removal and a partial CLI post is reconciled without duplicating comments", async () => {
   const worktree = await fixture();
   const state = remote();
