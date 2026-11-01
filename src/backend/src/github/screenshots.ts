@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { chmod, mkdtemp, open, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import { z } from "zod";
 
 const maxSize = 10 * 1024 * 1024;
@@ -22,30 +23,45 @@ export type ScreenshotPublication = {
   problems: string[];
 };
 
-function* images(body: string) {
-  for (const start of body.matchAll(/!\[/g)) {
-    const captionStart = start.index + 2;
-    let end = captionStart;
-    let depth = 1;
-    // Markdown captions allow balanced brackets and backslash escapes.
-    for (; end < body.length; end += 1) {
-      if (body[end] === "\\") { end += 1; continue; }
-      if (body[end] === "[") depth += 1;
-      if (body[end] === "]" && --depth === 0) break;
-    }
-    if (depth !== 0) continue;
-    const destination = /^\(([^)\r\n]*)\)/.exec(body.slice(end + 1));
-    if (!destination) continue;
-    yield {
-      markdown: body.slice(start.index, end + 1 + destination[0].length),
-      caption: body.slice(captionStart, end),
-      path: destination[1]!,
-    };
-  }
+type MarkdownNode = ReturnType<typeof fromMarkdown> | ReturnType<typeof fromMarkdown>["children"][number];
+type ImageReference = { start: number; end: number; caption: string; path: string; definition: boolean };
+
+function* nodes(node: MarkdownNode): Generator<MarkdownNode> {
+  yield node;
+  if ("children" in node) for (const child of node.children) yield* nodes(child);
 }
 
-function references(body: string) {
-  return [...images(body)].filter((image) => !image.path.startsWith("https://") && image.path.includes(".agent-work/screenshots/"));
+function images(body: string) {
+  const captions = new Map<number, string>();
+  const tree = fromMarkdown(body, { mdastExtensions: [{ enter: {
+    // AST alt text loses Markdown formatting and escapes; retain the source label.
+    labelText(token) { captions.set(token.start.offset - 2, this.sliceSerialize(token)); },
+  } }] });
+  const entries = [...nodes(tree)];
+  const definitions = entries.filter((node) => node.type === "definition");
+  const references: ImageReference[] = [];
+  for (const node of entries) {
+    if (node.type !== "image" && node.type !== "imageReference") continue;
+    const path = node.type === "image" ? node.url : definitions.find((definition) => definition.identifier === node.identifier)?.url;
+    if (path === undefined) continue;
+    const start = node.position!.start.offset!;
+    references.push({ start, end: node.position!.end.offset!, caption: captions.get(start) ?? "", path, definition: false });
+  }
+  return { references, definitions };
+}
+
+function references(body: string): ImageReference[] {
+  const parsed = images(body);
+  const refs = parsed.references.filter((image) => !image.path.startsWith("https://") && image.path.includes(".agent-work/screenshots/"));
+  // Rewrite shared definitions too, so reference links cannot retain local paths.
+  return [...refs, ...parsed.definitions.filter((definition) => refs.some((ref) => ref.path === definition.url)).map((definition) => ({
+    start: definition.position!.start.offset!, end: definition.position!.end.offset!,
+    caption: definition.label ?? definition.identifier, path: definition.url, definition: true,
+  }))].sort((a, b) => a.start - b.start);
+}
+
+function replaceReferences(body: string, refs: ImageReference[], replacement: (ref: ImageReference) => string) {
+  return refs.reduceRight((text, ref) => text.slice(0, ref.start) + replacement(ref) + text.slice(ref.end), body);
 }
 
 export function hasScreenshotReferences(body: string) {
@@ -120,7 +136,7 @@ export async function publishScreenshotComment(
 
   // The CLI appends uploads to a body with no local image Markdown. Even a
   // partial post (or a crash before reconciliation) is therefore safe to read.
-  const safeBody = refs.reduce((text, ref) => text.replace(ref.markdown, ""), body) + `\n\n${marker}`;
+  const safeBody = replaceReferences(body, refs, () => "") + `\n\n${marker}`;
   let staging: string | undefined;
   try {
     if (!comment) {
@@ -175,7 +191,7 @@ export async function publishScreenshotComment(
     result.commentUrl = comment.html_url;
     const remoteBody = comment.body ?? "";
     const hosted = new Map<number, string>();
-    for (const image of images(remoteBody)) {
+    for (const image of images(remoteBody).references) {
       const index = paths.findIndex((_, index) => image.caption === `swarmloom-${hash}-${index}`);
       if (index >= 0 && hostedPath.test(image.path)) hosted.set(index, image.path);
     }
@@ -188,11 +204,12 @@ export async function publishScreenshotComment(
     result.missing = names.filter((_, index) => !hosted.has(index));
     result.publication = !result.missing.length ? "complete" : hosted.size ? "partial" : "text_only";
     if (result.missing.length) result.problems.push("incomplete_attachments");
-    const repaired = refs.reduce((text, ref) => {
+    const repaired = replaceReferences(body, refs, (ref) => {
       const index = paths.indexOf(normalizedPath(ref.path));
       const url = hosted.get(index);
-      return text.replace(ref.markdown, () => url ? `![${ref.caption}](${url})` : `[Screenshot unavailable: ${names[index]}]`);
-    }, body) + `\n\n${marker}` + [...hosted].map(([index, url]) => `\n<!-- swarmloom-attachment:${index} ${url} -->`).join("");
+      if (ref.definition) return url ? `[${ref.caption}]: ${url}` : "";
+      return url ? `![${ref.caption}](${url})` : `[Screenshot unavailable: ${names[index]}]`;
+    }) + `\n\n${marker}` + [...hosted].map(([index, url]) => `\n<!-- swarmloom-attachment:${index} ${url} -->`).join("");
     if (repaired !== remoteBody) {
       try {
         const updated = commentSchema.parse(await request(`/repos/${repository}/issues/comments/${comment.id}`, {

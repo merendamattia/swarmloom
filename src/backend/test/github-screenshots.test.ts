@@ -36,7 +36,7 @@ function remote() {
 
 const body = "Outcome: implemented\nTL;DR: Fixed.\n![Desktop](.agent-work/screenshots/desktop.png)\n![Mobile](.agent-work/screenshots/mobile.png)";
 
-for (const caption of ["Desktop [dark]", "Desktop [dark [high contrast]]", String.raw`Desktop \] dark`, "Desktop $&", "Desktop $`", "Desktop $'"]) {
+for (const caption of ["Desktop [dark]", "Desktop [dark [high contrast]]", String.raw`Desktop \] dark`, "Desktop $&", "Desktop $`", "Desktop $'", "The `]` key"]) {
   for (const available of [true, false]) {
     test(`preserves literal caption ${JSON.stringify(caption)} with ${available ? "hosted" : "missing"} evidence`, async () => {
       const worktree = await fixture();
@@ -68,6 +68,52 @@ for (const caption of ["Desktop [dark]", "Desktop [dark [high contrast]]", Strin
   }
 }
 
+for (const image of ["![Desktop][desktop]", "![Desktop][]", "![Desktop]", "![Desktop](<.agent-work/screenshots/desktop.png> \"Evidence\")"]) {
+  for (const available of [true, false]) {
+    test(`publishes ${image} with ${available ? "hosted" : "missing"} evidence and reuses the comment`, async () => {
+      const worktree = await fixture();
+      if (!available) await rm(join(worktree, ".agent-work/screenshots/desktop.png"));
+      const state = remote();
+      let uploads = 0;
+      const client = createGitHubClient({ token: "secret-token", fetch: state.fetch, uploadScreenshots: async (input) => {
+        uploads += 1;
+        expect(input.body).not.toContain(".agent-work/screenshots/");
+        expect(input.files).toHaveLength(1);
+        state.comments.push({ id: 12, html_url: "https://github.com/acme/app/pull/8#issuecomment-12", body: input.body + `\n![${input.files[0]!.alt}](https://github.com/user-attachments/assets/desktop)` });
+        return { exitCode: 0, stderr: "" };
+      } });
+      const response = `Outcome: implemented\n${image}\nUseful evidence.\n\n[desktop]: .agent-work/screenshots/desktop.png`;
+      const options = { worktreePath: worktree, publicationId: "reference-image" };
+      expect(await client.addIssueComment("acme/app", 8, response, options)).toMatchObject({
+        publication: available ? "complete" : "text_only",
+        missing: available ? [] : ["desktop.png"],
+      });
+      const published = state.comments[0]!.body;
+      expect(published).toStartWith(`Outcome: implemented\n${available ? "![Desktop](https://github.com/user-attachments/assets/desktop)" : "[Screenshot unavailable: desktop.png]"}\nUseful evidence.`);
+      expect(published).not.toContain(".agent-work/screenshots/");
+      await client.addIssueComment("acme/app", 8, response, options);
+      expect(state.comments).toHaveLength(1);
+      expect(state.comments[0]!.body).toBe(published);
+      expect(uploads).toBe(available ? 1 : 0);
+    });
+  }
+}
+
+test("replaces only image source ranges and leaves identical Markdown in code examples intact", async () => {
+  const worktree = await fixture();
+  await rm(join(worktree, ".agent-work/screenshots/desktop.png"));
+  const state = remote();
+  const client = createGitHubClient({ token: "secret-token", fetch: state.fetch });
+  const image = "![Desktop](.agent-work/screenshots/desktop.png)";
+  const example = `\`\`\`markdown\n${image}\n\`\`\``;
+  const response = `Example:\n\n${example}\n\nEvidence:\n${image}`;
+  expect(await client.addIssueComment("acme/app", 7, response, { worktreePath: worktree, publicationId: "source-ranges" })).toMatchObject({ publication: "text_only" });
+  expect(state.comments[0]!.body).toStartWith(`Example:\n\n${example}\n\nEvidence:\n[Screenshot unavailable: desktop.png]`);
+  const plain = remote();
+  expect(await createGitHubClient({ token: "secret-token", fetch: plain.fetch }).addIssueComment("acme/app", 7, example)).toBeUndefined();
+  expect(plain.comments[0]!.body).toBe(example);
+});
+
 test("snapshots survive source removal and a partial CLI post is reconciled without duplicating comments", async () => {
   const worktree = await fixture();
   const state = remote();
@@ -82,12 +128,13 @@ test("snapshots survive source removal and a partial CLI post is reconciled with
     return { exitCode: 1, stderr: "failed to upload: open /private/worktree/mobile.png: no such file or directory" };
   } });
   const options = { worktreePath: worktree, publicationId: "job-1" };
-  const result = await client.addIssueComment("acme/app", 7, body, options);
+  const response = body.replace("![Mobile](.agent-work/screenshots/mobile.png)", "![Mobile][mobile]") + "\n\n[mobile]: .agent-work/screenshots/mobile.png";
+  const result = await client.addIssueComment("acme/app", 7, response, options);
   expect(result).toMatchObject({ publication: "partial", uploadExitCode: 1, commentUrl: state.comments[0]!.html_url, missing: ["mobile.png"] });
   expect(state.comments[0]!.body).toContain("![Desktop](https://github.com/user-attachments/assets/desktop)");
   expect(state.comments[0]!.body).not.toContain(".agent-work/screenshots/");
   expect(JSON.stringify(result)).not.toContain("/private/");
-  await client.addIssueComment("acme/app", 7, body, options);
+  await client.addIssueComment("acme/app", 7, response, options);
   expect(uploads).toBe(1);
   expect(state.comments).toHaveLength(1);
 });
