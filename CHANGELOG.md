@@ -1,3 +1,15 @@
+## [1.20.1](https://github.com/merendamattia/swarmloom/compare/v1.20.0...v1.20.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* **github:** classify attachment write-access denials ([c1994e9](https://github.com/merendamattia/swarmloom/commit/c1994e90c39dd8b312e82525a698c5d08dbb901e))
+* **github:** honor configured screenshot host ([8a83038](https://github.com/merendamattia/swarmloom/commit/8a83038a555e40625030500886e6fc9059fcfef6))
+* **github:** parse screenshot image references consistently ([7c87ea3](https://github.com/merendamattia/swarmloom/commit/7c87ea3f2cd7b995b81431afd9cc49fc4cc94856))
+* **github:** preserve screenshot captions and support skills runtime ([9db2f74](https://github.com/merendamattia/swarmloom/commit/9db2f74f5f4d2e556b75190b2e322841559db6a4))
+* **github:** reconcile partial screenshot publication ([0c81a14](https://github.com/merendamattia/swarmloom/commit/0c81a1484a3c9d0019dd2542e33b05f6ed392e0c))
+* restore browser runtime and screenshot test contract ([b7d421e](https://github.com/merendamattia/swarmloom/commit/b7d421e72d6aeafeac7023c45c73d638c0395235))
+
 # [1.20.0](https://github.com/merendamattia/swarmloom/compare/v1.19.0...v1.20.0) (2026-10-18)
 
 

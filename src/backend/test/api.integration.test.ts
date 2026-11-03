@@ -398,6 +398,43 @@ integration("operations API", () => {
     await prisma.job.update({ where: { id: jobId }, data: { claimToken: null, cleanupToken: null } });
   });
 
+  test("returns the complete timeline without retransmitting stored provider payloads", async () => {
+    const createdAt = new Date("2026-01-01T00:00:00Z");
+    const event = await prisma.jobEvent.create({ data: {
+      jobId,
+      type: "AGENT_OUTPUT",
+      level: "INFO",
+      message: "Implementation verified.",
+      createdAt,
+      metadata: { tool: "shell", output: "x".repeat(16_384) },
+      raw: { provider: "x".repeat(16_384) },
+    } });
+    const recovery = await prisma.jobEvent.create({ data: {
+      jobId, type: "SESSION_RESUMED", message: "Resumed the provider session",
+      createdAt: new Date(createdAt.getTime() + 1), metadata: { attempt: 2, sessionId: "resume-session" },
+    } });
+    try {
+      const response = await app.request(`/api/jobs/${jobId}`);
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.events.find((item: { id: string }) => item.id === event.id)).toEqual({
+        id: event.id, type: "AGENT_OUTPUT", level: "INFO",
+        message: "Implementation verified.", createdAt: createdAt.toISOString(), metadata: null,
+      });
+      expect(body.events.filter((item: { id: string }) => [event.id, recovery.id].includes(item.id)))
+        .toMatchObject([{ id: event.id }, { id: recovery.id, metadata: recovery.metadata }]);
+      expect(await prisma.jobEvent.findUnique({ where: { id: event.id } })).toMatchObject({
+        metadata: event.metadata, raw: event.raw,
+      });
+      await prisma.job.update({ where: { id: jobId }, data: { environment: "production" } });
+      expect((await app.request(`/api/jobs/${jobId}`)).status).toBe(404);
+    } finally {
+      await prisma.job.update({ where: { id: jobId }, data: { environment: "test" } });
+      await prisma.jobEvent.delete({ where: { id: event.id } });
+      await prisma.jobEvent.delete({ where: { id: recovery.id } });
+    }
+  });
+
   test("returns the enabled Codex catalog with model-specific efforts", async () => {
     const response = await app.request("/api/codex/generation-options");
     expect(response.status).toBe(200);
@@ -1240,6 +1277,8 @@ integration("operations API", () => {
 
     const missing = await app.request(`/api/repositories/${crypto.randomUUID()}`, { method: "DELETE" });
     expect(missing.status).toBe(404);
+    await prisma.job.deleteMany({ where: { repositoryId: active.id } });
+    await prisma.repository.delete({ where: { id: active.id } });
   });
 
   test("drops a removed repository from the persisted configuration and restarts the scheduler", async () => {

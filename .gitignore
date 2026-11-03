@@ -1,4 +1,6 @@
 .agent-work/
+.agents/skills/
+.claude/skills/
 .env
 .env.*
 !.env.example

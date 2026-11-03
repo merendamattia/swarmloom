@@ -335,15 +335,7 @@ export function createApp({
       return context.json({ items: items.map(serializeJobSummary), total, page, pageSize });
     })
     .get("/jobs/:id", async (context) => {
-      const job = await prisma.job.findFirst({
-        where: { id: context.req.param("id"), environment: config.APP_ENV },
-        include: {
-          repository: true,
-          review: true,
-          pullRequest: true,
-          events: { orderBy: { createdAt: "asc" } },
-        },
-      });
+      const job = await jobRepository.findDetail(context.req.param("id"), config.APP_ENV);
       if (!job) return context.json({ error: "Not found" }, 404);
       const {
         claimToken: _claimToken,
