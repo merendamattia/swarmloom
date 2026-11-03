@@ -38,7 +38,8 @@ jobs:
           build-args: |
             NEXT_PUBLIC_API_URL=${{ env.PUBLIC_API_URL }}
           cache-from: type=gha,scope=swarmloom-production
-          cache-to: type=gha,scope=swarmloom-production,mode=max
+          # PR caches are scoped to that merge ref; only develop pushes write a reusable branch cache.
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,scope=swarmloom-production,mode=max' || '' }}
       # skills@latest uses the universal path for Codex and OpenCode, and the Claude path separately.
       - name: Verify production agent runtime
         run: docker compose --env-file .env.production.example -f docker-compose.production.yaml run --rm --no-deps backend sh -c 'set -eu; test -f /app/agent-runtime/instructions/global-skills.md; test -f /app/agent-runtime/instructions/global.md; for skill in /home/bun/.agents/skills/archify/SKILL.md /home/bun/.claude/skills/archify/SKILL.md; do test -f "$skill"; done'
