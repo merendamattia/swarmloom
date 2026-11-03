@@ -55,7 +55,7 @@ Actions runs `41615629233`, `41615629241` and `41615629483`.
 
 | Dominant work | Observed time | Change |
 | --- | ---: | --- |
-| Production image build | 204 s | Buildx with GitHub Actions layer cache; load the built image into Docker for all existing Compose smoke checks. |
+| Production image build | 204 s | Native Docker builder with containerd and GitHub Actions layer cache; its image store supplies all existing Compose smoke checks. |
 | Pre-commit in quality | 13 s | Cache Python 3.11 hook environments by OS, architecture and hook configuration. |
 | Separate pre-commit gate | 12 s | Reuse the same hook environment cache. |
 | Frontend/backend build | 26 s | Retain the complete build gate; measure cache changes before adding another archive. |
@@ -65,6 +65,13 @@ run-to-run variation rather than a candidate improvement. The quality job took
 91 s overall, and Docker took 219 s overall. These jobs run in parallel; their
 durations must not be added to estimate user waiting time. No self-hosted
 runners were registered during the audit.
+
+An initial `docker-container` builder experiment at `113ad9c` took 602 s cold
+and 111 s warm for the complete Docker job on the same commit and runner class
+(run `41621777488`, attempts 1 and 2). The warm build still spent 87.9 s
+exporting/loading an image into a separate Docker daemon. The native Docker
+builder uses the containerd image store to avoid that separate tarball transfer;
+its final remote timing must be measured before claiming an additional saving.
 
 Cache misses run every original install/build/check. Cache save/restore cost
 and cold versus warm remote results must be evaluated on the candidate's
