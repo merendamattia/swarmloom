@@ -1,19 +1,31 @@
 # syntax=docker/dockerfile:1
+FROM node:24.22.2-bookworm-slim AS node-runtime
+
 FROM oven/bun:1.3.14 AS dependencies
 USER root
+ARG GH_CLI_VERSION=2.102.0
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN --mount=type=cache,target=/var/cache/apt \
   apt-get update \
   && apt-get install -y --no-install-recommends \
-      build-essential ca-certificates curl git nodejs npm pkg-config \
+      build-essential ca-certificates curl git libatomic1 pkg-config \
       netcat-openbsd postgresql python3 python3-dev python3-venv redis-server \
-  && mkdir -p -m 755 /etc/apt/keyrings \
-  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-      -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-  && printf 'deb [arch=%s signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\n' \
-      "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/github-cli.list \
-  && apt-get update && apt-get install -y --no-install-recommends gh=2.102.0 \
+  && ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+  && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
   && ln -s /usr/lib/postgresql/*/bin/* /usr/local/bin/ \
   && rm -rf /var/lib/apt/lists/*
+# --attach requires the current GitHub CLI, rather than Debian's older package.
+RUN architecture="$(dpkg --print-architecture)" \
+  && package="gh_${GH_CLI_VERSION}_linux_${architecture}.deb" \
+  && curl --fail --silent --show-error --location --retry 3 \
+      "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/${package}" -o "/tmp/${package}" \
+  && curl --fail --silent --show-error --location --retry 3 \
+      "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_checksums.txt" -o /tmp/gh-checksums.txt \
+  && (cd /tmp && sha256sum --check --ignore-missing gh-checksums.txt) \
+  && dpkg -i "/tmp/${package}" \
+  && rm "/tmp/${package}" /tmp/gh-checksums.txt \
+  && gh issue comment --help | grep -q -- "--attach"
 ENV BUN_INSTALL_IGNORE_SCRIPTS=1
 WORKDIR /app
 COPY package.json bun.lock ./
@@ -81,7 +93,6 @@ EXPOSE 18420 18421
 CMD ["bun", "run", "dev"]
 
 FROM runtime-tools AS agent-skills
-COPY --from=node:24-bookworm-slim /usr/local/bin/node /usr/local/bin/node
 USER bun
 ENV npm_config_cache=/tmp/npx-cache
 # bun.sh/docs is documentation, not an installable SKILL.md endpoint. Keep the

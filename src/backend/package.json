@@ -24,6 +24,7 @@
     "croner": "^10.0.0",
     "hono": "^4.12.25",
     "ioredis": "^6.0.0",
+    "mdast-util-from-markdown": "^2.1.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
