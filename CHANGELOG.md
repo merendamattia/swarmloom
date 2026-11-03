@@ -1,3 +1,10 @@
+## [1.20.2](https://github.com/merendamattia/swarmloom/compare/v1.20.1...v1.20.2) (2026-11-03)
+
+
+### Performance Improvements
+
+* reduce job evidence payloads and cache CI builds ([34db244](https://github.com/merendamattia/swarmloom/commit/34db244d2364e43e7de50e441f501c9e99b75236))
+
 ## [1.20.1](https://github.com/merendamattia/swarmloom/compare/v1.20.0...v1.20.1) (2026-11-03)
 
 
