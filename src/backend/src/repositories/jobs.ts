@@ -1,4 +1,4 @@
-import { Prisma, type AgentProvider, type Job, type JobStatus, type JobSubject, type JobType } from "@prisma/client";
+import { Prisma, type AgentProvider, type Job, type JobEvent, type JobStatus, type JobSubject, type JobType } from "@prisma/client";
 import { prisma } from "../core/db.ts";
 import type { AgentTokenUsage } from "../providers/types.ts";
 
@@ -652,6 +652,24 @@ async function findRunning(id: string, workerId: string, claimToken: string) {
   });
 }
 
+async function findDetail(id: string, environment: string) {
+  const job = await prisma.job.findFirst({
+    where: { id, environment },
+    include: { repository: true, review: true, pullRequest: true },
+  });
+  if (!job) return null;
+  // Recovery labels need these two metadata records; provider payloads stay in history.
+  const events = await prisma.$queryRaw<Pick<JobEvent, "id" | "type" | "level" | "message" | "createdAt" | "metadata">[]>`
+    SELECT "id", "type", "level", "message", "createdAt",
+      CASE WHEN "type" IN ('JOB_RESUME_REQUESTED', 'SESSION_RESUMED')
+        THEN "metadata" ELSE NULL END AS "metadata"
+    FROM "job_event"
+    WHERE "jobId" = ${id}
+    ORDER BY "createdAt" ASC
+  `;
+  return { ...job, events };
+}
+
 async function isActiveClaim(id: string, workerId: string | null, claimToken: string | null) {
   if (!workerId || !claimToken) return false;
   const job = await prisma.job.findFirst({
@@ -897,6 +915,7 @@ async function failQueued(id: string, errorMessage: string, retainActiveKey = fa
 }
 
 export const jobRepository = {
+  findDetail,
   tryCreateQueued,
   findQueued,
   findQueuedJobs,

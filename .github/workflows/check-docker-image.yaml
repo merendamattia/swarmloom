@@ -5,6 +5,10 @@ on:
   push:
     branches: [develop]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   docker-test:
     runs-on: ubuntu-latest
@@ -23,8 +27,18 @@ jobs:
         run: docker compose --env-file .env.example config --quiet
       - name: Resolve production Compose
         run: docker compose --env-file .env.production.example -f docker-compose.production.yaml config --quiet
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
       - name: Build production application image
-        run: docker compose --env-file .env.production.example -f docker-compose.production.yaml build backend
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: swarmloom:production
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ env.PUBLIC_API_URL }}
+          cache-from: type=gha,scope=swarmloom-production
+          cache-to: type=gha,scope=swarmloom-production,mode=max
       # skills@latest uses the universal path for Codex and OpenCode, and the Claude path separately.
       - name: Verify production agent runtime
         run: docker compose --env-file .env.production.example -f docker-compose.production.yaml run --rm --no-deps backend sh -c 'set -eu; test -f /app/agent-runtime/instructions/global-skills.md; test -f /app/agent-runtime/instructions/global.md; for skill in /home/bun/.agents/skills/archify/SKILL.md /home/bun/.claude/skills/archify/SKILL.md; do test -f "$skill"; done'
