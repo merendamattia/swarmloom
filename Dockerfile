@@ -65,6 +65,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
   && chmod +x /usr/local/bin/python /usr/local/bin/python3 \
   && chown -R bun:bun /opt/pre-commit
 ENV PATH="/opt/pre-commit/bin:$PATH"
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
+RUN python3 -m playwright install --with-deps --only-shell chromium firefox webkit \
+  && chmod -R a+rX /opt/playwright \
+  && rm -rf /var/lib/apt/lists/*
 
 FROM runtime-tools AS dev
 # Local development target: node_modules, toolchain (codex/opencode/pre-commit),
