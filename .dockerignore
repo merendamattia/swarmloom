@@ -1,5 +1,7 @@
 .git
 .github
+.agents
+.claude
 node_modules
 src/frontend/.next
 src/backend/dist

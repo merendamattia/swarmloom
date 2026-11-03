@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 FROM node:24.22.2-bookworm-slim AS node-runtime
 
-FROM oven/bun:1.3.14 AS dependencies
+FROM oven/bun:1.4.4 AS dependencies
 USER root
 ARG GH_CLI_VERSION=2.102.0
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node

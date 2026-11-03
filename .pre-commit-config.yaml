@@ -1,3 +1,5 @@
+# Preserve imported skill bundles verbatim, including their upstream formatting.
+exclude: '^\.(agents|claude)/skills/'
 repos:
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v3.0.0
