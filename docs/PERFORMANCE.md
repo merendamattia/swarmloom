@@ -66,13 +66,13 @@ run-to-run variation rather than a candidate improvement. The quality job took
 durations must not be added to estimate user waiting time. No self-hosted
 runners were registered during the audit.
 
-The retained `docker-container` builder at `113ad9c` took 602 s cold and 111 s
-warm for the complete Docker job on the same commit and runner class (run
-`41621777488`, attempts 1 and 2). The build step took 563 s cold and 92 s warm.
-Warm cache export took 1.6 s, while exporting/loading the image took 87.9 s.
-The initial cold cost is material and is not a speedup: reuse is what makes
-this cache worthwhile. These are individual observations, not population
-latency statistics.
+The retained `docker-container` builder at `113ad9c` took 602 s on its first
+run without an existing cache and 111 s on a repeat run reusing exported layers
+(run `41621777488`, attempts 1 and 2). The build step took 563 s and 92 s,
+respectively. On the repeat run, cache export took 1.6 s while exporting and
+loading the image took 87.9 s. The first cache population is an extra cost, not
+a speedup. These are individual observations, not population latency
+statistics.
 
 A native Docker/containerd variant was also tested at `96cbbb4`, with the same
 image inputs and available layer cache (run `41624162131`). Its build step took
@@ -80,8 +80,33 @@ image inputs and available layer cache (run `41624162131`). Its build step took
 121 s. It did not demonstrate an additional net saving over 111 s, so the
 extra daemon configuration was removed. The simpler cached builder is retained.
 
-Cache misses run every original install/build/check. Include cache save/restore
-cost and distinguish cold/warm conditions when evaluating future Actions runs.
+### Weekly cache reuse
+
+GitHub scopes cache entries created by a pull request to its merge ref, so
+another PR or a push to `develop` cannot reuse those entries. The first push to
+`develop` after enabling Buildx therefore seeded a separate branch cache: its
+image build took 518 s and its complete Docker job 557 s (run
+`41627289775`). The same PR-scoped export would not have helped that push.
+
+Commit `acb1374` keeps `cache-from` on pull requests but writes `cache-to` only
+for pushes to `develop`. This keeps one reusable branch cache and avoids
+creating isolated cache entries for each PR. One earlier PR ref accumulated
+1.78 GB of cache entries in this audit; this is stored cache size, not a
+measured transfer amount. The first verification run on PR `#171` restored the
+cache written to `develop`, created no entries under `refs/pull/171/merge`, and
+completed the image build in 89 s and the full Docker job in 122 s (run
+`41642638183`). Against the baseline job's 219 s, this saves 97 s on that
+observed cache-reusing PR run. If a weekly run continues to hit the branch
+cache, four such runs recover the 338 s one-time `develop` cache-seeding cost.
+
+At measurement time, the repository held 7.4 GB across 134 cache entries, with
+a 10 GB storage limit and a 7-day maximum retention. GitHub removes caches
+that have not been accessed for over 7 days. A weekly workflow run can refresh
+the branch cache before expiry, but a delay beyond that window can require
+another seed. These are individual runner observations, not guarantees.
+
+When no cache exists, every original install/build/check still runs. Evaluate
+the first cache population separately from recurring runs that reuse it.
 Superseded validation runs
 are cancelled per workflow and PR/ref; release publishing has its own workflow.
 
