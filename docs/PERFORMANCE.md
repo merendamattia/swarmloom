@@ -12,17 +12,17 @@ through the actual Hono application. External providers were excluded.
 | Metric | Baseline | Candidate |
 | --- | ---: | ---: |
 | Response bytes | 5,019,309 | 56,109 |
-| p50, trial 1 | 21.30 ms | 1.93 ms |
-| p50, trial 2 | 18.98 ms | 1.98 ms |
-| p50, trial 3 | 19.65 ms | 1.79 ms |
-| p95, trial 1 | 23.48 ms | 2.64 ms |
-| p95, trial 2 | 19.94 ms | 2.28 ms |
-| p95, trial 3 | 21.54 ms | 2.13 ms |
+| p50, trial 1 | 21.30 ms | 2.04 ms |
+| p50, trial 2 | 18.98 ms | 1.92 ms |
+| p50, trial 3 | 19.65 ms | 1.88 ms |
+| p95, trial 1 | 23.48 ms | 2.68 ms |
+| p95, trial 2 | 19.94 ms | 3.05 ms |
+| p95, trial 3 | 21.54 ms | 2.05 ms |
 
 The response is about 98.9% smaller on this fixture. These warm local numbers
 measure database reads and response serialization, not production network
 latency or provider execution. A job with small event payloads will save less.
-Functional checks also run with the application's pinned Bun 1.3.14 image.
+Functional checks also run with the application's pinned Bun 1.4.4 image.
 
 The job repository projects timeline fields in PostgreSQL. It reads metadata
 only for `JOB_RESUME_REQUESTED` and `SESSION_RESUMED`, which establish whether

@@ -625,7 +625,7 @@ finalize a newer head.
 
 ## Local development
 
-Requirements: Bun 1.3.14, Python 3.11+, Docker/Compose, Git, GitHub CLI, and the selected provider CLI.
+Requirements: Bun 1.4.4, Python 3.11+, Docker/Compose, Git, GitHub CLI, and the selected provider CLI.
 
 ```bash
 cp .env.example .env
